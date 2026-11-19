@@ -11,10 +11,13 @@ factoría de socket, drainer, sleep, alert) — se puede correr entero con fakes
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from core.shared.alerts import send_alert
 from core.shared.logger import get_logger
@@ -28,13 +31,33 @@ from core.waweb.store import SessionStore
 
 log = get_logger(__name__)
 
+# Texto que ve el panel (`last_error`) cuando una sesión que ya estuvo vinculada
+# vuelve a pedir QR: el emparejamiento se perdió y hay que re-vincular.
+SESION_PERDIDA = "Sesión perdida: re-vincular por QR"
+
 _STATUS_MAP: dict[str, str] = {
+    # El backend real emite `connecting` al abrir el socket: antes caía al default
+    # `ERROR` y dejaba la fila en `error` en cada reinicio hasta conectar.
+    "connecting": status.CONNECTING,
     "connected": status.CONNECTED,
     "disconnected": status.DISCONNECTED,
     "logged_out": status.LOGGED_OUT,
     "banned": status.ERROR,  # ban temporal: se alerta pero se reconecta
     "error": status.ERROR,
 }
+
+
+def _salida_fatal() -> None:
+    """Reinicia el proceso para recuperar el puente de Neonize trabado."""
+    os._exit(1)
+
+
+async def _probar_executor() -> None:
+    """Un no-op en el executor por defecto: solo tarda si no queda ningún hilo libre.
+
+    Cada llamada al puente Go (`send_message`, `is_connected`, `disconnect`…) corre con
+    `asyncio.to_thread`, y `Neonize()` ocupa un hilo mientras viva el cliente."""
+    await asyncio.to_thread(lambda: None)
 
 
 @dataclass
@@ -52,6 +75,12 @@ class WaWebConnector:
     # este tiempo, se recicla (Neonize puede dejar de emitir QR tras un timeout
     # de login SIN marcar el socket como cerrado → quedaba en "esperando QR").
     pairing_timeout_s: float = 45.0
+    # Tras un QR emitido sin `connected`: whatsmeow rota el QR (el primero dura
+    # 60 s, los siguientes 20 s) y, al vencer el último, emite `Login event:
+    # timeout` y NO emite más QR (el conector quedaba mudo, visto en test
+    # 2026-10-26). Pasado este silencio se recicla para pedir un QR nuevo. Debe ser
+    # mayor que los 60 s del primer QR, por eso no reutiliza `pairing_timeout_s`.
+    qr_expired_s: float = 90.0
     # Si `connect()` no termina en este tiempo el socket se recicla: un `await`
     # eterno en la conexión congelaba TODO el connector (ningún tenant más
     # arrancaba sesión y el watchdog ni llegaba a correr).
@@ -60,6 +89,31 @@ class WaWebConnector:
     # emitir QR después de un timeout de login y reciclar sin limpiar no lo
     # recupera (bug real visto en producción: bucle infinito de watchdog).
     pairing_reset_after: int = 3
+    # Chequeo de vida de sesiones conectadas: cada `liveness_interval_s` se
+    # pregunta al socket si sigue conectado; si lleva `liveness_grace_s` sin
+    # conexión se recicla. Neonize puede fallar el auto-reconnect SIN emitir
+    # `DisconnectedEv` y el socket quedaba zombie: estado `connected`, drain
+    # vivo y ningún mensaje entrante (incidentes en test 2026-10-06 y
+    # 2026-10-10). La gracia evita pisar el auto-reconnect normal (~3-30 s).
+    liveness_interval_s: float = 30.0
+    liveness_grace_s: float = 60.0
+    # Watchdog de progreso: si un tenant no publica QR ni cambia de estado en
+    # este tiempo, el puente de Neonize quedó trabado (visto en test 2026-10-28:
+    # el conector seguía "Up" pero mudo y el reset del panel no se consumía).
+    # Cancelar la tarea no libera una llamada al puente Go en curso; la única
+    # recuperación segura es reiniciar el proceso y dejar que Docker lo levante.
+    stall_timeout_s: float = 300.0
+    # Pool de hilos agotado (incidente 2026-10-28/29): en neonize 0.5.2 el hilo de `Neonize()` de
+    # un cliente que se vinculaba por QR NO se libera con `disconnect()`, `stop()` ni cancelando
+    # `connect_task`; cada ciclo de QR de una sesión sin vincular deja un hilo del executor
+    # bloqueado en Go. Con todos ocupados, ninguna llamada al puente arranca: el chequeo de vida
+    # y el envío esperan para siempre, el drain del negocio no refresca `waweb:ready` (TTL 120 s)
+    # y el agente "responde" pero la API rechaza cada envío ("WhatsApp (waweb) no está conectado").
+    # No se puede liberar el hilo desde Python: la sonda detecta el agotamiento y se reinicia.
+    probe_executor: Callable[[], Awaitable[None]] = _probar_executor
+    executor_probe_timeout_s: float = 10.0
+    executor_fallos_para_reiniciar: int = 2
+    fatal: Callable[[], None] = _salida_fatal
     now: Callable[[], float] = time.monotonic
     _tasks: dict[uuid.UUID, asyncio.Task] = field(default_factory=dict, init=False)
     _stop: set[uuid.UUID] = field(default_factory=set, init=False)
@@ -67,12 +121,44 @@ class WaWebConnector:
     _qr_at: dict[uuid.UUID, float] = field(default_factory=dict, init=False)
     _connected: set[uuid.UUID] = field(default_factory=set, init=False)
     _pairing_trips: dict[uuid.UUID, int] = field(default_factory=dict, init=False)
+    # Negocios cuyo socket ACTUAL ya emitió al menos un QR. El watchdog solo
+    # recicla si NO hubo ningún QR en este ciclo: antes reciclaba también las
+    # sesiones sanas "esperando escaneo" (el QR tiene >45 s sin escanear), lo que
+    # reiniciaba el vínculo cada ~45 s y castigaba la conexión con WhatsApp.
+    _qr_cycles: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Negocios que llegaron a `connected` en su tarea actual. `ctx.status` es el
+    # estado leído al crear la tarea: si era `pending_qr` y el negocio se vinculó
+    # después, un reciclado (desconexión, zombie) NO debe limpiar la sesión
+    # recién guardada y pedir QR otra vez.
+    _linked: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Negocios con un reset del panel consumido y todavía sin aplicar. `ctx` es
+    # el estado leído al crear la tarea (no se relee): sin esta marca, una sesión
+    # que arrancó `connected` reconectaba con las credenciales viejas tras el reset.
+    _reset_pending: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Negocios cuya sesión se desvinculó A PROPÓSITO (reset del panel) en la tarea
+    # actual: `ctx.linked_before` queda desactualizado, y el QR que sigue es lo
+    # esperado, no una "sesión perdida".
+    _unlinked: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Negocios cuyo directorio de trabajo es confiable para persistir: se restauró
+    # del blob durable en este ciclo o la sesión llegó a `connected`. Un directorio
+    # que Neonize creó vacío (sin dispositivo) nunca debe pisar el blob guardado.
+    _can_persist: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Negocios a los que se les debe borrar el directorio LOCAL (el blob durable no
+    # se toca) al iniciar el siguiente ciclo, para que Neonize emita un QR nuevo.
+    _wipe_local: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Negocios ya alertados de "sesión perdida" (el QR rota cada ~20 s: una vez).
+    _lost_alerted: set[uuid.UUID] = field(default_factory=set, init=False)
+    # Último instante con señal de vida por tenant (QR, estado o sesión conectada).
+    _progress_at: dict[uuid.UUID, float] = field(default_factory=dict, init=False)
+    _executor_fallos: int = field(default=0, init=False)
 
     async def run(self) -> None:
         """Bucle principal: barre sesiones y arranca/detiene sockets."""
         while True:
             try:
                 await self.sweep()
+                await self._check_stalls()
+                await self._check_executor()
             except Exception:
                 log.exception("waweb_sweep_failed")
             await self.sleep(self.sweep_interval_s)
@@ -93,6 +179,17 @@ class WaWebConnector:
                 del self._tasks[tenant_id]
                 self._stop.discard(tenant_id)
                 self._pairing_trips.pop(tenant_id, None)
+                self._qr_cycles.discard(tenant_id)
+                self._linked.discard(tenant_id)
+                self._unlinked.discard(tenant_id)
+                self._can_persist.discard(tenant_id)
+                self._wipe_local.discard(tenant_id)
+                self._lost_alerted.discard(tenant_id)
+                # Una tarea que muere sin pasar por `_on_status` no debe dejar
+                # `connected` a la siguiente: el chequeo de vida reciclaría un
+                # socket que todavía se está vinculando.
+                self._connected.discard(tenant_id)
+                self._progress_at.pop(tenant_id, None)
         for ctx in contexts:
             if ctx.tenant_id not in self._tasks and ctx.tenant_id not in self._stop:
                 self._tasks[ctx.tenant_id] = asyncio.create_task(self.run_session(ctx))
@@ -101,18 +198,55 @@ class WaWebConnector:
         work_dir = self.store.work_dir(ctx.tenant_id)
         attempt = 0
         while ctx.tenant_id not in self._stop:
+            self._progress_at[ctx.tenant_id] = self.now()
             try:
-                await self.store.materialize(ctx.tenant_id, work_dir)
-                await self.registry.set_status(ctx.tenant_id, status.CONNECTING)
+                reset = ctx.tenant_id in self._reset_pending
+                if reset:
+                    await self._clear_session(ctx.tenant_id, "reset_panel")
+                elif not self._was_linked(ctx):
+                    # Sesión que NUNCA se vinculó: puede haber restos de intentos
+                    # previos y Neonize entonces "reanuda" en vez de emitir un QR
+                    # nuevo (visto en vivo). La decisión usa un dato durable
+                    # (`ctx.linked_before`), NO el `status` de la fila ni `_linked`
+                    # (memoria del proceso, vacía tras cada reinicio): una sesión que
+                    # sí estuvo vinculada y quedó en `error`/`pending_qr` por un
+                    # fallo transitorio perdía sus credenciales al siguiente
+                    # arranque (incidente 2026-10-26).
+                    await self._clear_session(ctx.tenant_id, "nunca_vinculada")
+                if reset or ctx.tenant_id in self._wipe_local:
+                    # Re-vincular desde el panel (o QR vencido): además del blob
+                    # durable —solo en el reset— hay que borrar el `session.db`
+                    # local, o Neonize reanuda la sesión vieja (ya cerrada: el
+                    # socket se desconectó en el `finally`).
+                    shutil.rmtree(work_dir, ignore_errors=True)
+                    self._wipe_local.discard(ctx.tenant_id)
+                if reset:
+                    self._reset_pending.discard(ctx.tenant_id)
+                restored = await self.store.materialize(ctx.tenant_id, work_dir)
+                if restored:
+                    self._can_persist.add(ctx.tenant_id)
+                else:
+                    self._can_persist.discard(ctx.tenant_id)
+                await self.registry.set_status(
+                    ctx.tenant_id, status.CONNECTING, connection_id=ctx.connection_id
+                )
+                self._qr_cycles.discard(ctx.tenant_id)
                 sock = self.socket_factory()
                 self._sockets[ctx.tenant_id] = sock
+
+                async def _on_status(
+                    backend_status: str,
+                    detail: str | None = None,
+                    jid: str | None = None,
+                    _sock: WaWebSocket = sock,
+                ) -> None:
+                    await self._on_status(ctx, backend_status, detail, jid, _sock)
+
                 await asyncio.wait_for(
                     sock.connect(
                         session_dir=work_dir,
                         on_qr=lambda qr: self._on_qr(ctx, qr),
-                        on_status=lambda st, detail=None, jid=None: self._on_status(
-                            ctx, st, detail, jid
-                        ),
+                        on_status=_on_status,
                         on_message=lambda ev: self._on_message(ctx, ev),
                     ),
                     timeout=self.connect_timeout_s,
@@ -125,10 +259,18 @@ class WaWebConnector:
                 log.exception("waweb_session_error", tenant_id=str(ctx.tenant_id))
                 await self._on_status(ctx, "error", str(exc)[:200])
             finally:
+                # Con un reset pendiente NO se persiste: el directorio de trabajo
+                # tiene la sesión vieja y pisaría el `creds_encrypted=None` que
+                # dejó `reset_session`.
+                await self._persist(ctx, work_dir)
+                # Un ciclo que termina NO deja socket vivo: las reconexiones
+                # internas de Neonize competirían con el próximo socket y el
+                # servidor reemplaza un stream (visto en vivo: doble auth +
+                # StreamReplaced + mensajes perdidos).
                 try:
-                    await self.store.persist(ctx.tenant_id, work_dir)
+                    await sock.disconnect()
                 except Exception:
-                    log.exception("waweb_session_persist_failed")
+                    log.warning("waweb_session_disconnect_failed", tenant_id=str(ctx.tenant_id))
             if ctx.tenant_id in self._stop:
                 self._sockets.pop(ctx.tenant_id, None)
                 return
@@ -143,6 +285,9 @@ class WaWebConnector:
         policy = await self.policy_loader(ctx.tenant_id)
         idle = 0
         inicio = self.now()
+        ultimo_chequeo = inicio
+        sin_conexion_desde: float | None = None
+        identidad_vista: tuple[object, ...] | None = None
         while not sock.closed.is_set() and ctx.tenant_id not in self._stop:
             processed = await self.drainer(
                 ctx.tenant_id,
@@ -153,63 +298,315 @@ class WaWebConnector:
                 allow=lambda: limits.allow_send(ctx.tenant_id, policy),
                 on_sent=lambda: limits.record_outbound(ctx.tenant_id),
             )
+            if ctx.tenant_id not in self._connected:
+                sin_conexion_desde = None
+            elif self.now() - ultimo_chequeo >= self.liveness_interval_s:
+                ultimo_chequeo = self.now()
+                if await sock.alive():
+                    sin_conexion_desde = None
+                elif sin_conexion_desde is None:
+                    sin_conexion_desde = ultimo_chequeo
+                    log.info("waweb_socket_sin_conexion", tenant_id=str(ctx.tenant_id))
+                elif ultimo_chequeo - sin_conexion_desde >= self.liveness_grace_s:
+                    await self._recycle_zombie(ctx, sock, ultimo_chequeo - sin_conexion_desde)
+                    break
             if not processed:
                 idle += 1
+                # El panel pidió reciclar la sesión (re-vincular): se cierra el
+                # socket y se marca el reset para que `run_session` no persista
+                # el directorio viejo y el próximo ciclo arranque sin credenciales
+                # (emite un QR nuevo). Sin esto, el QR no aparece hasta que el
+                # pairing-watchdog recicle por su cuenta.
+                if await handoff.consume_reset(str(ctx.tenant_id)):
+                    log.warning("waweb_reset_solicitado", tenant_id=str(ctx.tenant_id))
+                    self._reset_pending.add(ctx.tenant_id)
+                    self._connected.discard(ctx.tenant_id)
+                    self._linked.discard(ctx.tenant_id)
+                    self._unlinked.add(ctx.tenant_id)
+                    self._can_persist.discard(ctx.tenant_id)
+                    self._lost_alerted.discard(ctx.tenant_id)
+                    self._qr_cycles.discard(ctx.tenant_id)
+                    self._pairing_trips.pop(ctx.tenant_id, None)
+                    sock.closed.set()
+                    break
                 # Persistencia periódica: Neonize actualiza su estado en el
                 # directorio efímero mientras la sesión vive; sin este guardado
                 # un reinicio perdería la sesión y pediría QR de nuevo.
                 if idle % 20 == 0:
-                    try:
-                        await self.store.persist(ctx.tenant_id, self.store.work_dir(ctx.tenant_id))
-                        await handoff.set_ready(str(ctx.tenant_id))
-                    except Exception:
-                        log.exception("waweb_session_persist_failed")
+                    await self._persist(ctx, self.store.work_dir(ctx.tenant_id))
+                    # `waweb:ready` solo mientras haya conexión: refrescarlo sin
+                    # ella hacía que los envíos no fallaran rápido (esperaban 45 s).
+                    if ctx.tenant_id in self._connected:
+                        try:
+                            await handoff.set_ready(str(ctx.tenant_id))
+                        except Exception:
+                            log.exception("waweb_set_ready_failed", tenant_id=str(ctx.tenant_id))
+                        # El evento `Device` (nombre de perfil) puede llegar
+                        # después de `ConnectedEv` sin disparar handler. Se lee
+                        # el cache del socket y se guarda solo si cambió.
+                        try:
+                            identidad = await sock.identity()
+                        except Exception:
+                            log.warning("waweb_identity_refresh_failed", tenant_id=str(ctx.tenant_id))
+                            identidad = None
+                        if identidad is not None:
+                            clave = (
+                                identidad.jid,
+                                identidad.phone,
+                                identidad.push_name,
+                                identidad.business_name,
+                                identidad.platform,
+                            )
+                            if any(clave) and clave != identidad_vista:
+                                identidad_vista = clave
+                                await self.registry.set_identity(
+                                    ctx.tenant_id,
+                                    connection_id=ctx.connection_id,
+                                    jid=identidad.jid,
+                                    phone=identidad.phone,
+                                    push_name=identidad.push_name,
+                                    business_name=identidad.business_name,
+                                    platform=identidad.platform,
+                                )
                 if ctx.tenant_id not in self._connected:
                     ultimo = max(self._qr_at.get(ctx.tenant_id, 0.0), inicio)
-                    if self.now() - ultimo > self.pairing_timeout_s:
-                        trips = self._pairing_trips.get(ctx.tenant_id, 0) + 1
-                        self._pairing_trips[ctx.tenant_id] = trips
-                        log.warning(
-                            "waweb_pairing_watchdog",
-                            tenant_id=str(ctx.tenant_id),
-                            trips=trips,
-                        )
-                        if trips >= self.pairing_reset_after:
-                            # Reciclar en vano no recupera el QR: se limpia la
-                            # sesión guardada para volver a emitirlo desde cero.
-                            try:
-                                await self.store.clear(ctx.tenant_id)
-                                self._pairing_trips[ctx.tenant_id] = 0
-                                log.warning(
-                                    "waweb_pairing_session_cleared",
-                                    tenant_id=str(ctx.tenant_id),
-                                )
-                            except Exception:
-                                log.exception(
-                                    "waweb_pairing_clear_failed",
-                                    tenant_id=str(ctx.tenant_id),
-                                )
+                    ya_emitio_qr = ctx.tenant_id in self._qr_cycles
+                    limite = self.qr_expired_s if ya_emitio_qr else self.pairing_timeout_s
+                    if self.now() - ultimo > limite:
+                        if ya_emitio_qr:
+                            await self._on_qr_vencido(ctx)
+                        else:
+                            await self._on_sin_qr(ctx)
                         sock.closed.set()
                         break
                 await self.sleep(0.05)
 
+    async def _check_stalls(self) -> None:
+        """Reinicia el conector si un tenant lleva demasiado tiempo mudo.
+
+        Una sesión `connected` sin tráfico es sana: se refresca sola. El watchdog
+        apunta a sockets en `connecting`/`pending_qr` cuyo loop quedó esperando
+        una llamada al puente de Neonize que nunca vuelve.
+        """
+        now = self.now()
+        for tenant_id, task in list(self._tasks.items()):
+            if task.done() or tenant_id in self._stop:
+                continue
+            if tenant_id in self._connected:
+                self._progress_at[tenant_id] = now
+                continue
+            last = self._progress_at.get(tenant_id)
+            if last is None:
+                self._progress_at[tenant_id] = now
+                continue
+            silencio = now - last
+            if silencio < self.stall_timeout_s:
+                continue
+            log.critical(
+                "waweb_connector_colgado",
+                tenant_id=str(tenant_id),
+                sin_progreso_s=round(silencio),
+            )
+            try:
+                await self.alert(
+                    "WhatsApp (waweb) conector colgado",
+                    f"Tenant {tenant_id}: {round(silencio)} s sin QR ni cambios de estado. "
+                    "Se reinicia el conector para recuperar el puente de Neonize.",
+                    severity="critical",
+                )
+            except Exception:
+                log.exception("waweb_stall_alert_failed", tenant_id=str(tenant_id))
+            self.fatal()
+            return
+
+    async def _check_executor(self) -> None:
+        """Reinicia el conector si el pool de hilos no tiene ningún hilo libre.
+
+        Cancelar la sonda es seguro: un no-op que nunca arrancó se saca de la cola (no es una
+        llamada al puente en curso). Se exigen varios fallos seguidos para no reiniciar por
+        un pico: con el pool dimensionado en `connector.py`, ni una ráfaga de envíos lo agota.
+        """
+        try:
+            await asyncio.wait_for(self.probe_executor(), self.executor_probe_timeout_s)
+        except TimeoutError:
+            self._executor_fallos += 1
+        else:
+            self._executor_fallos = 0
+            return
+        log.warning("waweb_executor_sin_hilos", fallos=self._executor_fallos)
+        if self._executor_fallos < self.executor_fallos_para_reiniciar:
+            return
+        log.critical("waweb_executor_agotado", fallos=self._executor_fallos)
+        await self._alertar(
+            "WhatsApp (waweb) pool de hilos agotado",
+            "Ningún hilo libre para llamar al puente de Neonize: los envíos y el chequeo de "
+            "vida quedarían colgados. Se reinicia el conector.",
+            severity="critical",
+        )
+        self.fatal()
+
+    def _was_linked(self, ctx: SessionContext) -> bool:
+        """¿La sesión se vinculó alguna vez y conserva credenciales?
+
+        Dato durable (`ctx.linked_before`) o vinculada en esta tarea. Tras un reset
+        del panel (desvinculación deliberada) el dato durable queda obsoleto.
+        """
+        if ctx.tenant_id in self._linked:
+            return True
+        return ctx.linked_before and ctx.tenant_id not in self._unlinked
+
+    async def _clear_session(self, tenant_id: uuid.UUID, motivo: str) -> None:
+        """Borra el blob durable de la sesión. Toda limpieza deja traza con motivo."""
+        # `nunca_vinculada` corre en cada ciclo de una sesión sin vincular (no hay
+        # nada que perder): no merece un warning por ciclo.
+        emit = log.info if motivo == "nunca_vinculada" else log.warning
+        emit("waweb_session_cleared", tenant_id=str(tenant_id), motivo=motivo)
+        await self.store.clear(tenant_id)
+
+    async def _persist(self, ctx: SessionContext, work_dir: Path) -> None:
+        """Guarda el directorio de trabajo solo si es de una sesión real.
+
+        Un directorio que Neonize creó vacío (esquema sin dispositivo) pisaba el
+        blob con una "sesión" vacía: así quedaron las sesiones de test (160 KB sin
+        dispositivo). Con un reset pendiente tampoco se persiste: el directorio
+        tiene la sesión vieja y pisaría el `creds_encrypted=None` del panel.
+        """
+        if ctx.tenant_id in self._reset_pending or ctx.tenant_id not in self._can_persist:
+            return
+        try:
+            await self.store.persist(ctx.tenant_id, work_dir)
+        except Exception:
+            log.exception("waweb_session_persist_failed", tenant_id=str(ctx.tenant_id))
+
+    async def _on_qr_vencido(self, ctx: SessionContext) -> None:
+        """El QR emitido venció sin escanearse y Neonize dejó de emitir: reciclar."""
+        log.warning("waweb_qr_vencido", tenant_id=str(ctx.tenant_id), qr_expired_s=self.qr_expired_s)
+        # Solo el directorio local (el blob durable NO se toca, aunque la sesión se
+        # haya vinculado antes): sin él Neonize no reanuda y emite un QR nuevo.
+        self._wipe_local.add(ctx.tenant_id)
+
+    async def _on_sin_qr(self, ctx: SessionContext) -> None:
+        """Un socket sin QR ni `connected` (login colgado): reciclar y, si no hay
+        nada que perder, limpiar la sesión guardada para emitir QR desde cero."""
+        trips = self._pairing_trips.get(ctx.tenant_id, 0) + 1
+        self._pairing_trips[ctx.tenant_id] = trips
+        log.warning("waweb_pairing_watchdog", tenant_id=str(ctx.tenant_id), trips=trips)
+        if trips < self.pairing_reset_after:
+            return
+        if self._was_linked(ctx):
+            # Sesión vinculada que no logra reconectar (red caída, solape de
+            # contenedores): reciclar sí, borrarle las credenciales NUNCA.
+            log.warning("waweb_pairing_session_conservada", tenant_id=str(ctx.tenant_id), trips=trips)
+            if trips == self.pairing_reset_after:
+                await self._alertar(
+                    "WhatsApp (waweb) no logra reconectar",
+                    f"Tenant {ctx.tenant_id}: la sesión vinculada no conecta tras {trips} intentos. "
+                    "Se conserva la sesión guardada y se sigue reintentando.",
+                    severity="warning",
+                )
+            return
+        # Reciclar en vano no recupera el QR: se limpia la sesión guardada para
+        # volver a emitirlo desde cero.
+        try:
+            await self._clear_session(ctx.tenant_id, "watchdog_sin_qr")
+            self._pairing_trips[ctx.tenant_id] = 0
+        except Exception:
+            log.exception("waweb_pairing_clear_failed", tenant_id=str(ctx.tenant_id))
+
+    async def _alertar(self, titulo: str, detalle: str, *, severity: str) -> None:
+        try:
+            await self.alert(titulo, detalle, severity=severity)
+        except Exception:
+            log.exception("waweb_alert_failed", titulo=titulo)
+
+    async def _recycle_zombie(self, ctx: SessionContext, sock: WaWebSocket, segundos: float) -> None:
+        """Cierra un socket que dice estar conectado pero no lo está.
+
+        `run_session` lo recicla con la sesión guardada (sin QR nuevo).
+        """
+        log.warning("waweb_socket_zombie", tenant_id=str(ctx.tenant_id), sin_conexion_s=round(segundos))
+        try:
+            await self.alert(
+                "WhatsApp (waweb) socket sin conexión",
+                f"Tenant {ctx.tenant_id}: el socket llevaba {round(segundos)} s sin conexión "
+                "sin avisar desconexión. Se recicla con la sesión guardada.",
+                severity="warning",
+            )
+        except Exception:
+            log.exception("waweb_zombie_alert_failed", tenant_id=str(ctx.tenant_id))
+        try:
+            await self._on_status(ctx, "disconnected", "socket sin conexión")
+        finally:
+            sock.closed.set()
+
     async def _on_qr(self, ctx: SessionContext, qr: str) -> None:
+        self._progress_at[ctx.tenant_id] = self.now()
         self._qr_at[ctx.tenant_id] = self.now()
+        self._qr_cycles.add(ctx.tenant_id)
         self._pairing_trips.pop(ctx.tenant_id, None)
         await handoff.publish_qr(str(ctx.tenant_id), qr)
+        # Una sesión que YA estuvo vinculada y vuelve a pedir QR perdió su
+        # emparejamiento: se dice en el panel (`last_error`) y se alerta una vez.
+        perdida = self._was_linked(ctx)
         # `detail=""` limpia un `last_error` previo (p. ej. de un intento fallido).
-        await self.registry.set_status(ctx.tenant_id, status.PENDING_QR, detail="")
+        await self.registry.set_status(
+            ctx.tenant_id,
+            status.PENDING_QR,
+            connection_id=ctx.connection_id,
+            detail=SESION_PERDIDA if perdida else "",
+        )
+        if perdida and ctx.tenant_id not in self._lost_alerted:
+            self._lost_alerted.add(ctx.tenant_id)
+            log.warning("waweb_sesion_perdida", tenant_id=str(ctx.tenant_id))
+            await self._alertar(
+                "WhatsApp (waweb) sesión perdida",
+                f"Tenant {ctx.tenant_id}: la sesión ya vinculada pide QR otra vez. "
+                "Requiere re-vincular por QR desde el panel.",
+                severity="critical",
+            )
 
     async def _on_status(
-        self, ctx: SessionContext, backend_status: str, detail: str | None = None, jid: str | None = None
+        self,
+        ctx: SessionContext,
+        backend_status: str,
+        detail: str | None = None,
+        jid: str | None = None,
+        sock: WaWebSocket | None = None,
     ) -> None:
+        self._progress_at[ctx.tenant_id] = self.now()
         mapped = _STATUS_MAP.get(backend_status, status.ERROR)
         if mapped == status.CONNECTED:
             self._connected.add(ctx.tenant_id)
+            self._linked.add(ctx.tenant_id)
+            self._unlinked.discard(ctx.tenant_id)
+            self._can_persist.add(ctx.tenant_id)
+            self._lost_alerted.discard(ctx.tenant_id)
             self._pairing_trips.pop(ctx.tenant_id, None)
         else:
             self._connected.discard(ctx.tenant_id)
-        await self.registry.set_status(ctx.tenant_id, mapped, detail=detail, jid=jid)
+
+        identidad = None
+        if mapped == status.CONNECTED and sock is not None:
+            try:
+                identidad = await sock.identity()
+            except Exception:
+                log.warning("waweb_identity_failed", tenant_id=str(ctx.tenant_id))
+            if identidad is not None and identidad.jid and not jid:
+                jid = identidad.jid
+
+        await self.registry.set_status(
+            ctx.tenant_id, mapped, connection_id=ctx.connection_id, detail=detail, jid=jid
+        )
+        if mapped == status.CONNECTED and identidad is not None:
+            await self.registry.set_identity(
+                ctx.tenant_id,
+                connection_id=ctx.connection_id,
+                jid=identidad.jid,
+                phone=identidad.phone,
+                push_name=identidad.push_name,
+                business_name=identidad.business_name,
+                platform=identidad.platform,
+            )
         if mapped != status.CONNECTED:
             await handoff.clear_ready(str(ctx.tenant_id))
         if backend_status == "banned":
@@ -226,12 +623,16 @@ class WaWebConnector:
             await self._check_duplicate_jid(ctx, jid)
         elif mapped == status.LOGGED_OUT:
             self._stop.add(ctx.tenant_id)
+            self._linked.discard(ctx.tenant_id)
+            # Credenciales revocadas: el `finally` de `run_session` no debe volver a
+            # guardar el directorio de la sesión cerrada.
+            self._can_persist.discard(ctx.tenant_id)
             # Descartar envíos encolados: que no se despachen contra una sesión muerta.
             try:
                 purged = await purge_outbox(ctx.tenant_id, "sesión de WhatsApp cerrada")
             except Exception:
                 purged = 0
-            await self.store.clear(ctx.tenant_id)
+            await self._clear_session(ctx.tenant_id, "logged_out")
             suffix = f" ({purged} envíos descartados)" if purged else ""
             await self.alert(
                 "WhatsApp (waweb) deslogueado",
@@ -268,7 +669,10 @@ class WaWebConnector:
         )
         if any(str(other) < str(ctx.tenant_id) for other in others):
             await self.registry.set_status(
-                ctx.tenant_id, status.ERROR, detail="Número vinculado también en otro negocio"
+                ctx.tenant_id,
+                status.ERROR,
+                connection_id=ctx.connection_id,
+                detail="Número vinculado también en otro negocio",
             )
             self._stop.add(ctx.tenant_id)
             sock = self._sockets.get(ctx.tenant_id)
@@ -279,7 +683,7 @@ class WaWebConnector:
                     log.warning("waweb_duplicate_disconnect_failed", tenant_id=str(ctx.tenant_id))
 
     async def _on_message(self, ctx: SessionContext, event: InboundEvent) -> None:
-        await inbound_mod.publish_inbound(
+        accepted = await inbound_mod.publish_inbound(
             tenant_id=ctx.tenant_id,
             connection_external_id=ctx.connection_external_id,
             sender=event.sender,
@@ -288,3 +692,12 @@ class WaWebConnector:
             customer_name=event.customer_name,
             media=event.media,
         )
+        if accepted:
+            log.info(
+                "waweb_inbound_publicado",
+                tenant_id=str(ctx.tenant_id),
+                wamid=event.wamid,
+                sender=event.sender,
+            )
+        else:
+            log.info("waweb_inbound_duplicado", tenant_id=str(ctx.tenant_id), wamid=event.wamid)

@@ -71,7 +71,7 @@ async def test_un_turno_escribe_una_fila_ledger(tenant_setup) -> None:
                     select(UsageLedger).where(UsageLedger.conversation_id == conversation_id)
                 )
             ).scalar_one()
-    assert row.agent_spec_version == "1.0.0"
+    assert row.agent_spec_version.startswith("atencion@v3:")  # la versión del agente de la release (ADR-0191)
     assert row.model  # modelo del turno
     assert row.input_tokens > 0
     assert float(row.cost_usd) >= 0

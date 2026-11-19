@@ -1,0 +1,32 @@
+name: Preparar entorno Python (self-hosted)
+description: >-
+  Crea un venv con el Python del runner e instala core, contratos y packs con uv,
+  usando una caché persistente en el host (el runner es self-hosted).
+runs:
+  using: composite
+  steps:
+    - name: Venv con el Python del runner
+      # El runner es Linux Mint: `actions/setup-python` no tiene builds para esa
+      # distro, así que se usa el Python del propio runner en un venv aislado.
+      shell: bash
+      run: |
+        python3 --version
+        python3 -c "import sys; assert sys.version_info >= (3, 12), 'Se requiere Python 3.12+'"
+        python3 -m venv .venv-ci
+        echo "$PWD/.venv-ci/bin" >> "$GITHUB_PATH"
+        echo "VIRTUAL_ENV=$PWD/.venv-ci" >> "$GITHUB_ENV"
+        # Caché de uv fuera del workspace: sobrevive entre corridas del mismo host.
+        echo "UV_CACHE_DIR=$HOME/.cache/uv-ci" >> "$GITHUB_ENV"
+        # Con uv en lugar de pip la instalación baja de ~60 s a segundos (caché caliente).
+        if ! command -v uv >/dev/null; then
+          .venv-ci/bin/python -m pip install -q uv
+        fi
+
+    - name: Instalar (core + plugins)
+      shell: bash
+      env:
+        PIP: uv pip
+      run: |
+        uv pip install -e packages/contracts
+        uv pip install -e ".[dev]"
+        bash scripts/install_plugins.sh

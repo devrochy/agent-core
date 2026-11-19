@@ -1,0 +1,45 @@
+{
+  "nombre": "Academia Journeys",
+  "descripcion": "Academia en línea que vende planes mensuales por WhatsApp: informa planes, vende, cobra el período y gestiona la mora.",
+  "preset": "suscripciones",
+  "plan": "premium",
+  "pagos_simulados": {
+    "monto_minimo": 150000
+  },
+  "config": {
+    "pack_payments": {
+      "public_key": "pub_test_journeys_simulado",
+      "private_key": "prv_test_journeys_simulado",
+      "events_secret": "test_events_journeys_simulado",
+      "sandbox": true
+    }
+  },
+  "planes": {
+    "planes": [
+      {
+        "codigo": "PLAN-FREE",
+        "nombre": "Plan Free",
+        "descripcion": "Plan de entrada sin costo, con 30 días de prueba.",
+        "precio": 0,
+        "periodicidad": "mensual",
+        "trial_dias": 30
+      },
+      {
+        "codigo": "PLAN-BASIC",
+        "nombre": "Plan Basic",
+        "descripcion": "Clases grabadas y una tutoría al mes.",
+        "precio": 200000,
+        "periodicidad": "mensual",
+        "trial_dias": 0
+      },
+      {
+        "codigo": "PLAN-PREMIUM",
+        "nombre": "Plan Premium",
+        "descripcion": "Clases en vivo y tutorías ilimitadas.",
+        "precio": 600000,
+        "periodicidad": "mensual",
+        "trial_dias": 0
+      }
+    ]
+  }
+}

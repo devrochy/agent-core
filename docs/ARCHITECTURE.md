@@ -98,7 +98,7 @@ flowchart TB
    a. Memoria: L1 historial + L2 perfil + L3 recall semántico
    b. SkillRouter: solo las skills relevantes al turno entran al prompt
    c. SystemPromptBuilder: [base, tono, voz de marca, contexto dinámico]
-   d. DifficultyRouter: deepseek-chat (default) | deepseek-reasoner (complejo sin tools)
+   d. DifficultyRouter: deepseek-flash thinking off (default) | thinking on (complejo sin tools)
    e. LLM → tool_use? → MCPHost.execute_tool() [llamada Python in-process]
       → PluginError? → auto-disable del plugin, el turno continúa
       → resultado al historial → repetir (máx 6)
@@ -135,6 +135,10 @@ Fernet) y se gestionan en **`/admin/conexiones`**:
 El webhook (`core/gateway/webhooks.py`) y el sender (`core/gateway/sender.py`) resuelven
 las credenciales por este orden, de modo que mover credenciales del `.env` al panel es
 opcional y no rompe nada mientras tanto.
+
+En el webhook genérico, cada grupo de eventos (entry, número) se procesa solo si lo
+firmó la app de la plataforma o el propio negocio del grupo: el secreto de un negocio
+nunca autoriza eventos de otro (ADR-0100).
 
 ## Memoria en 3 capas
 

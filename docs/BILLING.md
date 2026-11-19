@@ -1,6 +1,7 @@
 # Planes, cuotas y facturación de tenants
 
-Última actualización: 2026-09-22 · ADR-0045 (planes/cuotas/enforcement) · ADR-0046 (cobro Wompi)
+Última actualización: 2026-10-09 · ADR-0045 (planes/cuotas/enforcement) · ADR-0046 (cobro Wompi) ·
+ADR-0123 (dos canales de cobro con fuente única, renovación y conciliación)
 
 Este documento describe cómo agent-core vende y limita el servicio a cada tenant. Es el
 equivalente de `MULTITENANT.md` para el plano comercial: aquí vive qué es un plan, cómo
@@ -13,22 +14,39 @@ se mide el consumo, qué pasa al llegar al límite y cómo paga un tenant.
 - **Suscripción:** relación de un tenant con un plan (`tenant_subscriptions`, con RLS).
   Una activa por tenant.
 - **Período:** ventana mensual de la suscripción (`period_start` → `period_end`). El
-  trial del plan free termina en `trial_ends_at`.
+  trial del plan free termina en `trial_ends_at`. Desde ADR-0123 un período pago se corta
+  **por calendario** (mismo día del mes siguiente, con `dia_ancla`) y tiene una referencia
+  `plat-<slug>-<AAAAMM>`, la misma en los dos canales de cobro (§ 6b).
 - **Cuota:** límite de una métrica dentro del período (o lifetime, según la métrica).
 - **Métrica:** unidad medible del consumo (clientes, conversaciones, audio, OCR, packs,
   mensajes, costo LLM).
 
 ## 2. Catálogo de planes
 
-Precios en COP/mes. Wompi exige un mínimo de **150.000 COP por link de pago**: los
-planes pagos se fijan por encima. `null` = ilimitado.
+Precios en COP/mes. El mínimo de Wompi por link depende del ambiente
+(`core/payments/wompi_minimo.py`): **150.000 COP en sandbox** y **1.500 COP en producción**
+(modelo Agregador). En test los planes pagos se fijan por encima de 150.000. `null` = ilimitado.
 
-| Plan | Precio/mes | Clientes | Conversaciones | Audio | OCR | Plugins | Mensajes | Costo LLM (USD) |
-|---|---|---|---|---|---|---|---|---|
-| `free` | 0 (30 días) | 100 | 500 | 50 | 20 | 1 | 2.000 | 5 |
-| `basic` | 200.000 | 500 | 3.000 | 300 | 150 | 3 | 15.000 | 50 |
-| `premium` | 600.000 | 2.000 | 15.000 | 1.500 | 800 | 8 | 80.000 | 200 |
-| `empresarial` | 1.800.000 | ∞ | ∞ | ∞ | ∞ | todos | ∞ | ∞ |
+**Planes v2 por agentes (D-35, HU-BILL-05, ADR-0142).** Las dimensiones que se venden y sus
+cifras salen de `modelo-de-precios.md §5` (docs) y las aprobó el dueño el 2026-10-19:
+
+| Plan | Precio/mes | Agentes publicados | Colaboradores | Crédito mensual (1 = COP 10) |
+|---|---|---|---|---|
+| `free` | 0 (30 días) | 1 | 2 | 2.500 |
+| `basic` | 200.000 | 2 | 5 | 20.000 |
+| `premium` | 600.000 | 5 | 15 | 75.000 |
+| `empresarial` | 1.800.000 | ∞ | 50 | 240.000 |
+
+«Habilidades activas» (`plugins`) y «Asistentes por negocio» ya no son topes. El crédito
+mensual es informativo (`/admin/plan` → `credit`, con `used = null`) hasta que exista su
+ledger y su enforcement (HU-BILL-04/06). Mientras tanto siguen vigentes los topes de volumen:
+
+| Plan | Clientes | Conversaciones | Audio | OCR | Mensajes | Costo LLM (USD) |
+|---|---|---|---|---|---|---|
+| `free` | 100 | 500 | 50 | 20 | 2.000 | 5 |
+| `basic` | 500 | 3.000 | 300 | 150 | 15.000 | 50 |
+| `premium` | 2.000 | 15.000 | 1.500 | 800 | 80.000 | 200 |
+| `empresarial` | ∞ | ∞ | ∞ | ∞ | ∞ | ∞ |
 
 El plan `free` es el estado inicial de todo tenant nuevo y **también** el trial: 30 días.
 No se paga; al vencer `trial_ends_at` el tenant deja de operar hasta que se suscriba.
@@ -48,7 +66,9 @@ paralelo, ADR-0045). El registro vive en `core/billing/metrics.py`.
 | `conversaciones` | conversaciones iniciadas | `conversations.started_at` | período |
 | `conversaciones_audio` | audios entrantes procesados | `messages` inbound con `media_type like 'audio/%'` | período |
 | `conversaciones_ocr` | imágenes entrantes procesadas | `messages` inbound con `media_type like 'image/%'` | período |
-| `plugins` | packs **de negocio** habilitados (sin el core) | `AgentSpec.packs` | lifetime |
+| `plugins` | packs **de negocio** habilitados (sin el core); ya no es tope de ningún plan | `AgentSpec.packs` | lifetime |
+| `agentes` | especialistas activos con al menos una instancia viva en una conexión viva (el General cuenta, el Coordinador no) | `agents` + `agent_instances` + `channel_connections` | lifetime |
+| `colaboradores` | vínculos con rol `colaborador` **activos** (sin propietarios ni cuentas de plataforma; desactivar libera cupo y reactivar vuelve a medir el tope) + invitaciones a colaborador pendientes y vigentes | `tenant_user` + `tenant_invitations` | lifetime |
 | `mensajes` | mensajes salientes enviados | `messages` outbound | período |
 | `costo_llm_usd` | gasto LLM del período | `SUM(usage_ledger.cost_usd)` (ADR-0008) | período |
 
@@ -84,16 +104,24 @@ pago.
 | `conversaciones` | apertura de una `Conversation` nueva (`consumer.py`) |
 | `conversaciones_audio` | procesamiento de audio (`webhooks.py::_try_process_media`) |
 | `conversaciones_ocr` | procesamiento de imagen (`webhooks.py::_try_process_media`) |
-| `plugins` | activación de un pack (`plugin_manager.activate`) |
+| `plugins` | activación de un pack (`plugin_manager.activate`), solo si el plan define el tope (hoy ninguno) |
+| `agentes` | primera instancia viva de un agente (`instancias.agregar_instancia`): API de conexión-agentes, publicar del editor (pre-chequeo antes de publicar la versión) y presets v2 → 409 `plan_limit_agentes` |
+| `colaboradores` | alta o invitación de un colaborador (`create_collaborator`, `crear_invitacion`, gestores de `pack_cobranza`) y reactivación de una cuenta desactivada (`toggle_active`) → 409 `plan_limit_colaboradores` |
 | `mensajes` / `costo_llm_usd` | envío / cabecera del turno |
+
+`agentes` y `colaboradores` **solo bloquean crecer** (ADR-0142): un negocio que ya está por
+encima del tope (plan bajado, catálogo nuevo) sigue operando con lo que tiene; solo se rechaza
+la unidad siguiente. Se serializan por negocio con `pg_advisory_xact_lock`. El 409 trae
+`error.details = {metric, used, limit}`.
 
 Las conversaciones **ya abiertas** siguen respondiendo: el corte es a la creación de
 nuevas unidades, no un apagado a mitad de una charla. El panel avisa desde el 80% y
 marca en rojo el 100%, para que el bloqueo no sea sorpresa.
 
 El cron diario `core/tasks/billing_lifecycle.py` normaliza estados (`trialing` vencido →
-`expired`, período vencido → `past_due`) y alimenta los avisos del panel. Si el cron no
-corre, el enforcement igual bloquea porque se evalúa al momento.
+`expired`, período vencido → `past_due`) y alimenta los avisos del panel. También pasa al
+período que empezó hoy si estaba pagado por adelantado (ventana de las cuotas y plan). Si el
+cron no corre, el enforcement igual bloquea porque se evalúa al momento.
 
 ## 5. Alta y ciclo de vida
 
@@ -101,10 +129,11 @@ corre, el enforcement igual bloquea porque se evalúa al momento.
    suscripción `free` con `trial_ends_at = now() + 30d`.
 2. El tenant opera gratis 30 días con las cuotas de `free`.
 3. Al vencer el trial: no operacional. El panel invita a suscribirse.
-4. `POST /admin/plan/subscribe` con un plan pago → link Wompi → webhook → `active` por
-   el período.
-5. Antes de `period_end`: el panel ofrece **Renovar** (nuevo link). Sin pago, al vencer
-   pasa a `past_due`/`expired` y se corta.
+4. `POST /admin/plan/subscribe` con un plan pago → link Wompi del período que toca → webhook →
+   `active` por el período.
+5. Cinco días antes de `period_end` (`BILLING_DIAS_RENOVACION`), el job de renovación genera el
+   cobro del período siguiente y avisa por el canal preferido (§ 6b). Sin pago, al vencer pasa
+   a `past_due` y se corta; pagar (por cualquier canal) lo reactiva en el acto.
 
 Un admin `master` puede cambiar el plan o extender el período desde `/admin/tenants`
 (soporte); la acción se registra en `audit_log`.
@@ -131,6 +160,44 @@ WOMPI_BILLING_PRIVATE_KEY=
 WOMPI_BILLING_EVENTS_SECRET=
 WOMPI_BILLING_SANDBOX=true
 BILLING_TRIAL_DAYS=30
+```
+
+## 6b. Dos canales con fuente única (HU-SH-04, ADR-0123)
+
+Un negocio creado por el alta automática (ADR-0121) paga su plan por dos caminos:
+
+| | Canal asistente | Canal panel |
+|---|---|---|
+| Quién genera el cobro | La suscripción del cliente en el negocio vendedor (`solvershub`, `pack_subscriptions`) | `/plan` → `core/billing/checkout.start_subscription` |
+| Referencia | `plat-<slug>-<AAAAMM>` (cargo `AAAA-MM`) | La misma |
+| Pago | `payment.confirmed` → cargo pagado → `subscription.charge_paid` → `aplicar_pago_de_periodo` | Webhook de billing → `aplicar_pago_de_periodo` |
+| Sincronización | — | `platform.period_paid` → el cargo del asistente queda pagado (`registrar_pago_externo`) |
+
+- **Fuente única:** `tenant_subscriptions` del negocio. Un período se aplica una sola vez (índice
+  único de `subscription_payments` sobre `(tenant_id, periodo)` de los `aprobado`). Un segundo pago
+  del mismo período queda `duplicado` y se alerta.
+- **Sin doble cobro:** si el período ya está pagado, el asistente (`sub_link_pago`) y el panel
+  (409 `ya_pagado`) responden «ya pagado». Con el plan al día, el panel no adelanta períodos.
+- **Cambio de plan:** un negocio del asistente cambia de plan en el asistente; el panel solo paga
+  su plan actual (409 `cambio_en_el_asistente`). Un Free que compra un plan pago cambia de plan en
+  el mismo negocio y recibe el preset que le faltaba.
+- **Renovación** (`core/billing/renovacion.py`, diaria): cobro del período siguiente y aviso por el
+  canal del último pago: WhatsApp con plantilla (el cargo lo manda el cron del vendedor, con
+  `dias_anticipacion` = `BILLING_DIAS_RENOVACION`) o correo con el enlace a `/plan`. El cron del
+  vendedor no le manda link a quien pagó el último período por el panel.
+- **`PROVISIONING_SELLER_TENANTS`** va en la app y en el worker (ADR-0123 § 11).
+- **Conciliación** (`core/billing/conciliacion.py`, diaria): compara los dos lados y alerta cada
+  diferencia con su detalle. Qué hacer con cada una: `docs/runbooks/cobro-de-plataforma.md`.
+- **Una URL de eventos por cuenta de Wompi (R-05):** si la plataforma y el pack de pagos de
+  `solvershub` comparten la cuenta, su URL es `/webhooks/billing/wompi` y
+  `BILLING_WOMPI_EVENTOS_TENANT` dice a qué negocio se reenvían los eventos que no son de la
+  plataforma.
+
+Variables:
+
+```
+BILLING_DIAS_RENOVACION=5          # días antes del fin del período en que se cobra el siguiente (= dias_anticipacion del vendedor)
+BILLING_WOMPI_EVENTOS_TENANT=      # UUID del negocio que comparte la cuenta de Wompi (vacío: cuentas separadas)
 ```
 
 ## 7. Cómo extender
@@ -162,7 +229,8 @@ Queda versionado en git y auditado.
 ## 9. Pendiente (fuera de esta entrega)
 
 - Débito recurrente automático (ADR-0046, punto 4).
-- Prorrateo al cambiar de plan a mitad de período.
+- Prorrateo al cambiar de plan a mitad de período en el panel, y cambio de plan desde el panel
+  para un negocio del asistente (HU-BILL-12).
 - Excedentes (overage) y planes por volumen.
 - Stripe u otro proveedor internacional.
 

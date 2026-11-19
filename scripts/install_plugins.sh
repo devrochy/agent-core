@@ -5,7 +5,8 @@ set -euo pipefail
 
 for dir in packages/pack-*/ packages/channel-*/ plugins/*/; do
   [ -f "${dir}pyproject.toml" ] || continue
-  echo "→ pip install -e ${dir}"
-  pip install -e "${dir}"
+  echo "→ ${PIP:-pip} install -e ${dir}"
+  # El CI exporta PIP="uv pip"; en local queda el pip del venv activo.
+  ${PIP:-pip} install -e "${dir}"
 done
 echo "✓ Packs y plugins locales instalados"

@@ -41,6 +41,20 @@ class _ScalarResult:
         return self._row
 
 
+@pytest.fixture(autouse=True)
+def conexiones_canonicas(monkeypatch):
+    """La sesión falsa no interpreta SQL: la conexión canónica del número (ADR-0115) se
+    registra acá y se prueba contra Postgres en `tests/integration/test_conexion_canonica.py`."""
+    llamadas: list[tuple[str, object]] = []
+
+    async def _asegurar(_session, _tenant_id, phone_number_id, meta_connection_id, **_k):
+        llamadas.append((phone_number_id, meta_connection_id))
+        return "creada"
+
+    monkeypatch.setattr("core.gateway.conexion_canonica.asegurar_conexion_del_numero", _asegurar)
+    return llamadas
+
+
 class FakeSession:
     """Devuelve, en orden, una fila fake por cada `execute()` -- el primer
     `get_session()` de `save_byok_connection` hace 3 selects (MetaConnection,
@@ -85,7 +99,9 @@ class FakeSessionCM:
         for row in (existing_connection, existing_phone, existing_waba, tenant):
             if row is not None and getattr(row, "id", None) is not None:
                 self._known[row.id] = row
-        self._queue = [existing_connection, existing_phone, existing_waba]
+        # Orden de los selects del alta (ADR-0122): conexión, la WABA propia (y, si no hay,
+        # la eliminada a revivir) y el número.
+        self._queue = [existing_connection, existing_waba, *([] if existing_waba else [None]), existing_phone]
         self._first_use = True
 
     def __call__(self):
@@ -104,10 +120,20 @@ class FakeSessionCM:
 
 
 def _mock_verify_ok(monkeypatch, info=None):
+    """Meta acepta las credenciales, el número es de la WABA y nadie más los tiene."""
+
     async def _fake_verify(phone_number_id, access_token, app_secret):
         return True, "Credenciales verificadas con Meta", info or {"display_phone_number": "+1 555", "verified_name": "Mi Negocio"}
 
+    async def _fake_pair(**_kwargs):
+        return {}
+
+    async def _fake_claim(_session, _tenant_id, **_kwargs):
+        return None
+
     monkeypatch.setattr(byok_mod, "verify_meta_credentials", _fake_verify)
+    monkeypatch.setattr(byok_mod, "verify_waba_and_phone", _fake_pair)
+    monkeypatch.setattr(byok_mod, "claim_assets", _fake_claim)
 
 
 def _mock_verify_fail(monkeypatch, message="Meta rechazó las credenciales: token inválido"):
@@ -178,6 +204,61 @@ async def test_falta_waba_id_no_persiste_nada(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_numero_que_no_es_de_la_waba_no_persiste_nada(monkeypatch):
+    """ADR-0095: el token ve el número, pero el número no es de la WABA tipeada (o el
+    token no ve la WABA): no se guarda nada, porque el webhook rutea por la WABA."""
+    from core.gateway.meta_asset_claims import MetaAssetError
+
+    _mock_verify_ok(monkeypatch)
+
+    async def _pair_ajeno(**_kwargs):
+        raise MetaAssetError("El número phone-1 no pertenece a la WABA waba-ajena.", code="phone_not_in_waba")
+
+    reclamos: list = []
+
+    async def _claim(_session, _tenant_id, **kwargs):
+        reclamos.append(kwargs)
+
+    monkeypatch.setattr(byok_mod, "verify_waba_and_phone", _pair_ajeno)
+    monkeypatch.setattr(byok_mod, "claim_assets", _claim)
+    put_calls = _mock_token_store(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    with pytest.raises(ByokError, match="no pertenece a la WABA"):
+        await save_byok_connection(uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-ajena")
+
+    assert added == []
+    assert put_calls == []
+    # Sin verificación no se pregunta "¿lo tiene otro?": la respuesta no es un oráculo.
+    assert reclamos == []
+
+
+@pytest.mark.asyncio
+async def test_waba_o_numero_de_otro_negocio_no_persiste_nada(monkeypatch):
+    """ADR-0095: si otro negocio ya tiene la WABA o el número, el alta se rechaza antes
+    de crear filas o guardar tokens, y el mensaje no dice qué negocio lo tiene."""
+    from core.gateway.meta_asset_claims import CLAIMED_MESSAGE, MetaAssetError
+
+    _mock_verify_ok(monkeypatch)
+
+    async def _reclamado(_session, _tenant_id, **_kwargs):
+        raise MetaAssetError(CLAIMED_MESSAGE, code="asset_claimed")
+
+    monkeypatch.setattr(byok_mod, "claim_assets", _reclamado)
+    put_calls = _mock_token_store(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    with pytest.raises(ByokError) as exc:
+        await save_byok_connection(uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1")
+
+    assert str(exc.value) == CLAIMED_MESSAGE
+    assert added == []
+    assert put_calls == []
+
+
+@pytest.mark.asyncio
 async def test_numero_de_otro_tenant_da_byok_error_limpio(monkeypatch):
     """El `phone_number_id` es único GLOBAL: si otro tenant ya lo reclamó, el
     INSERT del PhoneNumber viola el unique. Debe salir un `ByokError` legible
@@ -190,8 +271,8 @@ async def test_numero_de_otro_tenant_da_byok_error_limpio(monkeypatch):
 
         async def flush(self):
             self._n_flush += 1
-            # 1er flush: la MetaConnection. 2do: el PhoneNumber -> conflicto.
-            if self._n_flush >= 2:
+            # 1er flush: la MetaConnection. 2do: la WABA. 3ro: el PhoneNumber -> conflicto.
+            if self._n_flush >= 3:
                 raise IntegrityError(
                     "INSERT INTO phone_numbers",
                     {},
@@ -213,7 +294,7 @@ async def test_numero_de_otro_tenant_da_byok_error_limpio(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_credenciales_validas_crea_conexion_telefono_waba_y_suscribe(monkeypatch):
+async def test_credenciales_validas_crea_conexion_telefono_waba_y_suscribe(monkeypatch, conexiones_canonicas):
     _mock_verify_ok(monkeypatch)
     put_calls = _mock_token_store(monkeypatch)
     graph_calls = _mock_subscribe_ok(monkeypatch)
@@ -239,9 +320,12 @@ async def test_credenciales_validas_crea_conexion_telefono_waba_y_suscribe(monke
     waba_rows = [obj for obj in added if hasattr(obj, "waba_id")]
     assert len(waba_rows) == 1
     assert waba_rows[0].waba_id == "waba-1"
+    # El número queda con su conexión canónica ligada a esta cuenta (ADR-0115 §6).
+    assert conexiones_canonicas == [("phone-1", connection.id)]
 
     kinds = {call[1] for call in put_calls}
-    assert kinds == {"app_access", CLOUD_API_ACCESS_TOKEN_KIND}
+    # Sin `verify_token` del admin se guarda uno propio de la conexión (ADR-0127).
+    assert kinds == {"app_access", CLOUD_API_ACCESS_TOKEN_KIND, WEBHOOK_VERIFY_TOKEN_KIND}
     assert all(call[0] == connection.id for call in put_calls)
 
     # POST /{waba_id}/subscribed_apps + GET de verificación.
@@ -335,21 +419,36 @@ async def test_graph_error_al_suscribir_se_envuelve_en_byok(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_verify_token_vacio_no_guarda_nada_nuevo(monkeypatch):
-    """Dejar el campo vacío no debe cambiar el comportamiento actual --
-    el handshake sigue cayendo al `.env` global."""
+async def test_verify_token_vacio_genera_uno_propio_de_la_conexion(monkeypatch):
+    """Sin `verify_token` del admin se genera uno aleatorio de la conexión, se guarda y es el
+    que se registra en Meta: nunca el global, que el handshake de cualquier negocio acepta
+    (seguimiento de ADR-0126, ADR-0127)."""
+    from core.config import get_settings
+
     _mock_verify_ok(monkeypatch)
     put_calls = _mock_token_store(monkeypatch)
     _mock_subscribe_ok(monkeypatch)
+    tenant_id = uuid.uuid4()
     added: list = []
-    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+    monkeypatch.setattr(
+        byok_mod, "get_session", FakeSessionCM(added, tenant=SimpleNamespace(id=tenant_id, slug="mi-tenant"))
+    )
+    registrados = []
+
+    async def _fake_upsert(config, object_, *, callback_url, verify_token):
+        registrados.append(verify_token)
+        return SimpleNamespace()
+
+    monkeypatch.setattr("core.gateway.meta_subscriptions.upsert_app_subscription", _fake_upsert)
 
     await save_byok_connection(
-        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", verify_token=None,
+        tenant_id, uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", verify_token=None,
     )
 
-    kinds = {call[1] for call in put_calls}
-    assert WEBHOOK_VERIFY_TOKEN_KIND not in kinds
+    (guardado,) = [call[3] for call in put_calls if call[1] == WEBHOOK_VERIFY_TOKEN_KIND]
+    assert len(guardado) >= 32
+    assert guardado != get_settings().whatsapp_verify_token
+    assert registrados == [guardado]
 
 
 @pytest.mark.asyncio
@@ -475,7 +574,7 @@ async def test_reentrante_actualiza_conexion_existente_en_vez_de_duplicar(monkey
     tenant_id = uuid.uuid4()
     existing = SimpleNamespace(
         id=uuid.uuid4(), tenant_id=tenant_id, channel="whatsapp", environment="sandbox", meta_app_id="app-1",
-        status="draft", status_reason="algo viejo", connected_by=None, connected_at=None,
+        status="draft", status_reason="algo viejo", connected_by=None, connected_at=None, origin="manual",
     )
     added: list = []
     monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added, existing_connection=existing))
@@ -490,3 +589,170 @@ async def test_reentrante_actualiza_conexion_existente_en_vez_de_duplicar(monkey
     # No se agregó una MetaConnection nueva -- solo PhoneNumber/WabaAccount.
     connection_rows = [obj for obj in added if obj is existing]
     assert connection_rows == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_byok_token_acepta_degradada_error_y_pausada_al_final(monkeypatch):
+    """ADR-0101: un check de salud fallido (`degraded`/`error`) no le quita el secreto al
+    negocio; una sin alta (`draft`) sí lo pierde. ADR-0122: una pausada (`revoked`) presta su
+    secreto para que su entrada se guarde, pero siempre al final, detrás de cualquier viva sea
+    del origen que sea. Primero las BYOK, con el tenant explícito, y las sanas antes que las
+    degradadas."""
+    from sqlalchemy.dialects import postgresql
+
+    consultas: list[str] = []
+
+    class _SesionQueAnota(FakeSession):
+        def __init__(self):
+            super().__init__([], {}, [])
+
+        async def execute(self, stmt, *a, **k):
+            consultas.append(str(stmt.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True})))
+            return _ScalarResult(None)
+
+    class _CM:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return _SesionQueAnota()
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(byok_mod, "get_session", _CM())
+
+    assert await resolve_webhook_verify_token(uuid.uuid4()) is None
+
+    where, _, order_by = consultas[0].partition("ORDER BY")
+    assert "meta_connections.tenant_id =" in where
+    assert "meta_connections.deleted_at IS NULL" in where
+    for estado in ("pending", "connected", "degraded", "error", "revoked"):
+        assert f"'{estado}'" in where
+    assert "'draft'" not in where
+    # Primero cualquier viva antes que una pausada; después las BYOK; después tres niveles:
+    # connected/pending, degraded (1), error (2).
+    assert order_by.index("(meta_connections.status = 'revoked') THEN 1") < order_by.index(
+        "(meta_connections.origin = 'byok') THEN 0 ELSE 1"
+    )
+    assert "(meta_connections.origin = 'byok') THEN 0 ELSE 1" in order_by
+    assert "(meta_connections.status = 'degraded') THEN 1" in order_by
+    assert "(meta_connections.status = 'error') THEN 2" in order_by
+    assert order_by.index("origin") < order_by.index("'degraded'") < order_by.rindex("connected_at DESC")
+
+
+# ------------------------------------------------ entorno y registro (HU-CONN-06, ADR-0127)
+@pytest.mark.parametrize(
+    ("info", "esperado"),
+    [
+        ({"platform_type": "CLOUD_API"}, True),
+        ({"platform_type": "NOT_APPLICABLE", "status": "CONNECTED"}, False),
+        ({"platform_type": "ON_PREMISE"}, False),
+        ({"status": "CONNECTED"}, True),
+        ({"status": "PENDING"}, False),
+        ({}, True),  # respuesta sin los campos: como antes
+    ],
+)
+def test_numero_registrado_segun_meta(info, esperado):
+    assert byok_mod.numero_registrado(info) is esperado
+
+
+@pytest.mark.asyncio
+async def test_produccion_guarda_el_entorno_y_queda_conectada(monkeypatch):
+    _mock_verify_ok(
+        monkeypatch,
+        info={"display_phone_number": "+57 300", "platform_type": "CLOUD_API", "account_mode": "LIVE"},
+    )
+    _mock_token_store(monkeypatch)
+    _mock_subscribe_ok(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    connection = await save_byok_connection(
+        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", environment="production",
+    )
+
+    assert connection.environment == "production"
+    assert connection.status == "connected"
+    (phone,) = [obj for obj in added if hasattr(obj, "phone_number_id")]
+    assert phone.registered is True
+    assert phone.raw["account_mode"] == "LIVE"
+
+
+@pytest.mark.asyncio
+async def test_numero_sin_registrar_deja_la_conexion_pendiente_del_pin(monkeypatch):
+    from core.gateway.meta_connection_state import MOTIVO_NUMERO_SIN_REGISTRAR, esperando_registro
+
+    _mock_verify_ok(monkeypatch, info={"platform_type": "NOT_APPLICABLE", "account_mode": "LIVE"})
+    _mock_token_store(monkeypatch)
+    _mock_subscribe_ok(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    connection = await save_byok_connection(
+        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", environment="production",
+    )
+
+    assert connection.status == "pending"
+    assert connection.status_reason == MOTIVO_NUMERO_SIN_REGISTRAR
+    assert esperando_registro(connection)
+    (phone,) = [obj for obj in added if hasattr(obj, "phone_number_id")]
+    assert phone.registered is False
+
+
+@pytest.mark.asyncio
+async def test_produccion_rechaza_el_numero_de_prueba_de_meta(monkeypatch):
+    _mock_verify_ok(monkeypatch, info={"platform_type": "CLOUD_API", "account_mode": "SANDBOX"})
+    put_calls = _mock_token_store(monkeypatch)
+    added: list = []
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM(added))
+
+    with pytest.raises(ByokError, match="número es el de prueba"):
+        await save_byok_connection(
+            uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1",
+            environment="production",
+        )
+    assert added == [] and put_calls == []
+
+
+@pytest.mark.asyncio
+async def test_prueba_acepta_el_numero_de_prueba(monkeypatch):
+    _mock_verify_ok(monkeypatch, info={"platform_type": "CLOUD_API", "account_mode": "SANDBOX"})
+    _mock_token_store(monkeypatch)
+    _mock_subscribe_ok(monkeypatch)
+    monkeypatch.setattr(byok_mod, "get_session", FakeSessionCM([]))
+
+    connection = await save_byok_connection(
+        uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", environment="sandbox",
+    )
+    assert connection.environment == "sandbox" and connection.status == "connected"
+
+
+@pytest.mark.asyncio
+async def test_rechaza_el_app_id_de_la_plataforma_sin_llamar_a_meta(monkeypatch):
+    """La app de la plataforma la comparten todos los negocios: por BYOK su dueño movería el
+    callback de todos (seguimiento de ADR-0126)."""
+    from core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "meta_app_id", "app-plataforma")
+    llamadas = []
+
+    async def _fake_verify(*args):
+        llamadas.append(args)
+        return True, "", {}
+
+    monkeypatch.setattr(byok_mod, "verify_meta_credentials", _fake_verify)
+
+    with pytest.raises(ByokError, match="app de Meta de la plataforma"):
+        await save_byok_connection(
+            uuid.uuid4(), uuid.uuid4(), "app-plataforma", "secret-1", "phone-1", "tok-1", "waba-1",
+        )
+    assert llamadas == []
+
+
+@pytest.mark.asyncio
+async def test_entorno_invalido(monkeypatch):
+    with pytest.raises(ByokError, match="entorno"):
+        await save_byok_connection(
+            uuid.uuid4(), uuid.uuid4(), "app-1", "secret-1", "phone-1", "tok-1", "waba-1", environment="staging",
+        )

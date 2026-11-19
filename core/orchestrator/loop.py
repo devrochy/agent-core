@@ -2,7 +2,7 @@
 
 Por turno (hasta MAX_AGENT_ITERATIONS vueltas):
   1. Recall de memoria (3 capas) + selección de skills + system blocks.
-  2. Difficulty routing (deepseek-chat vs deepseek-reasoner).
+  2. Difficulty routing (deepseek-flash con thinking off vs on).
   3. Llamada al LLM. Registro de tokens/costo/latencia en usage_ledger (ADR-0008).
   4. tool_use  -> ejecutar tools vía MCPHost (PluginError => auto-disable, el loop sigue).
   5. end_turn  -> guardrails -> ok? SafeExtras + respuesta final.
@@ -14,6 +14,8 @@ El LLM propone, las tools deciden (contra la BD), el core arbitra.
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -21,12 +23,38 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from core.agents.flow import render_flow, resolve_flow
+from core.agents import procedencia
+from core.agents.compiler import aviso_no_disponible
+from core.agents.flow import confirmed_actions_v2, render_flow, resolve_flow
+from core.agents.horario_agente import con_horario_del_agente
 from core.agents.responses import load_response
 from core.agents.spec import enabled_packs, load_active_spec
+from core.agents.spec_de_release import spec_del_turno
 from core.config import get_settings
+from core.config_limites import leer_entero
+from core.datos_cliente.ajustes import herramientas_activas as datos_del_cliente_activos
+from core.datos_cliente.aviso_chat import texto_a_anexar as aviso_en_el_chat
 from core.db.models import AppSettings, AuditLog, Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
+from core.kernel import confirmacion_pendiente, horario_de_servicio
+from core.kernel.decisions import (
+    anotar_foco,
+    anotar_uso,
+    bloquear,
+    en_turno,
+    enrutar,
+    marcar_neutral,
+)
+from core.kernel.ingress import QUOTA_EXHAUSTED_REPLY as QUOTA_EXHAUSTED_REPLY
+from core.kernel.ingress import conversacion_bloqueada, politicas_del_turno
+from core.kernel.opciones.lint import acciones_de_procedimientos
+from core.kernel.procedures import comandos as comandos_del_hilo
+from core.kernel.procedures.ejecucion import (
+    VUELTAS_LIBRES_DE_COMANDOS,
+    ContextoMotor,
+    contexto_del_motor,
+)
+from core.kernel.release_del_turno import con_release, fijar_release_del_turno
 from core.llm import resolve_provider
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
@@ -34,17 +62,26 @@ from core.llm.difficulty_router import (
     TURNOS_SIN_RESOLVER_THRESHOLD,
     route_model,
 )
-from core.llm.prompt_builder import PromptContext, build_system_blocks
+from core.llm.prompt_builder import (
+    DEFAULT_TIMEZONE,
+    PromptContext,
+    bloque_dinamico,
+    build_system_blocks,
+)
 from core.llm.types import LLMMessage, LLMToolCall
-from core.mcp.host import mcp_host, new_tool_context
+from core.mcp.host import ejecutar_tool, mcp_host, new_tool_context
 from core.mcp.translator import skills_summary, to_llm_schemas
-from core.mcp.types import GuardrailResult
+from core.mcp.types import GuardrailResult, ScopedHttp
 from core.memory import entity as entity_memory
+from core.memory import notas as notas_del_equipo
+from core.memory import relacion as relacion_con_modulos
 from core.memory import vector as vector_memory
 from core.memory import working as working_memory
+from core.observability import metricas_negocio
 from core.observability.tracing import get_tracer, span_attributes
-from core.orchestrator.escalation import ESCALATION_REPLY, escalate
+from core.orchestrator.escalation import ESCALATION_REPLY, VERIFYING_REPLY, escalate
 from core.orchestrator.guardrails import MAX_GUARDRAIL_RETRIES, run_guardrails
+from core.orchestrator.referencias import cargar_referencias
 from core.orchestrator.safe_renderer import (
     TOOL_NAME_KEY,
     apply_safe_extras,
@@ -52,11 +89,24 @@ from core.orchestrator.safe_renderer import (
     strip_reserved_keys,
 )
 from core.orchestrator.skill_router import select_relevant_skills
+from core.orchestrator.verificador import (
+    EstadoTareas,
+    Modos,
+    Veredicto,
+    cargar_afirmaciones,
+    instruccion_correctiva,
+    normalizar_desactivados,
+    registrar_veredicto,
+    verificar_seguro,
+)
+from core.shared import release_vigente
 from core.shared.audit import record_audit
 from core.shared.crypto import get_secret_box
-from core.shared.exceptions import LLMProviderError, PluginError
+from core.shared.exceptions import BusinessError, LLMProviderError, PluginError
 from core.shared.logger import get_logger
+from core.shared.release_vigente import AgenteCongelado, con_valores_de_release
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import consumir_simulado, is_test_channel, reset_simulado
 from core.tools.core_skill import conversation_spent
 
 log = get_logger(__name__)
@@ -66,12 +116,11 @@ FALLBACK_REPLY = (
     "Ya avisé a nuestro equipo para que te atienda una persona."
 )
 
-# Se agotó una cuota del período (mensajes o costo LLM). El texto real vive en
-# core/playbooks/respuestas.md (`## quota_exhausted`); esto es el fallback
-# determinístico si el playbook no está disponible (mismo patrón que FALLBACK_REPLY).
-QUOTA_EXHAUSTED_REPLY = (
-    "Por ahora no puedo seguir atendiendo esta conversación. "
-    "Un asesor humano puede continuar la atención."
+# Respaldo del reintento por `persona.maxLength` si el playbook `respuestas` no trae
+# `## persona_max_length` (mismo patrón que `INSTRUCCION_GENERICA` del verificador).
+INSTRUCCION_LARGO = (
+    "Tu respuesta supera el largo máximo permitido ({max_length} "
+    "caracteres). Resumila sin perder información importante."
 )
 
 # WhatsApp y canales similares no interpretan Markdown: un cliente ve
@@ -95,29 +144,100 @@ class TurnResult:
     text: str
     image_url: str | None = None
     escalated: bool = False
+    # Confirmación armada por el kernel (HU-AOS-09): `text` ya es su versión de texto; egress
+    # la envía con botón si el canal lo soporta. None en todo turno sin el motor activo.
+    confirmacion: Any = None
+    # HU-ARCH-14: el turno ejecutó al menos una tool en modo simulado (canal `test`).
+    simulado: bool = False
 
 
 @dataclass
 class _TurnUsage:
     """Acumula el uso LLM de UN turno para el usage_ledger (ADR-0008)."""
 
+    # Total de entrada, lo cacheado incluido, en todos los proveedores (adenda HU-AOS-35).
     input_tokens: int = 0
     output_tokens: int = 0
-    cached_tokens: int = 0
+    cached_tokens: int = 0  # solo lo leído de la caché
+    cache_write_tokens: int = 0
     latency_ms: int = 0
     cost_usd: float = 0.0
     model: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     escalated: bool = False
+    politica: Any = None  # `UsoDePolitica` del turno (HU-AOS-09), solo con el motor activo
+    # Llave del turno para el crédito (ADR-0144): `byok` solo cobra el fee. Default seguro.
+    key_mode: str = "platform"
+    llamadas: int = 0  # llamadas al LLM del turno: sin ninguna no hay fee de turno de IA
 
     def add(self, provider, response) -> None:  # type: ignore[no-untyped-def]
-        self.input_tokens += response.usage.input_tokens
-        self.output_tokens += response.usage.output_tokens
-        self.cached_tokens += getattr(response.usage, "cache_read_tokens", 0)
-        self.cached_tokens += getattr(response.usage, "cache_write_tokens", 0)
+        uso = response.usage
+        leidos = getattr(uso, "cache_read_tokens", 0)
+        escritos = getattr(uso, "cache_write_tokens", 0)
+        # El costo sale de `uso.input_tokens` tal cual (`_response_cost`); aquí solo el total que
+        # guarda el ledger: Anthropic no incluye lo cacheado en `input_tokens` (ADR-0117, HU-AOS-35).
+        incluido = getattr(uso, "input_includes_cache", True)
+        self.input_tokens += uso.input_tokens + (0 if incluido else leidos + escritos)
+        self.output_tokens += uso.output_tokens
+        self.cached_tokens += leidos
+        self.cache_write_tokens += escritos
         self.latency_ms += response.latency_ms
-        self.cost_usd += _response_cost(provider, response)
+        costo = _response_cost(provider, response)
+        self.cost_usd += costo
         self.model = response.model or self.model
+        self.llamadas += 1
+        metricas_negocio.llm_respuesta(
+            response.model or getattr(provider, "model", ""),
+            entrada=uso.input_tokens + (0 if incluido else leidos + escritos),
+            salida=uso.output_tokens,
+            cache_leido=leidos,
+            cache_escrito=escritos,
+            costo_usd=costo,
+        )
+
+
+async def _compilado_del_turno() -> Any:
+    """`Compilado` del agente en foco de la release del turno, o None (legacy, sin foco o sin
+    compilador). Un fallo inesperado no tumba el turno: se arma como siempre."""
+    actual = release_vigente.vigente()
+    if actual is None or actual.foco is None or actual.compilar is None:
+        return None
+    try:
+        return await actual.compilar(actual.foco)
+    except PermissionError:
+        raise
+    except Exception:
+        log.warning("release_compilado_error", exc_info=True)
+        return None
+
+
+def _creditos_del_turno(usage: _TurnUsage) -> dict[str, Any]:
+    """Créditos del turno al escribir el ledger (HU-BILL-04/06, ADR-0144).
+
+    Sin llamadas al LLM (p. ej. `budget_exhausted` antes de la primera) no hay evento que cobrar:
+    0 créditos. Si el cálculo falla, las columnas quedan en NULL y la fila se escribe igual: la
+    fila (con su `cost_usd`) es la fuente de la facturación y nunca se pierde por esto."""
+    try:
+        from decimal import Decimal
+
+        from core.billing.tarifario import TARIFARIO_VIGENTE, creditos_por_evento, trm_vigente
+
+        trm = trm_vigente()
+        key_mode = "byok" if usage.key_mode == "byok" else "platform"
+        creditos = (
+            creditos_por_evento(round(usage.cost_usd, 6), "llm_turn", key_mode, trm)
+            if usage.llamadas > 0
+            else Decimal("0.0")
+        )
+        return {
+            "credits": creditos,
+            "key_mode": key_mode,
+            "tarifario_version": TARIFARIO_VIGENTE.version,
+            "trm_cop": trm,
+        }
+    except Exception:
+        log.warning("usage_ledger_credits_failed")
+        return {}
 
 
 async def _write_usage_ledger(
@@ -128,22 +248,49 @@ async def _write_usage_ledger(
 ) -> None:
     """Una fila append-only por turno. Best-effort: nunca interrumpe la respuesta."""
     try:
-        async with get_session() as session:
-            session.add(
-                UsageLedger(
-                    tenant_id=get_current_tenant_id(),
-                    conversation_id=conversation_id,
-                    agent_spec_version=spec.version,
-                    model=usage.model or spec.model.primary,
-                    input_tokens=usage.input_tokens,
-                    output_tokens=usage.output_tokens,
-                    cached_tokens=usage.cached_tokens,
-                    latency_ms=usage.latency_ms,
-                    cost_usd=round(usage.cost_usd, 6),
-                    tool_calls=usage.tool_calls or None,
-                    result={"escalated": usage.escalated},
-                )
-            )
+        anotar_uso(usage.input_tokens, usage.output_tokens, usage.cost_usd)  # turn_outcomes (HU-AOS-10)
+        # Release y agente del turno (HU-AOS-15): NULL si el turno corrió sin release.
+        release = release_vigente.vigente()
+        agente = release.foco if release is not None else None
+        if release is not None and release.efimera:
+            # Prueba de un borrador (HU-AOS-72): sus ids no existen en la base; la fila de costo queda.
+            release, agente = None, None
+        fila = dict(
+            tenant_id=get_current_tenant_id(),
+            conversation_id=conversation_id,
+            agent_spec_version=spec.version,
+            connection_id=release.connection_id if release is not None else None,
+            release_id=release.release_id if release is not None else None,
+            agent_instance_id=agente.instance_id if agente is not None else None,
+            agent_version_id=agente.version_id if agente is not None else None,
+            model=usage.model or spec.model.primary,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cached_tokens=usage.cached_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
+            latency_ms=usage.latency_ms,
+            cost_usd=round(usage.cost_usd, 6),
+            tool_calls=usage.tool_calls or None,
+            result={
+                "escalated": usage.escalated,
+                # Política de modelo por riesgo (HU-AOS-09): solo si hizo algo.
+                **({"politica_modelo": usage.politica.como_dict()}
+                   if usage.politica is not None and not usage.politica.vacio() else {}),
+            },
+        )
+        creditos = _creditos_del_turno(usage)
+        try:
+            async with get_session() as session:
+                session.add(UsageLedger(**fila, **creditos))
+        except Exception as exc:
+            if not creditos:
+                raise
+            # La fila (con su `cost_usd`) es la fuente de la facturación: si falla con los créditos
+            # (migración 0096 sin aplicar, valor fuera de rango), se reintenta una vez sin ellos.
+            # Sin traza: el error de la base trae los parámetros de la fila.
+            log.warning("usage_ledger_credits_write_failed", error=type(exc).__name__)
+            async with get_session() as session:
+                session.add(UsageLedger(**fila))
     except Exception:
         log.warning("usage_ledger_write_failed")
     finally:
@@ -157,7 +304,10 @@ async def _write_usage_ledger(
             span.end()
 
 
+@con_release  # ranura de la release del turno (HU-AOS-14)
+@en_turno(anota_resultado=True)  # decisión y resultado del turno (HU-AOS-10)
 async def process_conversation(conversation_id: uuid.UUID, latest_message: str) -> TurnResult | None:
+    reset_simulado()
     settings = get_settings()
 
     async with get_session() as session:
@@ -174,34 +324,33 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             )
         ).scalar_one_or_none()
 
-    if customer is None or conversation.bot_paused or conversation.status == "escalated":
+    if customer is None or await conversacion_bloqueada(conversation, customer):
         return None
 
     # ---------------- 0. AgentSpec del tenant (Sprint 2, ADR-0014)
     spec = await load_active_spec()
-
-    # Cuota de turno (ADR-0045): si el período agotó `mensajes` o
-    # `costo_llm_usd`, se corta el turno antes de gastar LLM. El bloqueo por
-    # clientes/conversaciones/audio/OCR ocurre en el consumer/webhook (acción).
-    tenant_id = get_current_tenant_id()
-    if tenant_id is not None:
-        from core.billing.enforcement import turn_quota_metric
-
-        blocked = await turn_quota_metric(tenant_id)
-        if blocked is not None:
-            log.warning(
-                "turn_quota_exceeded",
-                tenant_id=str(tenant_id),
-                metric=blocked,
-                conversation_id=str(conversation_id),
-            )
-            closure = await load_response(spec, "quota_exhausted") or QUOTA_EXHAUSTED_REPLY
-            return TurnResult(text=closure)
-
-    # Presupuesto agotado (ADR-0015): no se gasta más LLM en esta conversación
-    # hasta que un admin suba el presupuesto o lo resetee.
-    if conversation.state.get("budget_exhausted"):
+    # Release del turno, sticky por episodio (ADR-0117 §4). El turno (HU-AOS-15) ejecuta la versión congelada del especialista en foco y el
+    # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
+    asignacion = await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
+    if asignacion is not None and asignacion.bloqueo is not None:
+        # HU-ARCH-38: el especialista y el de por defecto están en pausa: sin LLM y sin respuesta.
+        await bloquear(conversation, asignacion.bloqueo, status="silent")
         return None
+    if release_vigente.sin_release():
+        # v3 sin release activa: falla cerrado, sin respuesta (ADR-0191). Ya se registró
+        # `release_missing`; la release 1 llega al alta de la conexión.
+        log.warning("turno_sin_release", conversation_id=str(conversation.id))
+        return None
+    # Lo compilado del agente en foco, una vez por versión (HU-AOS-35, adenda de ADR-0117): la
+    # vista v2, el flujo de la release y los bloques fijos del prompt. None sin release o
+    # si no se pudo compilar de forma determinista: el turno se arma como siempre.
+    compilado = await _compilado_del_turno()
+    spec = compilado.spec() if compilado is not None else spec_del_turno(spec)
+
+    # Cuota del período (ADR-0045) y presupuesto agotado (ADR-0015): políticas del kernel.
+    bloqueo = await politicas_del_turno(conversation, spec)
+    if bloqueo is not None:
+        return TurnResult(text=bloqueo.texto) if bloqueo.texto is not None else None
 
     # ---------------- 1. Memoria y contexto
     history = await _load_history(conversation_id)
@@ -209,6 +358,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     history_tool_results = await _historical_tool_results(conversation_id)
 
     profile = await entity_memory.get_profile(customer.id)
+    team_notes = await notas_del_equipo.para_prompt(get_current_tenant_id(), customer.id)
     rag = spec.memory.rag
     recalled = await vector_memory.recall(
         latest_message,
@@ -248,14 +398,32 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     from core.gateway.connections import active_connection_type_ids
 
     connected_types = await active_connection_type_ids(get_current_tenant_id())
-    candidate_tools = [t for t in candidate_tools if _connections_ok(t, connected_types)]
+    candidate_tools = [t for t in candidate_tools if await _connections_ok(t, connected_types)]
 
-    flow = await resolve_flow(
-        spec, available={t.name for t in candidate_tools}
-    )
+    no_disponible = ""
+    if compilado is None:
+        flow = await resolve_flow(spec, available={t.name for t in candidate_tools})
+    elif compilado.flujo is None:
+        flow = None
+    else:
+        # El flujo fijo es el de la release completa; lo que falta en este turno (salud, conexión o
+        # desactivado) va como aviso al bloque dinámico, calculado antes del motor (HU-AOS-35).
+        disponibles = {t.name for t in candidate_tools}
+        if any(nombre in disponibles for nombre in compilado.flujo.tool_names):
+            flow = copy.deepcopy(compilado.flujo)  # lo compilado es de todos los turnos de la release
+            no_disponible = aviso_no_disponible(flow, disponibles, app_settings.language if app_settings else None)
+        else:
+            # Ninguna herramienta del flujo disponible: la rama de siempre (router por palabras y sin
+            # bloque de flujo), con el armado de siempre: los bloques compilados traen el flujo.
+            flow = None
+            compilado = None
     if flow is not None:
         by_name = {t.name: t for t in candidate_tools}
         active_tools = [by_name[name] for name in flow.tool_names if name in by_name]
+        # Las tools del core (memoria, perfil, escalamiento, correo, suscripciones)
+        # se ofrecen aunque ninguna sección las nombre (HU-FWK-01, ADR-0109).
+        en_flujo = {t.name for t in active_tools}
+        active_tools += [t for t in candidate_tools if t.always_available and t.name not in en_flujo]
         flow_summary = render_flow(flow)
     else:
         selected_names = select_relevant_skills(latest_message, recent_context, available_skills)
@@ -263,7 +431,45 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         active_tools = [*active_tools, *tools_for_spec(spec)]
         flow_summary = ""
 
-    active_tools = [t for t in active_tools if _connections_ok(t, connected_types)]
+    active_tools = [t for t in active_tools if await _connections_ok(t, connected_types)]
+    active_tools = _solo_las_concedidas(spec, active_tools)
+
+    # Ids vigentes de la conversación (ADR-0130): el historial es solo texto y el modelo
+    # no ve el `quote_id` que devolvió una tool en un turno anterior.
+    referencias = await cargar_referencias(enabled, disabled_for_tenant, conversation_id, customer.id)
+    # Ficha de lo que cada módulo habilitado ya sabe del cliente (HU-CRM-14): acotada y tolerante a fallos.
+    # Apagada por defecto: solo la trae el agente que encendió sus herramientas de datos del cliente.
+    agente_del_turno = release_vigente.agente_del_turno()
+    # Captar leads (ADR-0193 §2): el lead del cliente existe antes de que el agente lo enriquezca.
+    from core.leads.asegurar import asegurar_en_el_turno
+
+    await asegurar_en_el_turno(agente_del_turno, customer, conversation)
+    packs_del_agente = (
+        set(agente_del_turno.packs)
+        if agente_del_turno is not None and agente_del_turno.packs is not None
+        else enabled
+    )
+    relacion = (
+        await relacion_con_modulos.para_prompt(customer.id, packs_del_agente)
+        if await datos_del_cliente_activos(agente_del_turno.agent_id if agente_del_turno is not None else None)
+        else ""
+    )
+    # Motor de procedimientos (HU-AOS-05), en todo negocio (ADR-0191): trae la tarjeta de estado
+    # (ADR-0114) y, con tarea en foco, las acciones de su etapa.
+    motor = await contexto_del_motor(
+        conversation_id, customer_id=customer.id, channel=conversation.channel, enabled=enabled,
+        disabled=disabled_for_tenant, herramientas_base=active_tools, candidatas=candidate_tools,
+        texto_cliente=latest_message, confirmar_tambien=frozenset(confirmed_actions_v2(spec)),
+    )
+    if motor is not None:
+        motor.ejecutor = _ejecutor_del_motor(conversation, customer, spec)
+        motor.ejecutor_de_consulta = _ejecutor_de_consulta(conversation, customer)
+        # Confirmaciones de datos al empezar el turno (adenda 2026-10-12 de ADR-0113).
+        await motor.al_empezar_turno()
+        active_tools = motor.herramientas()
+    # Tarea en foco al empezar el turno → `core_decisions.focus_task_id` (HU-AOS-15), antes de decidir.
+    anotar_foco(motor.foco_task_id if motor is not None else None)
+    state_card = motor.tarjeta if motor is not None else ""
 
     prompt_ctx = PromptContext(
         assistant_name=app_settings.assistant_name if app_settings else settings.app_name,
@@ -278,8 +484,31 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         active_skills_summary=skills_summary(active_tools),
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),
+        relacion=relacion,
+        referencias=referencias,
+        accion_por_confirmar=await _accion_por_confirmar(conversation, active_tools),
+        state_card=state_card,
+        team_notes=team_notes,
+        # HU-AOS-82: el horario propio del agente en foco, si tiene; si no, el del negocio.
+        service_hours=horario_de_servicio.para_prompt(
+            con_horario_del_agente(
+                app_settings.escalation_config if app_settings else None,
+                agente_del_turno.schedule if agente_del_turno is not None else None,
+            ),
+            app_settings.language if app_settings else None,
+        ),
+        # Zona del negocio para la fecha y hora actual del prompt (ADR-0091).
+        timezone=(getattr(app_settings, "timezone", None) if app_settings else None) or DEFAULT_TIMEZONE,
     )
-    system_blocks = await build_system_blocks(spec, prompt_ctx)
+    # Con release, los campos de AppSettings congelados en ella (ADR-0117 §2).
+    prompt_ctx = con_valores_de_release(prompt_ctx)
+    if no_disponible:
+        prompt_ctx = dataclasses.replace(prompt_ctx, no_disponible=no_disponible)
+    if compilado is not None:
+        # Prefijo idéntico byte a byte en todos los turnos de la versión (caché del proveedor).
+        system_blocks = [*compilado.bloques_fijos, bloque_dinamico(prompt_ctx)]
+    else:
+        system_blocks = await build_system_blocks(spec, prompt_ctx)
 
     # ---------------- 2. Proveedor y routing
     # `behavior` se adelanta acá (antes vivía después del routing) porque
@@ -293,18 +522,19 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # incluido un `None` explícito guardado (una key presente pero vacía,
     # distinta de "sin configurar"), que `_clamped_int` trata igual que si
     # faltara del todo.
-    def _clamped_int(key: str, default: int, lo: int, hi: int) -> int:
-        raw = behavior.get(key)
-        return max(lo, min(hi, int(raw if raw is not None else default)))
+    # Los rangos viven en `core/config_limites.py` (SPEC-37, HU-CFG-03): un solo sitio para la API,
+    # el panel SSR y este recorte, que además tolera valores no numéricos.
+    def _clamped_int(key: str, default: int) -> int:
+        return leer_entero(behavior, key, default)
 
     difficulty_long_message_threshold = _clamped_int(
-        "difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD, 50, 5000
+        "difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD
     )
     difficulty_turnos_sin_resolver_threshold = _clamped_int(
-        "difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD, 1, 20
+        "difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD
     )
     difficulty_score_threshold = _clamped_int(
-        "difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD, 1, 10
+        "difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD
     )
 
     turnos_sin_resolver = int(conversation.state.get("turnos_sin_resolver", 0))
@@ -321,7 +551,13 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         turnos_sin_resolver_threshold=difficulty_turnos_sin_resolver_threshold,
         score_threshold=difficulty_score_threshold,
     )
-    provider = _resolved_provider(app_settings, routing.model)
+    provider = _resolved_provider(
+        app_settings, routing.model, thinking=routing.reason == "complex_signals"
+    )
+    # Política de modelo por riesgo (HU-AOS-09): None salvo con el motor activo.
+    politica = _politica_del_turno(motor, app_settings, spec, routing)
+    if politica is not None:
+        provider = politica.envolver(provider)
     tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
     # v2.0.0 (ADR-0050): temperatura del tenant (clampeada -- el raw_json de
     # /admin/spec puede traer cualquier float).
@@ -335,11 +571,15 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # `auditor-multitenant` sobre el diff de los umbrales de dificultad --
     # un `None` explícito en `behavior_config` para esta key tumbaría el
     # turno con `TypeError` sin este mismo cuidado.
-    guardrail_max_retries = _clamped_int("guardrail_max_retries", MAX_GUARDRAIL_RETRIES, 0, 5)
+    guardrail_max_retries = _clamped_int("guardrail_max_retries", MAX_GUARDRAIL_RETRIES)
+    # Qué hacer al agotar los reintentos (ADR-0092): solo "neutral" cambia el
+    # comportamiento; cualquier otro valor (o ninguno) escala como siempre.
+    guardrail_fail_action = "neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate"
     # Guardrail individual on/off por tenant (mismo patrón, ver `AppSettings.
     # behavior_config`): apagar un guardrail puntual (ej. `crm_amount_check`)
-    # sin apagar el pack entero.
-    disabled_guardrails = set(behavior.get("disabled_guardrails", []))
+    # sin apagar el pack entero. Incluye los interruptores del verificador
+    # (`verificador_*`, con los nombres viejos de commerce ya traducidos).
+    disabled_guardrails = set(normalizar_desactivados(behavior.get("disabled_guardrails", [])))
 
     # ---------------- 3. Agentic loop
     messages = list(history)
@@ -351,10 +591,33 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     if not messages or messages[-1].role != "user" or messages[-1].content != latest_message:
         messages.append(LLMMessage(role="user", content=latest_message))
     all_tool_results: list[dict[str, Any]] = []
+    # Un comando del hilo aplicado (HU-AOS-06) resuelve el turno aunque no sea una acción.
+    hubo_comando_ok = False
+    # La acción espera el sí del cliente (HU-ARCH-36): ni resuelve el turno ni suma como estancado.
+    hubo_confirmacion_pedida = False
     guardrail_retries = 0
+    # Borrador que ya pasó todo salvo el largo (`persona.maxLength`, adenda de ADR-0050):
+    # si el texto de su único reintento falla una verificación dura, se entrega este.
+    largo_guardado: tuple[str, Any] | None = None
+    entrega_guardada = False
+    # Verificador de afirmaciones (ADR-0119, HU-ARCH-29). Las URLs que el negocio o
+    # el cliente ya pusieron en la conversación son evidencia; las del asistente no.
+    # El último bloque del prompt es el dinámico (perfil del cliente, memorias y
+    # fecha, `build_system_blocks`): lo escribe en parte el propio asistente
+    # (`remember_fact`, memorias de turnos previos), así que no cuenta.
+    contexto_sistema = "\n".join(system_blocks[:-1])
+    del_cliente = [m.content for m in messages if m.role == "user" and isinstance(m.content, str)]
+    contexto_urls = "\n".join([contexto_sistema, *del_cliente])
+    # Para el eco de horarios (HU-AOS-20) solo cuenta el último mensaje del cliente.
+    contexto_cliente = del_cliente[-1] if del_cliente else ""
+    afirmaciones = None
+    motivos_verificador: list[str] = []
+    veredicto = None
     turn_cost: float = 0.0
     budget = spec.policies.budgetUsdPerConversation
     usage = _TurnUsage()
+    usage.politica = politica.uso if politica is not None else None
+    usage.key_mode = "byok" if _usa_llave_propia(app_settings) else "platform"
 
     # Span del turno (OTel): atributos para el panel/trazas.
     tracer = get_tracer()
@@ -367,15 +630,22 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     )
 
     max_iterations = max(1, min(50, spec.policies.maxToolCallsPerTurn))
-    for _iteration in range(max_iterations):
+    # Con el motor activo, una vuelta que solo llevó comandos del hilo no gasta el tope, hasta
+    # `VUELTAS_LIBRES_DE_COMANDOS` (adenda 2026-10-13 de ADR-0113).
+    tope = max_iterations
+    techo = min(50, max_iterations + VUELTAS_LIBRES_DE_COMANDOS)
+    _iteration = -1
+    while (_iteration := _iteration + 1) < tope:
         # Presupuesto (ADR-0015): se mide ANTES de llamar al LLM, en la cabecera.
         if budget is not None:
             spent = await conversation_spent(conversation_id) + turn_cost
             if spent >= budget:
+                await bloquear(conversation, "budget")  # sin efecto si el turno ya se enrutó
                 await _mark_budget_exhausted(conversation_id)
                 closure = await load_response(spec, "budget_exhausted") or ""
                 await _write_usage_ledger(conversation_id, spec, usage, turn_span)
                 return TurnResult(text=closure) if closure else None
+        await enrutar(conversation)  # la decisión del turno, una vez, antes del primer LLM
         try:
             with tracer.start_as_current_span("llm_call") as llm_span:
                 response = await provider.generate(
@@ -396,6 +666,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # v2.0.0 (ADR-0050): fallback real. Si el proveedor/modelo primario
             # falla y el tenant definió `spec.model.fallback` (distinto), se
             # intenta UNA vez con ese modelo antes de escalar.
+            metricas_negocio.llm_fallo(routing.model)
             fallback_model = spec.model.fallback
             recovered = None
             if fallback_model and fallback_model != routing.model:
@@ -415,6 +686,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                         fallback=fallback_model,
                     )
                 except LLMProviderError:
+                    metricas_negocio.llm_fallo(fallback_model)
                     log.exception("llm_call_fallback_failed", conversation_id=str(conversation_id))
             if recovered is None:
                 log.exception("llm_call_failed", conversation_id=str(conversation_id))
@@ -422,7 +694,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                 usage.escalated = True
                 await _write_usage_ledger(conversation_id, spec, usage, turn_span)
                 fallback_text = await load_response(spec, "fallback") or FALLBACK_REPLY
-                return TurnResult(text=fallback_text, escalated=True)
+                return TurnResult(text=fallback_text, escalated=True, simulado=consumir_simulado())
             response = recovered
 
         turn_cost += _response_cost(provider, response)
@@ -431,18 +703,40 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # ---- tool_use
         if response.stop_reason == "tool_use":
             messages.append(
-                LLMMessage(role="assistant", content=response.content, tool_calls=response.tool_calls)
+                LLMMessage(
+                    role="assistant", content=response.content, tool_calls=response.tool_calls,
+                    # DeepSeek con thinking lo exige en la vuelta siguiente (HU-AOS-09).
+                    reasoning_content=getattr(response, "reasoning_content", "") if politica is not None else "",
+                )
             )
             for tool_call in response.tool_calls:
                 with tracer.start_as_current_span("tool_execute") as tool_span:
-                    result = await _execute_tool_safely(conversation, customer, tool_call, spec)
+                    result = await _execute_tool_safely(conversation, customer, tool_call, spec, motor=motor)
                     span_attributes(tool_span, tool=tool_call.name)
                 # _tool_name (reservada, safe_renderer.py): guardrails como
                 # crm_completion_check necesitan saber QUÉ tool produjo cada
                 # resultado para verificar que una afirmación de "ya lo hice"
                 # en el texto corresponda a una tool REALMENTE llamada, no solo
                 # a que algún resultado exista.
-                all_tool_results.append({**result, TOOL_NAME_KEY: tool_call.name})
+                # _current_turn/_ok (HU-COM-02): distinguish el turno actual y el
+                # éxito; un `crear_pedido` fallido o de un turno anterior no
+                # respalda "tu pedido quedó confirmado".
+                if motor is not None and motor.es_comando(tool_call.name):
+                    # Un comando no es evidencia (su tarjeta trae datos que escribió el modelo): el
+                    # estado entra al verificador por `_estado_del_verificador` (HU-AOS-06).
+                    hubo_comando_ok = hubo_comando_ok or result.get("ok") is True
+                elif isinstance(result, dict) and result.get("status") == STATUS_CONFIRMACION_REQUERIDA:
+                    # No ocurrió: no es evidencia para el verificador ni para los guardrails de cierre.
+                    hubo_confirmacion_pedida = True
+                else:
+                    all_tool_results.append(
+                        {
+                            **result,
+                            TOOL_NAME_KEY: tool_call.name,
+                            "_current_turn": True,
+                            "_ok": not (isinstance(result, dict) and result.get("error")),
+                        }
+                    )
                 usage.tool_calls.append({"tool": tool_call.name})
                 messages.append(
                     LLMMessage(
@@ -451,6 +745,33 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                         content=mcp_host.serialize_result(strip_reserved_keys(result)),
                     )
                 )
+                # Una tool (o un `BusinessError(escalate=True)`) pide relevo humano: p. ej. un
+                # pedido por encima de `monto_alto_threshold` en pack_commerce. Se escala con el
+                # mecanismo nativo y se corta el lote: con el bot pausado no corren más acciones.
+                if isinstance(result, dict) and result.get("escalate") is True:
+                    await escalate(
+                        conversation_id,
+                        reason=f"plugin:{tool_call.name}",
+                        summary=str(result.get("error") or "")[:200],
+                    )
+                    usage.escalated = True
+                    await _write_usage_ledger(conversation_id, spec, usage, turn_span)
+                    escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+                    return TurnResult(text=escalation_text, escalated=True, simulado=consumir_simulado())
+            # La etapa cambió en el lote (HU-AOS-05): la vuelta siguiente ofrece sus acciones.
+            if motor is not None and await motor.tras_lote():
+                active_tools = motor.herramientas()
+                tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
+                # Adenda 2026-10-13: y ve la tarjeta y las capacidades vigentes (solo el bloque
+                # dinámico, el último; el prefijo cacheado y `contexto_urls` no cambian).
+                prompt_ctx = dataclasses.replace(
+                    prompt_ctx, state_card=motor.tarjeta, active_skills_summary=skills_summary(active_tools)
+                )
+                system_blocks = [*system_blocks[:-1], bloque_dinamico(prompt_ctx)]
+            if motor is not None and tope < techo and all(
+                motor.es_comando(tc.name) for tc in response.tool_calls
+            ):
+                tope += 1
             continue
 
         # ---- refusal
@@ -459,11 +780,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-            return TurnResult(text=escalation_text, escalated=True)
+            return TurnResult(text=escalation_text, escalated=True, simulado=consumir_simulado())
 
         # ---- end_turn: guardrails
         # Se siembra con tool_results de turnos ANTERIORES (audit_log) + los del
-        # turno actual -- sin esto, un guardrail como _amount_guardrail solo veía
+        # turno actual -- sin esto, la verificación de montos solo veía
         # lo llamado en ESTE turno y escalaba conversaciones válidas cada vez que
         # el asistente repetía/confirmaba un monto ya verificado antes (mismo bug
         # que agent-sale ya había encontrado y resuelto en priceGuardrail.ts).
@@ -471,23 +792,72 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # turno actual) porque ese sí alimenta `extract_safe_extras` más abajo --
         # si se mezclara ahí, un _safe_append viejo (ej. un link de pago vencido)
         # podría reaparecer en la respuesta de un turno nuevo sin relación.
-        # v2.0.0 (ADR-0050): validaciones de persona del spec, ANTES de los
-        # guardrails de packs. `forbiddenPhrases` (frases prohibidas) y
-        # `maxLength` (tope de longitud) usan el mismo mecanismo de reintento
-        # correctivo -> escalar.
-        persona_verdict = _persona_guard(response.content, spec)
-        # Reglas declarativas del tenant (ADR-0051): `spec.extensions["guardrails"]`.
-        custom_rules = (spec.extensions or {}).get("guardrails") if spec.extensions else None
-        verdict = persona_verdict or await run_guardrails(
-            response.content,
-            [*history_tool_results, *all_tool_results],
-            enabled,
-            disabled_guardrails,
-            custom_rules=custom_rules,
-        )
-        if not verdict.passed:
+        # v2.0.0 (ADR-0050): `forbiddenPhrases` del spec, ANTES de los guardrails de
+        # packs, con el mismo mecanismo de reintento correctivo -> escalar. El largo
+        # (`maxLength`) es un tope blando y se mira al final, cuando todo lo demás pasó.
+        persona_verdict = _persona_frase_prohibida(response.content, spec)
+        # Se verifica el texto como llegará al cliente: `strip_markdown` puede rearmar
+        # una URL partida con asteriscos (`**https**://…`).
+        borrador = strip_markdown(response.content)
+        if persona_verdict is not None:
+            verdict = persona_verdict
+        else:
+            # Verificador (ADR-0119): quita links sin respaldo y comprueba montos y
+            # afirmaciones de cierre contra la evidencia. Corre antes que los
+            # guardrails de packs, que ven el texto ya corregido.
+            if afirmaciones is None:
+                afirmaciones = await cargar_afirmaciones(enabled)
+                # HU-AOS-07: con el motor activo, también las `claims` compiladas de los
+                # procedimientos disponibles (con la bandera apagada, ninguna).
+                if motor is not None:
+                    afirmaciones = [*afirmaciones, *motor.afirmaciones()]
+            veredicto = verificar_seguro(
+                borrador,
+                [*history_tool_results, *all_tool_results],
+                contexto_urls,
+                afirmaciones,
+                disabled_guardrails,
+                estado=await _estado_del_verificador(motor, referencias),
+                # HU-AOS-20 parte 3: horarios y preguntas (solo con el estado del motor activo).
+                contexto_sistema=contexto_sistema,
+                contexto_cliente=contexto_cliente,
+                zona=prompt_ctx.timezone,
+                modos=_modos_del_verificador(motor),
+            )
+            borrador = veredicto.texto
+            if not veredicto.passed:
+                motivos_verificador.append(veredicto.motivo)
+                verdict = GuardrailResult(
+                    passed=False,
+                    reason=veredicto.codigo,
+                    retry_instruction=await instruccion_correctiva(spec, veredicto),
+                )
+            else:
+                # Reglas declarativas del tenant (ADR-0051): `spec.extensions["guardrails"]`.
+                custom_rules = (spec.extensions or {}).get("guardrails") if spec.extensions else None
+                verdict = await run_guardrails(
+                    borrador,
+                    [*history_tool_results, *all_tool_results],
+                    enabled,
+                    disabled_guardrails,
+                    custom_rules=custom_rules,
+                )
+        if not verdict.passed and largo_guardado is not None:
+            # El texto del reintento de largo falló una verificación dura: se entrega el
+            # borrador largo, que ya la había pasado. El reintento de largo nunca empeora
+            # el resultado ni gasta reintentos de veracidad (adenda de ADR-0050).
+            log.warning(
+                "persona_largo_reintento_descartado",
+                conversation_id=str(conversation_id),
+                guardrail=verdict.reason.split(":", 1)[0][:120],
+            )
+            borrador, veredicto = largo_guardado
+            entrega_guardada = True
+        elif not verdict.passed:
             if guardrail_retries < guardrail_max_retries:
                 guardrail_retries += 1
+                if politica is not None and persona_verdict is None and veredicto is not None and not veredicto.passed:
+                    politica.reintento_del_verificador()  # el reintento usa el respaldo (HU-AOS-09)
                 messages.append(LLMMessage(role="assistant", content=response.content))
                 messages.append(LLMMessage(role="user", content=f"[SISTEMA] {verdict.retry_instruction}"))
                 continue
@@ -495,54 +865,152 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # (montos, datos del cliente): se persiste solo el identificador del
             # guardrail, no el texto completo (evita PII en `escalations.summary`).
             guardrail_id = verdict.reason.split(":", 1)[0][:120]
+            if veredicto is not None and motivos_verificador:
+                await registrar_veredicto(
+                    conversation_id,
+                    veredicto,
+                    resultado="fallo",
+                    intentos=guardrail_retries + 1,
+                    motivos=motivos_verificador,
+                )
+            if guardrail_fail_action == "neutral":
+                marcar_neutral()
+                # ADR-0092: no escala ni pausa el bot. Responde que va a
+                # verificar (más lo que el servidor ya confirmó en el turno),
+                # deja rastro y cuenta el turno como NO resuelto: el
+                # autoescalado por turnos sin resolver sigue siendo la red.
+                await record_audit(
+                    actor="core:guardrail",
+                    action="guardrail_neutral",
+                    conversation_id=conversation_id,
+                    input_data={"guardrail": guardrail_id},
+                )
+                extras = extract_safe_extras(all_tool_results)
+                verifying = await load_response(spec, "verifying") or VERIFYING_REPLY
+                return await _close_turn(
+                    conversation_id,
+                    spec,
+                    app_settings,
+                    usage,
+                    turn_span,
+                    latest_message,
+                    apply_safe_extras(verifying, extras),
+                    resolved=False,
+                    image_url=extras.image_url,
+                )
+            # Rastro del motivo también en el canal `test` (donde `escalate` no deja fila): solo el
+            # identificador del guardrail y la etiqueta de la afirmación, sin texto del borrador.
+            await record_audit(
+                actor="core:guardrail",
+                action="guardrail_escalated",
+                conversation_id=conversation_id,
+                input_data={"guardrail": guardrail_id, "afirmacion": _etiqueta_del_bloqueo(verdict.reason, veredicto)},
+            )
             await escalate(conversation_id, reason="guardrail", summary=guardrail_id)
             usage.escalated = True
             await _write_usage_ledger(conversation_id, spec, usage, turn_span)
             escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-            return TurnResult(text=escalation_text, escalated=True)
+            return TurnResult(text=escalation_text, escalated=True, simulado=consumir_simulado())
+        elif (
+            largo_guardado is None
+            and _persona_excede_largo(borrador, spec)
+            # Sin una vuelta libre, el reintento terminaría en `max_iterations` y
+            # escalaría; sin presupuesto, en el cierre por presupuesto.
+            and _iteration + 1 < tope
+            and (budget is None or await conversation_spent(conversation_id) + turn_cost < budget)
+        ):
+            # Tope blando (adenda de ADR-0050): un solo reintento propio, que no toca
+            # `guardrail_retries` ni `guardrail_fail_action`. El borrador ya verificado
+            # queda guardado por si el texto del reintento sale peor.
+            largo_guardado = (borrador, veredicto)
+            messages.append(LLMMessage(role="assistant", content=response.content))
+            messages.append(LLMMessage(role="user", content=f"[SISTEMA] {await _instruccion_largo(spec)}"))
+            continue
 
         # ---- respuesta final
-        extras = extract_safe_extras(all_tool_results)
-        final_text = apply_safe_extras(strip_markdown(response.content), extras)
-        unresolved = await _finish_turn(
-            conversation_id,
-            final_text,
-            latest_message,
-            resolved=bool(all_tool_results),
-            short_term_turns=spec.memory.shortTermTurns,
-        )
-        await _write_usage_ledger(conversation_id, spec, usage, turn_span)
-        # Autoescalado por turnos sin resolver (ADR-0051, operativo en AppSettings).
-        auto_after = (app_settings.escalation_config or {}).get("auto_escalate_after_turns") if app_settings else None
-        try:
-            threshold = min(20, int(auto_after)) if auto_after else 0
-        except (TypeError, ValueError):
-            threshold = 0
-        if threshold > 0 and unresolved >= threshold:
-            await escalate(
-                conversation_id, reason="turns_unresolved", summary=f"{unresolved} turnos sin resolver"
+        intentos = guardrail_retries + (2 if largo_guardado is not None else 1)
+        if veredicto is not None and (veredicto.extrajo_algo or motivos_verificador or veredicto.error):
+            await registrar_veredicto(
+                conversation_id,
+                veredicto,
+                resultado="error" if veredicto.error else ("reintento" if motivos_verificador else "ok"),
+                intentos=intentos,
+                motivos=motivos_verificador,
             )
-            usage.escalated = True
-            escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-            return TurnResult(text=final_text + "\n\n" + escalation_text, escalated=True, image_url=extras.image_url)
-        return TurnResult(text=final_text, image_url=extras.image_url)
+        if _persona_excede_largo(borrador, spec):
+            if largo_guardado is None:
+                entregado = "sin_reintento"
+            else:
+                entregado = "guardado" if entrega_guardada else "reintento"
+            await _registrar_largo_excedido(conversation_id, spec, len(borrador), entregado)
+        extras = extract_safe_extras(all_tool_results)
+        # Adenda 2026-10-13: con el motor activo, un append cuyo link el texto ya trae no se repite.
+        final_text = apply_safe_extras(borrador, extras, por_enlace=motor is not None)
+        # HU-AOS-09: si el turno pidió una confirmación, el cliente confirma lo que armó el
+        # servidor (args firmados y datos de la tarea), no el texto del modelo.
+        confirmacion = await motor.confirmacion_del_turno() if motor is not None else None
+        if confirmacion is not None:
+            final_text = confirmacion.confirmacion.texto
+        elif final_text.strip():
+            # Aviso de tratamiento de datos (HU-CRM-16): la primera respuesta útil lo lleva, una vez por
+            # versión. Lo anexa el sistema después de los guardrails; apagado por defecto.
+            aviso_de_datos = await aviso_en_el_chat(
+                get_current_tenant_id(), conversation, customer, app_settings.behavior_config if app_settings else None
+            )
+            if aviso_de_datos:
+                final_text = f"{final_text.rstrip()}\n\n{aviso_de_datos}"
+        resultado = await _close_turn(
+            conversation_id,
+            spec,
+            app_settings,
+            usage,
+            turn_span,
+            latest_message,
+            final_text,
+            resolved=bool(all_tool_results) or hubo_comando_ok,
+            count_unresolved=not _turno_avanza_sin_tools(
+                latest_message, final_text, bool(all_tool_results) or hubo_comando_ok or hubo_confirmacion_pedida
+            ),
+            image_url=extras.image_url if confirmacion is None else None,
+        )
+        if confirmacion is not None and not resultado.escalated:
+            resultado.confirmacion = confirmacion
+        return resultado
 
-    # Se agotaron las iteraciones
+    # Se agotaron las iteraciones. Con el motor activo y una tarea en foco, el kernel responde con
+    # lo que falta en vez de escalar (adenda 2026-10-13 de ADR-0113); si no lo sabe, escala.
+    salida = await motor.salida_al_agotar() if motor is not None else None
+    if salida is not None:
+        texto_kernel, confirmacion = salida
+        if veredicto is not None and motivos_verificador:
+            # Las vueltas se fueron en reintentos del verificador: queda su rastro, como al escalar.
+            await registrar_veredicto(
+                conversation_id, veredicto, resultado="fallo", intentos=guardrail_retries + 1,
+                motivos=motivos_verificador,
+            )
+        extras = extract_safe_extras(all_tool_results)
+        if confirmacion is None:
+            texto_kernel = apply_safe_extras(texto_kernel, extras, por_enlace=True)
+        resultado = await _close_turn(
+            conversation_id, spec, app_settings, usage, turn_span, latest_message, texto_kernel,
+            resolved=bool(all_tool_results) or hubo_comando_ok,
+            count_unresolved=not hubo_confirmacion_pedida,
+            image_url=extras.image_url if confirmacion is None else None,
+        )
+        if confirmacion is not None and not resultado.escalated:
+            resultado.confirmacion = confirmacion
+        return resultado
     await escalate(conversation_id, reason="max_iterations", summary="Loop sin resolución")
     usage.escalated = True
     await _write_usage_ledger(conversation_id, spec, usage, turn_span)
     escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-    return TurnResult(text=escalation_text, escalated=True)
+    return TurnResult(text=escalation_text, escalated=True, simulado=consumir_simulado())
 
 
 # ------------------------------------------------------------------ helpers
-def _persona_guard(response_text: str, spec) -> GuardrailResult | None:  # type: ignore[no-untyped-def]
-    """Validaciones de persona del spec (ADR-0050): frases prohibidas y longitud.
-
-    Devuelve un `GuardrailResult` fallido (con instrucción correctiva) o None si
-    la respuesta pasa. Es barato y determinista, por eso corre antes de los
-    guardrails de packs.
-    """
+def _persona_frase_prohibida(response_text: str, spec) -> GuardrailResult | None:  # type: ignore[no-untyped-def]
+    """`forbiddenPhrases` del spec (ADR-0050): guardrail duro, comparte el reintento y
+    `guardrail_fail_action` con el verificador. None si la respuesta pasa."""
     lowered = response_text.lower()
     for idx, phrase in enumerate(spec.persona.forbiddenPhrases):
         if phrase and phrase.lower() in lowered:
@@ -557,38 +1025,231 @@ def _persona_guard(response_text: str, spec) -> GuardrailResult | None:  # type:
                     f"(la #{idx + 1} de la lista). Reformulala sin frases prohibidas."
                 ),
             )
-    if spec.persona.maxLength and len(response_text) > spec.persona.maxLength:
-        return GuardrailResult(
-            passed=False,
-            reason="persona_max_length",
-            retry_instruction=(
-                f"Tu respuesta supera el largo máximo permitido ({spec.persona.maxLength} "
-                "caracteres). Resumila sin perder información importante."
-            ),
-        )
     return None
 
 
-async def _execute_tool_safely(
-    conversation: Conversation, customer: Customer, tool_call: LLMToolCall, spec=None  # type: ignore[no-untyped-def]
-) -> dict[str, Any]:
-    """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue."""
-    from core.mcp.declarative import tools_for_spec
-    from core.mcp.types import ScopedHttp
+def _persona_excede_largo(texto: str, spec) -> bool:  # type: ignore[no-untyped-def]
+    """`persona.maxLength` (adenda de ADR-0050) es un tope blando: pedir que se acorte,
+    nunca escalar. `0` lo apaga. Se mide el texto que escribió el modelo, sin los
+    `_safe_append` del servidor."""
+    return bool(spec.persona.maxLength) and len(texto) > spec.persona.maxLength
+
+
+async def _instruccion_largo(spec) -> str:  # type: ignore[no-untyped-def]
+    """Instrucción del reintento de largo: sección `persona_max_length` del playbook
+    `respuestas` (invariante 3). `{max_length}` es un entero del spec."""
+    texto = await load_response(spec, "persona_max_length") or INSTRUCCION_LARGO
+    return texto.replace("{max_length}", str(spec.persona.maxLength))
+
+
+async def _registrar_largo_excedido(
+    conversation_id: uuid.UUID, spec, largo: int, entregado: str  # type: ignore[no-untyped-def]
+) -> None:
+    """Rastro de una respuesta entregada por encima de `persona.maxLength`, sin texto.
+    `entregado`: `reintento` (el texto acortado seguía largo), `guardado` (el reintento
+    falló una verificación y se entregó el borrador original) o `sin_reintento` (no
+    quedaba vuelta ni presupuesto). Dato por turno: HU-AOS-10 lo mueve a
+    `turn_outcomes` cambiando solo esta función, como `registrar_veredicto`."""
+    log.warning(
+        "persona_max_length_excedido",
+        conversation_id=str(conversation_id),
+        largo=largo,
+        tope=spec.persona.maxLength,
+        entregado=entregado,
+    )
+    await record_audit(
+        actor="core:persona",
+        action="persona_max_length_excedido",
+        conversation_id=conversation_id,
+        input_data={"largo": largo, "tope": spec.persona.maxLength, "entregado": entregado},
+    )
+
+
+def _http_for_tool(tool_name: str, declarative: dict[str, Any]) -> ScopedHttp:
+    """`context.http` de la tool que se ejecuta (ADR-0052): única salida a red.
+
+    Se acota a la allowlist de LA tool (no la unión de todas), para que una tool no
+    pueda llamar a dominios autorizados para otra: la de un pack usa la
+    `network_allowlist` de su módulo; la declarativa del tenant, la suya. Una tool
+    registrada nunca toma la allowlist de una declarativa homónima (el host tiene
+    prioridad, igual que al ejecutar).
+    """
     from core.plugin_manager import plugin_manager
 
-    # ScopedHttp (ADR-0052): única salida a red. Se acota a la allowlist de LA tool
-    # que se ejecuta (no la unión de todas), para que una tool no pueda llamar a
-    # dominios autorizados para otra. Una tool Python que no use `context.http` no
-    # queda afectada.
+    registered = mcp_host.get_tool(tool_name)
+    if registered is not None:
+        return plugin_manager.scoped_http(registered.plugin_id)
+    allowed = getattr(declarative.get(tool_name), "_allowed_domains", None) or []
+    return ScopedHttp(list(allowed))
+
+
+def _ejecutor_del_motor(conversation: Conversation, customer: Customer, spec):  # type: ignore[no-untyped-def]
+    """Precondiciones del motor (HU-AOS-05): corren como cualquier acción del turno (permisos,
+    salud del pack, auditoría), sin volver a pasar por el motor."""
+    async def ejecutar(nombre: str, args: dict[str, Any], clave: str) -> dict[str, Any]:
+        # Una precondición es una lectura: si la acción pide confirmación, no se ejecuta (y no deja
+        # una confirmación v2 pendiente con los datos de la tarea).
+        if _requiere_confirmacion(spec, nombre):
+            return {"error": "precondicion_requiere_confirmacion"}
+        llamada = LLMToolCall(id=clave, name=nombre, arguments=args)  # clave estable: idempotente
+        return await _execute_tool_safely(conversation, customer, llamada, spec)
+
+    return ejecutar
+
+
+def _ejecutor_de_consulta(conversation: Conversation, customer: Customer):  # type: ignore[no-untyped-def]
+    """Consultas entre agentes (HU-AOS-19, adenda de ADR-0116 §5): la acción corre con el spec, el
+    binding y la identidad del agente que responde, sin escribir memoria, con auditoría y una
+    clave idempotente. Una acción que pide confirmación en su binding no se ejecuta."""
+    from core.agents.spec_de_release import spec_v2_desde_release
+
+    async def ejecutar(destino: AgenteCongelado, nombre: str, args: dict[str, Any], clave: str) -> dict[str, Any]:
+        actual = release_vigente.vigente()
+        if actual is None:
+            return {"error": "consulta_sin_release"}
+        spec = spec_v2_desde_release(
+            destino,
+            release_vigente.kernel_del_turno(),
+            tenant_id=actual.tenant_id,
+            skills=actual.skills,
+            tenant_plugins=actual.tenant_plugins,
+        )
+        if _requiere_confirmacion(spec, nombre):
+            return {"error": "consulta_requiere_confirmacion"}
+        llamada = LLMToolCall(id=clave, name=nombre, arguments=args)
+        return await _execute_tool_safely(conversation, customer, llamada, spec, identidad=destino, solo_lectura=True)
+
+    return ejecutar
+
+
+# Estado y acción de auditoría de una acción que espera el sí del cliente: no ocurrió todavía.
+STATUS_CONFIRMACION_REQUERIDA = "confirmation_required"
+
+# "Afirmación de 'agendada' sin…" (guardrails de cierre de los packs): la etiqueta sale del código
+# o de la config del negocio, nunca del borrador.
+_ETIQUETA_DEL_GUARDRAIL = re.compile(r"(?:Afirmaci[oó]n|Negaci[oó]n) de '(\w{1,60})'")
+
+
+def _etiqueta_del_bloqueo(reason: str, veredicto: Veredicto | None) -> str:
+    """Qué afirmación bloqueó el turno, solo como etiqueta (para el rastro de la escalación)."""
+    if veredicto is not None and veredicto.afirmacion:
+        return veredicto.afirmacion
+    detalle = reason.split(":", 1)[1].strip() if ":" in reason else ""
+    encontrada = _ETIQUETA_DEL_GUARDRAIL.match(detalle)
+    return encontrada.group(1) if encontrada else ""
+
+
+def _modos_del_verificador(motor: Any) -> Modos:
+    """Modos de horarios y preguntas (banderas `settings.agent_os` que el motor ya leyó) y el tope
+    de preguntas del Coordinador congelado (HU-AOS-20 parte 3)."""
+    from core.shared import release_vigente
+
+    colaboracion = getattr(motor, "colaboracion", None)
+    return Modos(
+        horarios=getattr(colaboracion, "verificar_horarios", "shadow"),
+        preguntas=getattr(colaboracion, "verificar_preguntas", "shadow"),
+        max_preguntas=release_vigente.max_questions(),
+    )
+
+
+async def _estado_del_verificador(motor: ContextoMotor | None, referencias: list[str]) -> EstadoTareas | None:
+    """El estado de las tareas para el verificador (HU-AOS-06): solo con motor; None
+    (verificación sin estado, como siempre) si no hay motor o la lectura falla."""
+    tareas = await motor.instantaneas() if motor is not None else None
+    if tareas is None:
+        return None
+    return EstadoTareas(
+        tareas=tuple(tareas),
+        referencias_vigentes=tuple(referencias),
+        datos_fijados=tuple(sorted(motor.datos_fijados)) if motor is not None else (),
+    )
+
+
+async def _ejecutar_comando(conversation: Conversation, motor: ContextoMotor, tool_call: LLMToolCall) -> dict[str, Any]:
+    """Comando del hilo (HU-AOS-06): lo aplica el motor. La auditoría lleva solo las claves y el
+    resultado en códigos (`task_events` es el registro); su actor no es `tool:*`, así que no
+    vuelve como evidencia en turnos siguientes."""
+    resultado = await motor.ejecutar_comando(tool_call.name, tool_call.arguments)
+    await record_audit(
+        actor="core:comando",
+        action=tool_call.name,
+        conversation_id=conversation.id,
+        # Solo las claves del schema: un nombre de clave extra lo eligió el modelo (podría ser un
+        # dato del cliente). Las demás solo se cuentan.
+        input_data=comandos_del_hilo.claves_auditables(tool_call.name, tool_call.arguments),
+        output_data={
+            "ok": resultado.get("ok") is True,
+            "errors": len(resultado.get("errors") or []),
+            # Solo las claves de los errores (smoke de test 2026-10-20: un `actualizar_tarea` con
+            # `errors: 1` no se pudo diagnosticar desde la base).
+            "codigos": comandos_del_hilo.codigos_de_errores(resultado.get("errors") or []),
+        },
+    )
+    return resultado
+
+
+def resultado_auditable(herramienta: Any, nombre: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Lo que `audit_log` guarda del resultado de una tool: el resultado completo, o su
+    `resumen_de_auditoria` si la tool lo define (ADR-0145 §4: solo ids y puntajes de los fragmentos
+    de documentos, que se pueden borrar). Fail-closed: si el resumen falla, no se guarda nada."""
+    resumen = getattr(herramienta, "resumen_de_auditoria", None)
+    if resumen is None:
+        return result
+    try:
+        return resumen(result)
+    except Exception:
+        log.warning("tool_audit_summary_failed", tool=nombre)
+        return {"resumen_fallido": True}
+
+
+async def _execute_tool_safely(
+    conversation: Conversation,
+    customer: Customer,
+    tool_call: LLMToolCall,
+    spec=None,  # type: ignore[no-untyped-def]
+    motor: ContextoMotor | None = None,
+    identidad: AgenteCongelado | None = None,
+    solo_lectura: bool = False,
+    *,
+    ya_confirmada: bool = False,
+) -> dict[str, Any]:
+    """Ejecuta una tool aislando el error: un plugin roto se desactiva, el turno sigue.
+
+    `identidad`/`solo_lectura` (HU-AOS-19): una consulta entre agentes corre con la identidad del
+    agente que la responde y sin escribir memoria. `ya_confirmada` (SPEC-40, ADR-0172 §4): el
+    cliente ya confirmó esta acción con el botón firmado `optc:` de una opción directa, así que
+    se salta el `requiresConfirmation` del binding (no hay LLM que pida la confirmación)."""
+    # Una consulta entre agentes se audita como `query:` y no como `tool:`: no es evidencia de
+    # que el agente del turno llamó la tool (`_historical_tool_results`).
+    actor_de_auditoria = "query" if solo_lectura else "tool"
+    if motor is not None and motor.es_comando(tool_call.name):
+        return await _ejecutar_comando(conversation, motor, tool_call)
+    from core.mcp.declarative import tools_for_spec
+    from core.plugin_manager import plugin_manager
+
     declarative = {t.name: t for t in tools_for_spec(spec)} if spec is not None else {}
-    allowed = list(getattr(declarative.get(tool_call.name), "_allowed_domains", []) or [])
+    agente = identidad or release_vigente.agente_del_turno()
+    conocimiento = agente.content.get("knowledge") if agente is not None else None
+    from core.shared.test_mode import is_panel_test
+
+    sandbox = None
+    if is_panel_test(conversation):
+        from core.mcp.sandbox import SandboxPrueba
+
+        sandbox = SandboxPrueba.de_contexto(conversation.id)
     context = new_tool_context(
         conversation_id=conversation.id,
         customer_id=customer.id,
         idempotency_key=f"{conversation.id}:{tool_call.id}",
         channel=conversation.channel,
-        http=ScopedHttp(allowed),
+        http=_http_for_tool(tool_call.name, declarative),
+        # `memory.writeNamespaces` del agente en foco (ADR-0114 §3, HU-AOS-15); None en legacy.
+        write_namespaces=frozenset() if solo_lectura else release_vigente.write_namespaces_del_turno(),
+        # Identidad del agente en foco y su `knowledge` congelado (ADR-0145 §5); None en legacy.
+        agent_id=agente.agent_id if agente is not None else None,
+        agent_version_id=agente.version_id if agente is not None else None,
+        knowledge=conocimiento if isinstance(conocimiento, dict) else None,
+        sandbox=sandbox,
     )
 
     # Enablement + consentimiento de la tool por tenant (ADR-0019). Aunque las
@@ -596,80 +1257,97 @@ async def _execute_tool_safely(
     # inyección) no debe ejecutar tools de un pack que el tenant no tiene, ni
     # una tool deshabilitada por binding. La denegación es un error de negocio
     # limpio, SIN auto_disable.
-    if spec is not None:
-        denial = await _tool_denial(spec, tool_call.name, conversation.id)
-        if denial is not None:
-            result = {"error": denial}
-            await record_audit(
-                actor=f"tool:{tool_call.name}",
-                action="denied",
-                conversation_id=conversation.id,
-                input_data=tool_call.arguments,
-                output_data=result,
-            )
-            return result
-
-    # v2.0.0 (ADR-0050): human-in-the-loop. Un binding con `requiresConfirmation`
-    # no ejecuta de una: la primera vez deja el pedido pendiente y se lo devuelve
-    # al modelo para que pida confirmación al cliente; la siguiente llamada con
-    # los MISMOS argumentos (el cliente ya dijo "sí") sí ejecuta.
-    # El objeto `conversation` se actualiza en memoria para que la repetición
-    # dentro del MISMO turno ya cuente como confirmada (no re-lee de BD).
-    if spec is not None and _binding_requires_confirmation(spec, tool_call.name):
-        pending = dict(conversation.state.get("pending_confirmation") or {})
-        already = (
-            pending.get("tool") == tool_call.name
-            and pending.get("arguments") == tool_call.arguments
+    if spec is None and release_vigente.exige_concesion():
+        denial: str | None = f"La herramienta '{tool_call.name}' no está disponible para este agente."
+    elif spec is not None:
+        # La consulta entre agentes no usa la concesión por procedimiento: exige binding del destino.
+        denial = await _tool_denial(spec, tool_call.name, conversation.id, por_procedimiento=identidad is None)
+    else:
+        denial = None
+    if denial is not None:
+        result = {"error": denial}
+        await record_audit(
+            actor=f"{actor_de_auditoria}:{tool_call.name}",
+            action="denied",
+            conversation_id=conversation.id,
+            input_data=tool_call.arguments,
+            output_data=result,
         )
-        if not already:
-            state = dict(conversation.state)
-            state["pending_confirmation"] = {
-                "tool": tool_call.name,
-                "arguments": tool_call.arguments,
-            }
-            conversation.state = state
-            async with get_session() as session:
-                row = await session.get(Conversation, conversation.id)
-                if row is not None:
-                    row.state = state
-            result = {
-                "status": "confirmation_required",
-                "message": (
-                    f"Antes de ejecutar '{tool_call.name}' pedile confirmación explícita "
-                    "al cliente y, si acepta, volvé a llamar la herramienta con los "
-                    "mismos argumentos."
-                ),
-            }
-            await record_audit(
-                actor=f"tool:{tool_call.name}",
-                action="confirmation_required",
-                conversation_id=conversation.id,
-                input_data=tool_call.arguments,
-                output_data=result,
-            )
-            return result
-        # Ya confirmada: se ejecuta y se limpia el pendiente (no queda vivo para
-        # siempre -- una llamada futura pide confirmación de nuevo).
-        state = dict(conversation.state)
-        state.pop("pending_confirmation", None)
-        conversation.state = state
-        async with get_session() as session:
-            row = await session.get(Conversation, conversation.id)
-            if row is not None:
-                row.state = state
+        return result
+
+    # Motor de procedimientos (HU-AOS-05): con tarea en foco, una acción fuera de la etapa se
+    # deniega y lo que compromete espera la confirmación del cliente, atada a estos argumentos.
+    previo = await motor.antes_de_accion(tool_call.name, tool_call.arguments) if motor is not None else None
+    if previo is not None and (decision := previo.decision) is not None:
+        await record_audit(
+            actor=f"{actor_de_auditoria}:{tool_call.name}",
+            action=decision.auditoria,
+            conversation_id=conversation.id,
+            # Sin los valores (pueden traer datos del cliente): solo las claves y el hash.
+            input_data={"keys": sorted(tool_call.arguments)[:40], "args_hash": decision.args_hash},
+            output_data=decision.resultado,
+        )
+        return decision.resultado
+    # HU-AOS-07: con la acción gobernada, se ejecutan los argumentos ligados a los datos de la
+    # tarea (los mismos que firma la confirmación); el historial del modelo no se toca.
+    argumentos = previo.args if previo is not None and previo.args is not None else tool_call.arguments
+
+    # v2.0.0 (ADR-0050, adenda HU-ARCH-36): human-in-the-loop. Una acción `sensible` o con
+    # `requiresConfirmation` en su binding no ejecuta de una: la primera llamada deja el pedido
+    # pendiente y se lo devuelve al modelo para que pregunte al cliente; la repetición con los
+    # MISMOS argumentos solo ejecuta si el cliente contestó en un mensaje posterior.
+    # Con la acción gobernada por la etapa en foco (leída bajo lock), la confirmación es la del
+    # motor, que también aplica el `requiresConfirmation` del binding (ADR-0113 §4).
+    gobernada = previo is not None and previo.gobernada
+    if (
+        spec is not None
+        and not gobernada
+        and not ya_confirmada
+        and _requiere_confirmacion(spec, tool_call.name)
+        and not await confirmacion_pendiente.resolver_llamada(
+            conversation.tenant_id, conversation.id, tool_call.name, tool_call.arguments
+        )
+    ):
+        result = {
+            "status": STATUS_CONFIRMACION_REQUERIDA,
+            "message": confirmacion_pendiente.mensaje_al_modelo(tool_call.name),
+        }
+        await record_audit(
+            actor=f"{actor_de_auditoria}:{tool_call.name}",
+            action=STATUS_CONFIRMACION_REQUERIDA,
+            conversation_id=conversation.id,
+            input_data=tool_call.arguments,
+            output_data=result,
+        )
+        return result
 
     try:
         # Prioridad al host: una tool declarativa NO puede shadowear una tool
         # registrada (evita que un tenant redefina una tool nativa/pack).
         if tool_call.name in declarative and mcp_host.get_tool(tool_call.name) is None:
             # Tool declarativa del tenant (ADR-0052): se ejecuta con su handler
-            # (ScopedHttp acotado), no vía mcp_host (que no la conoce).
-            result = await declarative[tool_call.name].handler(tool_call.arguments, context)
+            # (ScopedHttp acotado), no vía mcp_host (que no la conoce). `ejecutar_tool`
+            # aplica el sandbox del canal `test` igual que a las tools registradas.
+            result = await ejecutar_tool(declarative[tool_call.name], argumentos, context)
+            # Una tool declarativa devuelve lo que responde una API externa: es dato, no
+            # instrucción (invariante 7). Nunca puede pedir relevo humano; solo las tools
+            # registradas (pack/core) escalan.
+            if isinstance(result, dict):
+                result.pop("escalate", None)
         else:
-            result = await mcp_host.execute_tool(tool_call.name, tool_call.arguments, context)
+            result = await mcp_host.execute_tool(tool_call.name, argumentos, context)
+    except BusinessError as exc:
+        # Rechazo de negocio (HU-ARCH-18): resultado controlado, el pack SIGUE
+        # habilitado. Cubre tools declarativas que no pasan por el host.
+        log.info("tool_business_error", tool=tool_call.name, error=exc.message)
+        result = exc.as_result()
     except PluginError as exc:
         # Las tools del CORE ("core") no se auto-desactivan: el core no se apaga a sí mismo.
-        if exc.plugin_id != "core":
+        if exc.plugin_id != "core" and is_test_channel(conversation.channel):
+            # Una prueba (panel o evals) no apaga el pack del negocio: el fallo se registra y la
+            # conversación real sigue con el pack habilitado. El turno responde igual con el error.
+            log.warning("plugin_error_en_prueba", plugin=exc.plugin_id, tool=tool_call.name, error=str(exc))
+        elif exc.plugin_id != "core":
             # Acotado al tenant de ESTA conversación (ADR-0024): no apaga el
             # plugin para los demás tenants que nunca tuvieron el problema.
             await plugin_manager.auto_disable_for_tenant(get_current_tenant_id(), exc.plugin_id, str(exc))
@@ -677,27 +1355,107 @@ async def _execute_tool_safely(
             "error": "La herramienta no está disponible en este momento. "
             "Discúlpate y ofrece escalar a un asesor humano si es necesario."
         }
+    # HU-AOS-47: procedencia del registro que creó la acción (solo tools registradas que la
+    # declaran, solo con release v3; best-effort). Antes de `tras_accion`, que transforma `result`.
+    herramienta = mcp_host.get_tool(tool_call.name)
+    await procedencia.registrar(herramienta, result, conversation.id)
+    auditado = resultado_auditable(herramienta, tool_call.name, result)
     await record_audit(
-        actor=f"tool:{tool_call.name}",
+        actor=f"{actor_de_auditoria}:{tool_call.name}",
         action="execute",
         conversation_id=conversation.id,
-        input_data=tool_call.arguments,
+        # Lo que mandó el modelo: los datos ligados que completó el motor (PII de la tarea) no se
+        # copian a la auditoría. Un toque de opción directa (`ya_confirmada`) trae los valores del
+        # contexto del envío (datos del cliente): solo las claves y el hash, como la rama del motor.
+        input_data=_entrada_auditable(tool_call, ya_confirmada),
         # Se incluye `_tool_name` para que `_historical_tool_results` pueda
         # reconstruir qué tools se llamaron en turnos anteriores (lo usa el
         # guardrail declarativo `required_tool`, ADR-0051).
-        output_data={**result, TOOL_NAME_KEY: tool_call.name},
+        # Con `resumen_de_auditoria`, solo ids y puntajes (ADR-0145 §4: borrar un documento
+        # borra su texto; la auditoría no lo conserva).
+        output_data={**auditado, TOOL_NAME_KEY: tool_call.name},
     )
+    if motor is not None:
+        result = await motor.tras_accion(tool_call.name, argumentos, result, previo)
     return result
 
 
-def _connections_ok(tool, connected_types: set[str]) -> bool:  # type: ignore[no-untyped-def]
-    """True si el tenant tiene conectados los tipos que la tool requiere (ADR-0072)."""
+async def _connections_ok(tool, connected_types: set[str]) -> bool:  # type: ignore[no-untyped-def]
+    """True si la tool puede ofrecerse según las conexiones del tenant (ADR-0072).
+
+    Si la tool declara `connection_predicate` (ADR-0084), es ella quien decide POR
+    REQUEST (requisito dependiente de la config del pack, p. ej. pack-calendar en
+    modo `interno` vs `google`). Un predicado que falla deniega (fail-closed): no se
+    ofrece una tool cuyo requisito no pudimos evaluar.
+    """
+    predicate = getattr(tool, "connection_predicate", None)
+    if predicate is not None:
+        try:
+            return bool(await predicate(connected_types))
+        except Exception:
+            return False
     required = getattr(tool, "requires_connection_types", None) or []
     return all(t in connected_types for t in required)
 
 
+def _entrada_auditable(tool_call: LLMToolCall, ya_confirmada: bool) -> dict[str, Any]:
+    if not ya_confirmada:
+        return tool_call.arguments
+    from core.kernel.opciones.payload import hash_de_argumentos
+
+    return {"keys": sorted(tool_call.arguments)[:40], "args_hash": hash_de_argumentos(tool_call.name, tool_call.arguments)}
+
+
+def _por_procedimiento() -> frozenset[str]:
+    """Acciones de los procedimientos que la versión del agente en foco declara (ADR-0118 §3): los
+    publicados y los abiertos del flujo. Vacío con `release/1` (regla transitoria) o sin foco."""
+    actual = release_vigente.vigente()
+    agente = release_vigente.agente_del_turno()
+    if actual is None or agente is None or actual.procedimientos_por_agente is None:
+        return frozenset()
+    declarados = {
+        str(p.get("id")) for p in agente.content.get("procedures") or [] if isinstance(p, dict)
+    }
+    propios = [*(release_vigente.procedimientos_del_agente() or {}).values()]
+    propios += [actual.procedimientos[pid] for pid in sorted(declarados) if pid in actual.procedimientos]
+    return acciones_de_procedimientos(propios)
+
+
+def _concedida(  # type: ignore[no-untyped-def]
+    spec, tool_name: str, *, es_declarativa: bool, de_procedimientos: frozenset[str] = frozenset()
+) -> bool:
+    """¿La versión del agente en foco concede la acción? Binding, declarativa o procedimiento declarado
+    (ADR-0118 §3). Sin agente en foco no hay versión publicada que conceda: el spec v2 es mutable."""
+    if release_vigente.agente_del_turno() is None:
+        return False
+    return es_declarativa or tool_name in de_procedimientos or any(b.tool == tool_name for b in spec.tools)
+
+
+def _solo_las_concedidas(spec, tools: list[Any]) -> list[Any]:  # type: ignore[no-untyped-def]
+    """Con v3 no se ofrece lo que se negaría al ejecutar (HU-ARCH-34). Va antes del motor: los bloques
+    fijos compilados (HU-AOS-35) no cambian y los comandos del hilo se agregan después."""
+    if not release_vigente.exige_concesion():
+        return tools
+    from core.mcp.declarative import tools_for_spec
+
+    deshabilitadas = {b.tool for b in spec.tools if not b.enabled}
+    declarativas = {t.name for t in tools_for_spec(spec)}
+    de_procedimientos = _por_procedimiento()
+    return [
+        t
+        for t in tools
+        if t.name not in deshabilitadas
+        and _concedida(
+            spec,
+            t.name,
+            es_declarativa=t.name in declarativas and mcp_host.get_tool(t.name) is None,
+            de_procedimientos=de_procedimientos,
+        )
+    ]
+
+
 async def _tool_denial(
-    spec, tool_name: str, conversation_id: uuid.UUID | None = None
+    spec, tool_name: str, conversation_id: uuid.UUID | None = None, *, por_procedimiento: bool = True
 ) -> str | None:
     """Razón de denegación de una tool según el AgentSpec (ADR-0019/ADR-0050), o None.
 
@@ -707,8 +1465,8 @@ async def _tool_denial(
     - La tool de un plugin con salud rota PARA ESTE TENANT (ADR-0024) también
       se deniega acá -- mismo camino de defensa en profundidad que el punto
       anterior, para un tool_call fuera de schema.
-    - Si hay ToolBinding con enabled=false se deniega. Fail-open transitorio:
-      sin binding, la tool corre (las migraciones de bindings van después).
+    - Si hay ToolBinding con enabled=false se deniega. En v3 lo que la versión no concede no corre
+      (HU-ARCH-34, enmienda de ADR-0019); en legacy, sin binding la tool corre y queda el evento.
     - v2.0.0 (ADR-0050): un binding con `maxCallsPerConversation` limita cuántas
       veces puede llamarse esa tool en la MISMA conversación (corta abuso/costo);
       `scopes` es autorización fina que un guardrail/pack puede exigir.
@@ -728,7 +1486,19 @@ async def _tool_denial(
         tenant_id = get_current_tenant_id()
         if tenant_id is not None and await plugin_manager.is_disabled_for_tenant(tenant_id, tool.plugin_id):
             return f"La herramienta '{tool_name}' no está disponible en este momento."
-        if tool.requires_connection_types:
+        predicate = getattr(tool, "connection_predicate", None)
+        if predicate is not None:
+            # Requisito config-dependente (ADR-0084): se reevalúa a mitad de turno.
+            from core.gateway.connections import active_connection_type_ids
+
+            connected = await active_connection_type_ids(tenant_id)
+            try:
+                ok = bool(await predicate(connected))
+            except Exception:
+                ok = False
+            if not ok:
+                return f"La herramienta '{tool_name}' no está disponible en este momento."
+        elif tool.requires_connection_types:
             # Revocación a mitad de turno (ADR-0072): el pre-prompt ya la filtró,
             # pero un tool_call que llegó con la conexión ya caída se deniega acá.
             from core.gateway.connections import active_connection_type_ids
@@ -740,6 +1510,14 @@ async def _tool_denial(
                     f"La herramienta '{tool_name}' no está disponible: falta conectar "
                     f"{', '.join(missing)}."
                 )
+    es_declarativa = tool is None and tool_name in declarative_names
+    if release_vigente.exige_concesion():
+        de_procedimientos = _por_procedimiento() if por_procedimiento else frozenset()
+        if not _concedida(spec, tool_name, es_declarativa=es_declarativa, de_procedimientos=de_procedimientos):
+            log.warning("tool_sin_binding", tenant_id=str(get_current_tenant_id()), tool=tool_name)
+            return f"La herramienta '{tool_name}' no está disponible para este agente."
+    elif not es_declarativa and not any(b.tool == tool_name for b in spec.tools):
+        log.info("tool_sin_binding_legacy", tenant_id=str(get_current_tenant_id()), tool=tool_name)
     for binding in spec.tools:
         if binding.tool != tool_name:
             continue
@@ -772,6 +1550,15 @@ def _binding_requires_confirmation(spec, tool_name: str) -> bool:  # type: ignor
     return False
 
 
+def _requiere_confirmacion(spec, tool_name: str) -> bool:  # type: ignore[no-untyped-def]
+    """Lo pide el binding o la marca `sensible` de la tool (adenda HU-ARCH-36 de ADR-0050): un binding
+    en `false` no quita ese piso. Las declarativas no están en el host, así que su `sensible` no aplica."""
+    if _binding_requires_confirmation(spec, tool_name):
+        return True
+    herramienta = mcp_host.get_tool(tool_name)
+    return herramienta is not None and herramienta.sensible
+
+
 async def _tool_calls_in_conversation(conversation_id: uuid.UUID, tool_name: str) -> int:
     """Cuántas veces se EJECUTÓ `tool_name` en esta conversación (audit_log, ADR-0050).
 
@@ -799,7 +1586,7 @@ async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str,
     `_load_history` no sirve para esto: colapsa la historia a texto plano
     user/assistant y descarta el JSON de cada tool_result. `audit_log` es la
     única fuente que los conserva (insert-only, ADR de auditoría) -- se usa
-    solo para alimentar guardrails como `_amount_guardrail`, nunca para
+    solo para alimentar el verificador y los guardrails, nunca para
     construir el prompt ni la respuesta final.
     """
     async with get_session() as session:
@@ -817,7 +1604,13 @@ async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str,
             .order_by(AuditLog.created_at.desc())
             .limit(40)
         )
-        return [row for row in result.scalars().all() if row is not None]
+        # Turnos ANTERIORES (HU-COM-02): no respaldan una afirmación de cierre
+        # del turno actual. Sí alimentan la verificación de montos (montos ya vistos).
+        return [
+            {**row, "_current_turn": False}
+            for row in result.scalars().all()
+            if row is not None
+        ]
 
 
 async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
@@ -850,14 +1643,105 @@ async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
     return history
 
 
+_CORTESIA = re.compile(
+    r"^[\s¿¡]*(?:hola+|holis|buen(?:os|as)(?:\s+d[ií]as|\s+tardes|\s+noches)?|hey|"
+    r"qu[eé]\s+tal|gracias|muchas\s+gracias|mil\s+gracias|ok(?:ay)?|listo|perfecto|"
+    r"de\s+acuerdo|entendido|dale)[\s!.,;…?¡]*$",
+    re.IGNORECASE,
+)
+
+
+def _es_cortesia(texto: str) -> bool:
+    """True para saludos, agradecimientos y confirmaciones sueltas: no son una
+    petición que el asistente haya dejado sin atender."""
+    return bool(_CORTESIA.match((texto or "").strip()))
+
+
+def _pregunta_de_avance(texto: str) -> bool:
+    """True si el asistente pregunta algo (pide un dato o confirma): el turno
+    avanza aunque no haya llamado tools."""
+    return "?" in texto or "¿" in texto
+
+
+async def _accion_por_confirmar(conversation: Conversation, ofrecidas: list[Any]) -> str:
+    """El pendiente que el cliente acaba de contestar, si su acción se ofrece en este turno."""
+    pendiente = conversation.state.get(confirmacion_pendiente.CLAVE)
+    if not isinstance(pendiente, dict):
+        return ""
+    herramienta = next((t for t in ofrecidas if t.name == pendiente.get("tool")), None)
+    if herramienta is None:
+        return ""
+    propiedades = (herramienta.parameters or {}).get("properties") or {}
+    return await confirmacion_pendiente.para_prompt(conversation.tenant_id, conversation.id, pendiente, propiedades)
+
+
+def _turno_avanza_sin_tools(latest_message: str, final_text: str, hubo_tools: bool) -> bool:
+    """¿El turno representa avance para el autoescalado por turnos sin resolver
+    (ADR-0051, enmendada por ADR-0104)?
+
+    Cuenta como avance si hubo tools, si el asistente pregunta algo para
+    avanzar, o si el mensaje del cliente es una cortesía suelta. Así tres
+    "Hola" seguidos (o un ciclo de preguntas de datos) no escalan la
+    conversación ni pausan el bot."""
+    return hubo_tools or _pregunta_de_avance(final_text) or _es_cortesia(latest_message)
+
+
+async def _close_turn(
+    conversation_id: uuid.UUID,
+    spec,  # type: ignore[no-untyped-def]
+    app_settings: AppSettings | None,
+    usage: _TurnUsage,
+    turn_span,  # type: ignore[no-untyped-def]
+    latest_message: str,
+    final_text: str,
+    *,
+    resolved: bool,
+    image_url: str | None,
+    count_unresolved: bool = True,
+) -> TurnResult:
+    """Cierra un turno que respondió: memoria, ledger y autoescalado por turnos
+    sin resolver (ADR-0051). Lo comparten la respuesta normal y la neutral del
+    guardrail (ADR-0092)."""
+    unresolved = await _finish_turn(
+        conversation_id,
+        final_text,
+        latest_message,
+        resolved=resolved,
+        count_unresolved=count_unresolved,
+        short_term_turns=spec.memory.shortTermTurns,
+    )
+    await _write_usage_ledger(conversation_id, spec, usage, turn_span)
+    # Autoescalado por turnos sin resolver (ADR-0051, operativo en AppSettings).
+    threshold = leer_entero(
+        (app_settings.escalation_config or {}) if app_settings else None, "auto_escalate_after_turns", 0
+    )
+    if threshold > 0 and unresolved >= threshold:
+        await escalate(
+            conversation_id, reason="turns_unresolved", summary=f"{unresolved} turnos sin resolver"
+        )
+        usage.escalated = True
+        escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+        return TurnResult(
+            text=final_text + "\n\n" + escalation_text,
+            escalated=True,
+            image_url=image_url,
+            simulado=consumir_simulado(),
+        )
+    return TurnResult(text=final_text, image_url=image_url, simulado=consumir_simulado())
+
+
 async def _finish_turn(
     conversation_id: uuid.UUID,
     response_text: str,
     user_message: str,
     resolved: bool,
+    count_unresolved: bool = True,
     short_term_turns: int | None = None,
 ) -> int:
-    """Cierra el turno y devuelve `turnos_sin_resolver` (para autoescalado, ADR-0051)."""
+    """Cierra el turno y devuelve `turnos_sin_resolver` (para autoescalado, ADR-0051).
+
+    Con `count_unresolved=False` (ADR-0104) el contador queda como estaba: el
+    turno ni suma ni reinicia (cortesías y preguntas de avance)."""
     await working_memory.append_turn(
         conversation_id, "user", user_message, max_turns=short_term_turns
     )
@@ -867,10 +1751,17 @@ async def _finish_turn(
 
     unresolved = 0
     async with get_session() as session:
-        conversation = await session.get(Conversation, conversation_id)
+        # Con candado: `state` se reescribe entero y puede traer un pendiente de confirmación.
+        conversation = await session.get(Conversation, conversation_id, with_for_update=True)
         if conversation is not None:
             state = dict(conversation.state)
-            unresolved = 0 if resolved else int(state.get("turnos_sin_resolver", 0)) + 1
+            anterior = int(state.get("turnos_sin_resolver", 0))
+            if resolved:
+                unresolved = 0
+            elif count_unresolved:
+                unresolved = anterior + 1
+            else:
+                unresolved = anterior
             state["turnos_sin_resolver"] = unresolved
             conversation.state = state
 
@@ -896,7 +1787,7 @@ def _response_cost(provider, response) -> float:  # type: ignore[no-untyped-def]
 async def _mark_budget_exhausted(conversation_id: uuid.UUID) -> None:
     """Marca la conversación para que los próximos inbound no gasten LLM (ADR-0015)."""
     async with get_session() as session:
-        conversation = await session.get(Conversation, conversation_id)
+        conversation = await session.get(Conversation, conversation_id, with_for_update=True)
         if conversation is not None:
             state = dict(conversation.state)
             state["budget_exhausted"] = True
@@ -912,15 +1803,63 @@ def _resolved_model(app_settings: AppSettings | None, spec, env_model: str) -> s
     return env_model
 
 
-def _resolved_provider(app_settings: AppSettings | None, model: str):  # type: ignore[no-untyped-def]
-    """BYOK: la config de BD (panel) tiene prioridad sobre el .env."""
+def _resolved_provider(  # type: ignore[no-untyped-def]
+    app_settings: AppSettings | None, model: str, thinking: bool | None = None
+):
+    """BYOK: la config de BD (panel) tiene prioridad sobre el .env.
+
+    `thinking`: en DeepSeek V4, `True` para turnos de razonamiento; `False` para
+    el turno normal (el ID explícito lo encendería solo). `None` no lo envía.
+    """
     provider_key = None
     api_key = None
     if app_settings and app_settings.llm_provider:
         provider_key = app_settings.llm_provider
-        if app_settings.llm_api_key_encrypted:
-            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted)
-    return resolve_provider(provider_key=provider_key, api_key=api_key, model=model)
+        if _usa_llave_propia(app_settings):
+            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted or "")
+    return resolve_provider(provider_key=provider_key, api_key=api_key, model=model, thinking=thinking)
+
+
+def _usa_llave_propia(app_settings: AppSettings | None) -> bool:
+    """BYOK: el negocio configuró proveedor y llave en el panel. Misma condición con la que
+    `_resolved_provider` usa su llave y con la que el crédito cobra solo el fee (ADR-0144)."""
+    return bool(app_settings and app_settings.llm_provider and app_settings.llm_api_key_encrypted)
+
+
+def _politica_del_turno(motor: ContextoMotor | None, app_settings: AppSettings | None, spec, routing):  # type: ignore[no-untyped-def]
+    """Política de modelo por riesgo del turno (HU-AOS-09, ADR-0132), o None.
+
+    Solo con motor (todo turno con negocio). Riesgo alto: la etapa en foco al empezar
+    el turno declara `risk: high` (y el router no eligió ya el modo de razonamiento sin tools).
+    Respaldo del verificador: `spec.model.fallback`, solo si es de la misma familia que el modelo
+    del turno (con otro proveedor fallaría siempre); si no, se anota `respaldo_no_disponible`."""
+    if motor is None:
+        return None
+    from core.kernel.politica_modelo import (
+        PoliticaDelTurno,
+        decidir,
+        misma_familia,
+        politica_por_defecto,
+    )
+    from core.llm.openai_compatible import OpenAICompatibleProvider
+
+    alto = eleccion = None
+    if routing.reason == "default":
+        eleccion = decidir(motor.riesgo_alto, politica_por_defecto(), routing.model)
+        if eleccion is not None:
+            alto = _resolved_provider(app_settings, eleccion.model, thinking=eleccion.thinking)
+            if isinstance(alto, OpenAICompatibleProvider):
+                alto.reintentar_4xx = False  # un 400 degrada ya, sin 4,5 s de reintentos
+    fallback = spec.model.fallback
+    declarado = bool(fallback) and fallback != routing.model
+    respaldo = (
+        _resolved_provider_fallback(app_settings, fallback)
+        if declarado and misma_familia(fallback, routing.model)
+        else None
+    )
+    if alto is None and not declarado:
+        return None
+    return PoliticaDelTurno(alto=alto, eleccion=eleccion, respaldo=respaldo, hay_respaldo_declarado=declarado)
 
 
 def _resolved_provider_fallback(app_settings: AppSettings | None, model: str):  # type: ignore[no-untyped-def]
@@ -934,6 +1873,6 @@ def _resolved_provider_fallback(app_settings: AppSettings | None, model: str):  
     api_key = None
     if app_settings and app_settings.llm_provider:
         provider_key = app_settings.llm_provider
-        if app_settings.llm_api_key_encrypted:
-            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted)
+        if _usa_llave_propia(app_settings):
+            api_key = get_secret_box().decrypt(app_settings.llm_api_key_encrypted or "")
     return resolve_provider(provider_key=provider_key, api_key=api_key, model=model)

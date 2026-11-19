@@ -7,6 +7,12 @@ panel muestre el estado correcto y para que las transiciones queden registradas.
 
 - `trialing` con `trial_ends_at` vencido → `expired`.
 - `active` con `period_end` vencido → `past_due`.
+- HU-SH-04 (ADR-0123): cuando empieza un período que se pagó por adelantado, la suscripción
+  pasa a ese período: `period_start` (la ventana de las cuotas) y su plan, si el pago traía
+  otro (p. ej. un downgrade programado en el asistente).
+
+La renovación (el cobro del período siguiente) es `core/billing/renovacion.py`, y la
+conciliación de los dos canales, `core/billing/conciliacion.py`.
 
 No suspende el tenant ni borra nada: eso es billing (operacional), no el ciclo
 de vida `active|suspended` de `docs/MULTITENANT.md`.
@@ -16,7 +22,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from core.db.models import Tenant, TenantSubscription
+from core.db.models import SubscriptionPayment, Tenant, TenantSubscription
 from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
@@ -25,7 +31,8 @@ log = get_logger(__name__)
 
 
 async def normalize_expired_subscriptions() -> dict[str, int]:
-    """Transiciona a `expired`/`past_due` toda suscripción vencida.
+    """Transiciona a `expired`/`past_due` toda suscripción vencida y pasa al período que
+    empezó hoy si estaba pagado por adelantado.
 
     Enumera los tenants vivos (tabla de sistema, sin RLS) y entra a cada uno con
     su propio `tenant_scope`, porque `tenant_subscriptions` sí tiene RLS.
@@ -33,7 +40,7 @@ async def normalize_expired_subscriptions() -> dict[str, int]:
     from sqlalchemy import select
 
     now = datetime.now(UTC)
-    counts = {"expired": 0, "past_due": 0}
+    counts = {"expired": 0, "past_due": 0, "periodo_nuevo": 0}
 
     async with get_session() as session:
         tenant_ids = (
@@ -64,7 +71,29 @@ async def normalize_expired_subscriptions() -> dict[str, int]:
                     if sub.period_end is not None and sub.period_end < now:
                         sub.status = "past_due"
                         counts["past_due"] += 1
+                    else:
+                        vigente = (
+                            await session.execute(
+                                select(SubscriptionPayment)
+                                .where(
+                                    SubscriptionPayment.tenant_id == tenant_id,
+                                    SubscriptionPayment.status == "aprobado",
+                                    SubscriptionPayment.periodo.isnot(None),
+                                    SubscriptionPayment.period_start <= now,
+                                    SubscriptionPayment.period_end > now,
+                                    SubscriptionPayment.deleted_at.is_(None),
+                                )
+                                .order_by(SubscriptionPayment.period_start.desc())
+                                .limit(1)
+                            )
+                        ).scalar_one_or_none()
+                        if vigente is not None and vigente.period_start is not None and (
+                            sub.period_start is None or vigente.period_start > sub.period_start
+                        ):
+                            sub.period_start = vigente.period_start
+                            sub.plan_id = vigente.plan_id
+                            counts["periodo_nuevo"] += 1
 
-    if counts["expired"] or counts["past_due"]:
+    if any(counts.values()):
         log.info("subscriptions_normalized", **counts)
     return counts

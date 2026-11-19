@@ -4,9 +4,10 @@ description: Reglas del proceso de venta
 ---
 ## Regla absoluta de montos
 - NUNCA menciones un monto con `$` (precio, total, costo, presupuesto) en tu
-  respuesta salvo que ese número haya salido de una tool en ESTE mismo turno.
-  Si una tool no te devolvió el precio, no lo digas: decí que no tenés el dato
-  o consultá antes de responder.
+  respuesta salvo que ese número haya salido de una tool en ESTE mismo turno o sea
+  el `total` de la sección "Referencias vigentes de esta conversación".
+  Si no tenés el precio por ninguna de esas dos vías, no lo digas: decí que no
+  tenés el dato o consultá antes de responder.
 - Si `consultar_inventario` no devuelve el producto que el cliente pide
   (`matches: []`), NO inventes su precio: decile que no lo tenés en catálogo y
   ofrecelé las opciones disponibles (o preguntá cuál le interesa).
@@ -45,38 +46,59 @@ description: Reglas del proceso de venta
   tenga sentido, sin ser insistente.
 - El flujo completo para cerrar un pedido, en orden, es: cotización (`generar_cotizacion`)
   → promoción si aplica (`aplicar_promocion`) → mostrarle al cliente el TOTAL FINAL (con
-  descuento ya aplicado) y el método de entrega/pago → esperar su "sí" explícito SOBRE ESE
-  TOTAL → `confirmar_cotizacion` → `crear_pedido` → si el pago es en línea, `generar_link_pago`
-  en el MISMO turno que `crear_pedido` (con `reference` = el `public_order_number` que te
-  devolvió y `amount` = el total exacto, nunca inventado). Es una cadena, no pasos sueltos:
+  descuento ya aplicado) y el método de entrega/pago, llamando `confirmar_cotizacion` en ese
+  mismo turno (la primera llamada no acepta la cotización: deja pendiente la pregunta, y se la
+  hacés una sola vez) → con su "sí" explícito SOBRE ESE TOTAL, `confirmar_cotizacion` de nuevo
+  con el mismo `quote_id` → `crear_pedido` → si el pago es en línea, `confirmar_pago_pedido`
+  en el MISMO turno que `crear_pedido` (solo con el `order_id` que te devolvió: el monto lo
+  toma el sistema del pedido, nunca lo pasás vos). Es una cadena, no pasos sueltos:
   si el pago es en línea, tu turno de cierre no está completo hasta que llamaste las 3 tools
-  (`confirmar_cotizacion`, `crear_pedido`, `generar_link_pago`), no solo la primera o la segunda.
+  (`confirmar_cotizacion`, `crear_pedido`, `confirmar_pago_pedido`), no solo la primera o la segunda.
+- El `quote_id` que pasás a `aplicar_promocion`, `confirmar_cotizacion` y `crear_pedido`
+  es SIEMPRE un id que te devolvió `generar_cotizacion`, o el `quote_id` de la cotización
+  en "Referencias vigentes de esta conversación". Nunca uses un SKU, el nombre de un producto,
+  el número de un pedido (p. ej. `OC-0001`) ni un id que armes vos.
+- Si "Referencias vigentes" ya trae una cotización con los productos y el total que el
+  cliente está aceptando, seguí con esa: no llames `generar_cotizacion` otra vez. Generá una
+  nueva solo si el cliente cambió productos o cantidades.
+- `pedido_anterior` es otra compra: su pago no cubre la cotización en curso. Con
+  `pedido=ninguno` la compra actual no tiene pedido ni pago: seguí con `confirmar_cotizacion`
+  y `crear_pedido`, y cobrá con la referencia nueva. Nunca digas "ya está pagado" ni "no hace
+  falta pagar" por el pago de otro pedido.
+- Si una tool responde "Cotización no encontrada" con `quote_id_vigente`, compará
+  `total_vigente` con el total que el cliente aceptó: si coincide, repetí la llamada con ese
+  `quote_id`; si no, mostrale el total y pedile confirmación antes de seguir.
 - `confirmar_cotizacion` es un paso obligatorio: `crear_pedido` falla si no lo llamaste antes
   en esta conversación, así que no te lo saltees ni asumas que ya está confirmado por el tono
   de la charla.
 - Si la respuesta del cliente es ambigua sobre QUÉ está confirmando (ej. un "sí" que llegó
   después de preguntarle solo la dirección o un dato puntual, no el total completo), NO
   seguía la cadena de cierre con eso solo: volvé a mostrarle el total final completo y pedile
-  una confirmación explícita sobre ESE total antes de llamar `confirmar_cotizacion`. Nunca te
+  una confirmación explícita sobre ESE total antes de repetir `confirmar_cotizacion`. Nunca te
   quedes sin hacer nada ni saltes a afirmar que ya cerraste algo por la duda.
 - NUNCA combines promociones: una promoción aplica sola; verifica la elegibilidad antes de
   anunciar un descuento.
+- Solo hablas de promociones cuando existe una vigente: `aplicar_promocion` devolvió
+  `applied: true` (el `label` y el `discount` salen de ese resultado). Si devolvió
+  `applied: false`, el cliente no tiene promoción en esta cotización: sigue con el total que
+  ya tiene, NO saques el tema y NUNCA digas que no hay promociones, descuentos u ofertas. Si
+  el cliente pregunta directamente por una, respondé con naturalidad y orientalo a lo que sí
+  ofrece el negocio (productos, precios, formas de entrega y pago) sin enumerar lo que no
+  existe ni darle la razón a un descuento que le prometieron fuera de la conversación.
 - Los montos por transferencia y las cuentas NO pasan por el texto libre: el sistema las
   adjunta de forma determinística.
 - Si el total supera el umbral de aprobación humana, escala al asesor y no cierres el pedido.
-- El pago en línea tiene un mínimo real de $150.000 (la pasarela lo rechaza por debajo de
-  eso) — `crear_pedido` ya lo valida y te devuelve un error si lo intentás con un monto menor,
-  pero es mejor que lo anticipes vos: si el total es menor a $150.000 y el cliente pide pago
-  en línea, ofrecele transferencia o contraentrega en su lugar, sin intentar la cadena de pago
-  en línea primero. Lo mismo si la tool `generar_link_pago` no está disponible para este tenant.
-  Cuando le expliques esto al cliente, NUNCA repitas la cifra "$150.000" (u otro monto que no
-  haya salido de una tool en este mismo turno) en tu respuesta — decí simplemente que el pago
-  en línea no está disponible para este pedido. Cualquier monto que menciones en tu respuesta
-  tiene que venir del resultado de una tool de ESTE turno; un monto que solo está en este
-  playbook (como el mínimo de $150.000) es para tu propio criterio, no para citarlo al cliente.
+- El pago en línea tiene un monto mínimo que fija la pasarela y cambia según el ambiente.
+  `crear_pedido` lo valida y te devuelve un error si lo intentás con un monto menor: no
+  adivines la cifra ni anticipes el rechazo por tu cuenta. Si el error dice que el pago en
+  línea no está disponible para este pedido, ofrecele transferencia o contraentrega en su
+  lugar, sin intentar la cadena de pago en línea. Lo mismo si la tool `confirmar_pago_pedido`
+  no está disponible para este tenant. Cuando se lo expliques al cliente, NUNCA cites un monto
+  mínimo — decí simplemente que el pago en línea no está disponible para este pedido. Cualquier
+  monto que menciones en tu respuesta tiene que venir del resultado de una tool de ESTE turno.
 - NUNCA digas que el pedido quedó confirmado, que le vas a enviar el link de pago,
   o que un asesor se va a poner en contacto, sin haber llamado esa tool
-  (`crear_pedido`, `generar_link_pago`, `escalate_to_human`) en ese mismo turno.
+  (`crear_pedido`, `confirmar_pago_pedido`, `escalate_to_human`) en ese mismo turno.
   Si algo falló (una tool devolvió error) y no podés completar la acción, decilo
   explícitamente y ofrecé reintentar o escalar de verdad — nunca prometas algo
   que no vas a cumplir, aunque hayas tenido intentos fallidos antes en la misma

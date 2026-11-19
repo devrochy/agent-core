@@ -16,8 +16,10 @@ busca uno ya autorizado.
 
 from __future__ import annotations
 
+import functools
 import re
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 from agentcore_contracts import AgentSpec
@@ -40,6 +42,8 @@ MAX_SIZE_BYTES = 8 * 1024  # ADR-0014: límite por playbook (anti-bloat/inyecci�
 _SAFE_PLAYBOOK_NAME = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 CORE_PLAYBOOKS = Path(__file__).resolve().parent.parent / "playbooks"
+# Playbooks del kernel (ADR-0114 §2): fuera de `playbook_roots()`, ver `load_core_playbook`.
+CORE_KERNEL_PLAYBOOKS = CORE_PLAYBOOKS / "kernel"
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -58,13 +62,25 @@ def _strip_frontmatter(content: str) -> str:
     return content
 
 
+class ErrorDeLectura(Exception):
+    """Un archivo que existe y no se pudo leer (IO o encoding): no es determinista, no se cachea."""
+
+
 async def load_playbook(
     spec_or_tenant: AgentSpec | uuid.UUID | str | None,
     name: str,
     *,
     tenant_slug: str | None = None,
+    overrides: Mapping[str, str] | None = None,
+    estricto: bool = False,
 ) -> str | None:
     """Carga el contenido del playbook `name` si está en la allowlist del spec.
+
+    `overrides` (compilador de HU-AOS-35): los overrides congelados de una release, pasados por
+    parámetro. Con ellos no se lee la ranura del turno ni el disco del negocio: un nombre sin
+    override usa el default del pack o del core. `estricto`: un error de lectura del default
+    lanza `ErrorDeLectura` en vez de devolver None (lo compilado no se cachea con un bloque de
+    menos; un nombre que no existe sigue siendo None, que es determinista).
 
     Acepta un `AgentSpec` (evals/tests) o un tenant (resuelve su spec activo).
     `tenant_slug`: si el caller ya lo resolvió (ej. `build_system_blocks`,
@@ -72,16 +88,23 @@ async def load_playbook(
     uno -- si no se pasa, esta función lo resuelve ella misma (una query,
     aceptable en un call-site que no está en un loop).
     """
+    from core.shared.tenant import get_current_tenant_id
+
+    scope = get_current_tenant_id()
     if isinstance(spec_or_tenant, AgentSpec):
         spec = spec_or_tenant
     else:
+        # La allowlist sale del spec del negocio pedido y el override del `tenant_scope`:
+        # si fueran negocios distintos se mezclarían.
+        if spec_or_tenant is not None and scope is not None and str(spec_or_tenant) != str(scope):
+            raise PermissionError("load_playbook: el negocio pedido no es el del tenant_scope")
         spec = await load_active_spec(spec_or_tenant)
     allowed = {p.name for p in spec.playbooks}
     if name not in allowed:
-        log.info("playbook_not_allowed", playbook=name, tenant_id=str(spec.tenantId))
+        log.info("playbook_not_allowed", playbook=name, tenant_id=str(scope))
         return None
     if not _SAFE_PLAYBOOK_NAME.match(name):
-        log.warning("playbook_name_unsafe", playbook=name, tenant_id=str(spec.tenantId))
+        log.warning("playbook_name_unsafe", playbook=name, tenant_id=str(scope))
         return None
 
     # Override por tenant (ADR-0026): gana sobre el default del pack/core si
@@ -90,22 +113,33 @@ async def load_playbook(
     # `tenant_slug`: `None` = "no me lo pasaron, resolverlo acá"; `""` =
     # "el caller ya lo intentó y no hay slug" (no reintentar la query por
     # cada playbook del loop de build_system_blocks si la BD está fallando).
+    # El negocio sale del `tenant_scope`, nunca de `spec.tenantId`.
+    # Con release, el override sale de la release del turno (ADR-0117 §2), no del
+    # disco: un nombre sin override congelado usa el default del pack/core.
+    from core.shared import release_vigente
+
+    congelados = overrides
+    if congelados is None:
+        congelada = release_vigente.vigente()
+        congelados = congelada.playbooks if congelada is not None else None
+    if congelados is not None:
+        texto = congelados.get(name)
+        if texto is not None:
+            return _strip_frontmatter(texto)
+        tenant_slug = ""
     slug = tenant_slug
     if slug is None:
-        from core.shared.tenant import tenant_slug as _tenant_slug
+        from core.shared.tenant import current_tenant_slug
 
         try:
-            slug = await _tenant_slug(uuid.UUID(spec.tenantId))
+            slug = await current_tenant_slug()
         except Exception:
-            # `tenantId` inválido (specs de test) o la BD no responde: el
-            # override es una CAPA EXTRA, no la fuente de verdad -- degradar
-            # al default del pack/core en vez de tumbar el turno, mismo
-            # criterio fail-open que el resto de esta función. Se loggea
-            # igual (a diferencia de un `pass` silencioso) para que un fallo
-            # persistente de BD no quede invisible.
-            log.warning(
-                "tenant_slug_resolve_failed", tenant_id=str(spec.tenantId), exc_info=True
-            )
+            # La BD no responde: el override es una CAPA EXTRA, no la fuente
+            # de verdad -- degradar al default del pack/core en vez de tumbar
+            # el turno, mismo criterio fail-open que el resto de esta función.
+            # Se loggea igual (a diferencia de un `pass` silencioso) para que
+            # un fallo persistente de BD no quede invisible.
+            log.warning("tenant_slug_resolve_failed", playbook=name, exc_info=True)
             slug = None
     if slug:
         from core.onboarding import tenant_dir
@@ -134,8 +168,10 @@ async def load_playbook(
             # (auditor-multitenant, ítem 4 de la fila 170 del ROADMAP).
             try:
                 content = candidate.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as exc:
                 log.warning("playbook_read_failed", playbook=name, exc_info=True)
+                if estricto:
+                    raise ErrorDeLectura(name) from exc
                 return None
             if len(content.encode("utf-8")) > MAX_SIZE_BYTES:
                 log.warning("playbook_too_large", playbook=name)
@@ -143,6 +179,26 @@ async def load_playbook(
             return _strip_frontmatter(content)
     log.info("playbook_not_found", playbook=name)
     return None
+
+
+@functools.cache
+def load_core_playbook(name: str) -> str:
+    """Playbook del KERNEL (`core/playbooks/kernel/<name>.md`), sin allowlist ni override.
+
+    Son textos que el kernel usa siempre, como los rótulos de la tarjeta de estado
+    (ADR-0114 §2), y viajan con el binario. No están en `playbook_roots()` (la carpeta no
+    se recorre: `glob("*.md")` no es recursivo), así que ningún negocio los puede pedir
+    en su allowlist ni reemplazar con un override de `TENANTS_ROOT`.
+
+    Fail-closed: un nombre inseguro, un archivo que falta o que pasa el tope lanzan (y un
+    test de CI lo cubre), en lugar de devolver `None` y dejar al kernel sin sus rótulos.
+    """
+    if not _SAFE_PLAYBOOK_NAME.fullmatch(name):
+        raise ValueError(f"nombre de playbook del kernel inseguro: {name!r}")
+    content = (CORE_KERNEL_PLAYBOOKS / f"{name}.md").read_text(encoding="utf-8")
+    if len(content.encode("utf-8")) > MAX_SIZE_BYTES:
+        raise ValueError(f"playbook del kernel demasiado grande: {name}")
+    return _strip_frontmatter(content)
 
 
 async def list_playbooks() -> list[dict[str, str]]:

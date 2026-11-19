@@ -18,6 +18,7 @@ atiende webhooks/HTTP.
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import or_, select
 
@@ -32,19 +33,30 @@ from core.db.models import (
     utcnow,
 )
 from core.db.session import get_session
-from core.gateway.connection_types import CATEGORY_COMMUNICATION
+from core.gateway.connection_types import (
+    CATEGORY_COMMUNICATION,
+    capacidades_de,
+    capacidades_del_canal,
+)
 from core.gateway.message_splitter import split_for_bubbles
 from core.shared.crypto import get_secret_box
 from core.shared.events import ON_MESSAGE_SENT, event_bus
 from core.shared.exceptions import OutboundWindowExpiredError
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import is_test_channel
+
+if TYPE_CHECKING:
+    from core.kernel.opciones.envio import ResultadoEnvio
 
 log = get_logger(__name__)
 
 
 async def _resolve_meta_connection_credentials(
-    meta_connection_id: uuid.UUID, expected_tenant_id: uuid.UUID | None
+    meta_connection_id: uuid.UUID,
+    expected_tenant_id: uuid.UUID | None,
+    *,
+    phone_number_id: str | None = None,
 ) -> dict[str, str] | None:
     """Conexiones creadas por el wizard de Embedded Signup (ADR-0030): no
     tienen `ChannelConnection`, el token vive en `meta_token_store`.
@@ -55,25 +67,34 @@ async def _resolve_meta_connection_credentials(
     allá de RLS/unicidad de esquema (hallazgo auditor-multitenant,
     2026-09-22: `phone_numbers.phone_number_id` es único global, no
     compuesto con `tenant_id`; si esa garantía de esquema se relajara algún
-    día, esta aserción evita enviar con el token de OTRO tenant)."""
-    from core.gateway import meta_token_store
-    from core.gateway.meta_onboarding import TOKEN_KIND
+    día, esta aserción evita enviar con el token de OTRO tenant).
+
+    `phone_number_id`: el número de la conexión canónica de la conversación (ADR-0115 §5).
+    Si viene, solo sirve ese número, vivo y de esta cuenta: si no lo está, no hay
+    credenciales (nunca se responde por otro número de la cuenta, ADR-0122 §3). Sin él, el
+    primer número vivo de la cuenta (conversaciones sin conexión canónica, como antes)."""
+    from core.gateway.meta_connection_state import motivo_pausa
+    from core.gateway.meta_credentials import access_token_for
 
     async with get_session() as session:
         connection = await session.get(MetaConnection, meta_connection_id)
         if connection is None:
             return None
+        # Pausada (`revoked`), eliminada o sin alta: no sale nada por ella (ADR-0122).
+        if (motivo := motivo_pausa(connection)) is not None:
+            log.warning("meta_connection_no_utilizable", meta_connection_id=str(meta_connection_id), motivo=motivo)
+            return None
         # Filtro explícito de tenant además de RLS (defensa en profundidad,
         # invariante nº1): el número nunca se lee sin atarlo a su conexión
         # (mismo criterio que `meta_byok.save_byok_connection`).
-        phone = (
-            await session.execute(
-                select(PhoneNumber).where(
-                    PhoneNumber.connection_id == meta_connection_id,
-                    PhoneNumber.tenant_id == connection.tenant_id,
-                )
-            )
-        ).scalars().first()
+        query = select(PhoneNumber).where(
+            PhoneNumber.connection_id == meta_connection_id,
+            PhoneNumber.tenant_id == connection.tenant_id,
+            PhoneNumber.deleted_at.is_(None),
+        )
+        if phone_number_id is not None:
+            query = query.where(PhoneNumber.phone_number_id == phone_number_id)
+        phone = (await session.execute(query)).scalars().first()
     if phone is None:
         return None
     if expected_tenant_id is not None and connection.tenant_id != expected_tenant_id:
@@ -84,38 +105,147 @@ async def _resolve_meta_connection_credentials(
             expected_tenant_id=str(expected_tenant_id),
         )
         return None
-    # El token vive bajo distinto `kind`/`subject` según el flujo que creó la
-    # conexión: BYOK (`save_byok_connection`) usa `cloud_api_access_token` con
-    # `subject=meta_app_id`; Embedded Signup usa `TOKEN_KIND`
-    # (`business_integration_system_user`) con `subject=business_id` (o el id de
-    # la conexión). Se prueban ambos: con el kind/subject equivocado, un envío
-    # BYOK no encontraba su token y caía al fallback del `.env`
-    # (otro número/credenciales).
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
-
-    token = await meta_token_store.get_token(
-        meta_connection_id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id, tenant_id=connection.tenant_id
-    )
-    if not token:
-        token = await meta_token_store.get_token(
-            meta_connection_id,
-            TOKEN_KIND,
-            connection.business_id or str(meta_connection_id),
-            tenant_id=connection.tenant_id,
-        )
+    # El token que se usa lo decide `origin` (HU-CONN-01, ADR-0094): una conexión
+    # BYOK que el wizard de Embedded Signup tomó conserva su token BYOK viejo, y
+    # probar "el que exista, BYOK primero" enviaba con ese token mientras la salud
+    # validaba el de ES (supersede ADR-0040 §3).
+    token = await access_token_for(connection)
     if not token:
         return None
     return {"phone_number_id": phone.phone_number_id, "access_token": token}
+
+
+def _cuenta_utilizable(
+    connection: MetaConnection | None, meta_connection_id: uuid.UUID, expected_tenant_id: uuid.UUID | None
+) -> MetaConnection | None:
+    """La cuenta de Meta si puede enviar: existe, no está pausada ni eliminada (ADR-0122) y es del negocio
+    esperado (tenant explícito además de RLS). `None` en cualquier otro caso."""
+    from core.gateway.meta_connection_state import motivo_pausa
+
+    if connection is None:
+        return None
+    if (motivo := motivo_pausa(connection)) is not None:
+        log.warning("meta_connection_no_utilizable", meta_connection_id=str(meta_connection_id), motivo=motivo)
+        return None
+    if expected_tenant_id is not None and connection.tenant_id != expected_tenant_id:
+        log.error(
+            "meta_connection_tenant_mismatch",
+            meta_connection_id=str(meta_connection_id),
+            connection_tenant_id=str(connection.tenant_id),
+            expected_tenant_id=str(expected_tenant_id),
+        )
+        return None
+    return connection
+
+
+async def _credenciales_de_pagina(connection: MetaConnection, page_id: str) -> dict[str, str] | None:
+    """El token de la PROPIA Página (no el de la cuenta) y los datos para firmar el envío."""
+    from core.gateway import meta_token_store
+    from core.gateway.meta_credentials import CredentialsUnavailable, app_credentials_for
+    from core.gateway.meta_messenger import PAGE_TOKEN_KIND
+
+    token = await meta_token_store.get_token(connection.id, PAGE_TOKEN_KIND, page_id, tenant_id=connection.tenant_id)
+    if not token:
+        return None
+    credentials = {"page_id": page_id, "access_token": token, "graph_api_version": connection.graph_api_version or ""}
+    try:
+        credentials["app_secret"] = (await app_credentials_for(connection)).app_secret
+    except CredentialsUnavailable:
+        pass  # sin `appsecret_proof`: Meta lo exige solo si la app lo tiene activado
+    return credentials
+
+
+async def _resolve_messenger_credentials(
+    meta_connection_id: uuid.UUID, page_id: str, expected_tenant_id: uuid.UUID | None
+) -> dict[str, str] | None:
+    """Credenciales de una Página de Messenger (ADR-0152): el token de la PROPIA Página, no el de la
+    cuenta, y solo si la Página es viva y de esta conexión. Mismas defensas que
+    `_resolve_meta_connection_credentials`: pausa o borrado (ADR-0122), tenant explícito además de
+    RLS y sin respaldo silencioso a otra Página, a WhatsApp ni al `.env`."""
+    from core.db.models import FbPage
+
+    async with get_session() as session:
+        connection = _cuenta_utilizable(await session.get(MetaConnection, meta_connection_id), meta_connection_id, expected_tenant_id)
+        if connection is None:
+            return None
+        pagina = (
+            await session.execute(
+                select(FbPage).where(
+                    FbPage.connection_id == meta_connection_id,
+                    FbPage.tenant_id == connection.tenant_id,
+                    FbPage.page_id == page_id,
+                )
+            )
+        ).scalars().first()
+    if pagina is None:
+        return None
+    return await _credenciales_de_pagina(connection, page_id)
+
+
+async def _resolve_instagram_credentials(
+    meta_connection_id: uuid.UUID, ig_user_id: str, expected_tenant_id: uuid.UUID | None
+) -> dict[str, str] | None:
+    """Credenciales de una cuenta de Instagram con Facebook Login (ADR-0152, HU-CHAN-04): se escribe con el
+    token de la Página vinculada a esa cuenta. Solo si la cuenta es viva, de esta conexión y de esta ruta de
+    login, con las mismas defensas que Messenger y sin respaldo a otra cuenta ni al `.env`."""
+    from core.db.models import IgAccount
+    from core.gateway.meta_instagram import LOGIN_ROUTE_FACEBOOK, LOGIN_ROUTE_INSTAGRAM
+
+    async with get_session() as session:
+        connection = _cuenta_utilizable(await session.get(MetaConnection, meta_connection_id), meta_connection_id, expected_tenant_id)
+        if connection is None:
+            return None
+        cuenta = (
+            await session.execute(
+                select(IgAccount).where(
+                    IgAccount.connection_id == meta_connection_id,
+                    IgAccount.tenant_id == connection.tenant_id,
+                    IgAccount.ig_user_id == ig_user_id,
+                )
+            )
+        ).scalars().first()
+    if cuenta is None:
+        return None
+    if cuenta.login_route == LOGIN_ROUTE_INSTAGRAM:
+        # Instagram Login: se escribe con el token de la propia cuenta (60 días), no con el de una Página. Vencido = sin
+        # credenciales: el envío falla con un motivo claro y el refresco o la reconexión lo arreglan.
+        from core.gateway import meta_token_store
+        from core.gateway.meta_instagram_login import IG_LONG_LIVED_TOKEN_KIND
+
+        token = await meta_token_store.get_token(
+            connection.id, IG_LONG_LIVED_TOKEN_KIND, ig_user_id, tenant_id=connection.tenant_id, respect_expiry=True
+        )
+        if not token:
+            return None
+        return {
+            "login_route": LOGIN_ROUTE_INSTAGRAM, "ig_user_id": ig_user_id, "access_token": token,
+            "graph_api_version": connection.graph_api_version or "",
+        }
+    if cuenta.login_route != LOGIN_ROUTE_FACEBOOK or not cuenta.linked_page_id:
+        return None
+    credenciales = await _credenciales_de_pagina(connection, cuenta.linked_page_id)
+    return {**credenciales, "login_route": LOGIN_ROUTE_FACEBOOK} if credenciales else None
 
 
 async def resolve_credentials(
     connection_id: uuid.UUID | None,
     meta_connection_id: uuid.UUID | None = None,
     expected_tenant_id: uuid.UUID | None = None,
+    *,
+    allow_env_fallback: bool = True,
 ) -> tuple[str, dict[str, str]]:
     """Devuelve (provider, credentials). Orden: `ChannelConnection` (conexión
-    manual) -> `MetaConnection`+`meta_token_store` (wizard de Embedded
+    manual, o la canónica de un número de Meta, que resuelve por su cuenta y su
+    número, ADR-0115) -> `MetaConnection`+`meta_token_store` (wizard de Embedded
     Signup, ADR-0030) -> conexión primaria en BD -> `.env`.
+
+    La primaria y el `.env` son solo para conversaciones sin `meta_connection_id`: con
+    él, si esa conexión no puede enviar se devuelve `{}` (ADR-0122).
+
+    `allow_env_fallback=False` para plantillas (ADR-0108): una plantilla no
+    depende de la ventana, así que con el número de la plataforma (`.env`) le
+    llegaría al cliente de un negocio un aviso desde el número de SolversHub.
+    Sin credenciales propias devuelve `{}` y el envío falla con un error claro.
 
     `expected_tenant_id`: el tenant de la conversación que se está
     despachando -- se verifica contra `MetaConnection.tenant_id` antes de
@@ -136,6 +266,80 @@ async def resolve_credentials(
                 expected_tenant_id=str(expected_tenant_id),
             )
             connection = None
+        if connection is None:
+            # La conversación tiene conexión pero no se puede leer (otro negocio, RLS): no se
+            # cae a la primaria ni al `.env` (ADR-0122 §3). Las FKs compuestas lo hacen
+            # inalcanzable en operación normal.
+            log.warning("conexion_de_la_conversacion_no_disponible", connection_id=str(connection_id))
+            return "meta", {}
+        if connection.meta_connection_id is not None and connection.channel == "messenger":
+            # Página de Messenger (ADR-0152): su token es el de la Página. Sin respaldo silencioso.
+            creds = await _resolve_messenger_credentials(
+                connection.meta_connection_id, connection.external_id or "", expected_tenant_id
+            )
+            return "meta", creds or {}
+        if connection.meta_connection_id is not None and connection.channel == "instagram":
+            # Cuenta de Instagram (ADR-0152, HU-CHAN-04): se escribe con el token de su Página vinculada.
+            creds = await _resolve_instagram_credentials(
+                connection.meta_connection_id, connection.external_id or "", expected_tenant_id
+            )
+            return "meta", creds or {}
+        if connection.meta_connection_id is not None:
+            # Conexión canónica de un número de Meta (ADR-0115): sin credenciales propias, la
+            # cuenta las pone y el número es el de la conexión. Sin respaldo silencioso
+            # (ADR-0122 §3): si esa cuenta no puede enviar por ese número, no sale nada.
+            creds = await _resolve_meta_connection_credentials(
+                connection.meta_connection_id, expected_tenant_id, phone_number_id=connection.external_id
+            )
+            if creds:
+                return "meta", creds
+            log.warning(
+                "credenciales_de_la_conexion_no_disponibles",
+                connection_id=str(connection_id),
+                meta_connection_id=str(connection.meta_connection_id),
+            )
+            return "meta", {}
+        if connection.provider == "internal":
+            # Conexión interna del Centro de pruebas: no envía por ningún proveedor ni cae a la
+            # primaria o al `.env` (nunca se debe llegar aquí: el canal de prueba no envía).
+            return "internal", {}
+        if connection.provider == "web":
+            # Chat web como conexión (ADR-0115 §4): sin proveedor externo. Sus credenciales son el
+            # secreto de Turnstile del widget, que el envío no necesita: no se descifra.
+            return "web", {}
+        if connection.provider == "twilio":
+            # WhatsApp vía Twilio (ADR-0186): sin respaldo. Sin credenciales, el envío falla (no sale por la
+            # primaria ni por el número de la plataforma).
+            if not connection.credentials_encrypted or connection.deleted_at is not None or not connection.active:
+                # Borrada o pausada: no envía, aunque guarde credenciales (el número pudo pasar a otro negocio).
+                return "twilio", {}
+            from core.gateway.twilio.alta import credenciales_de_envio
+
+            creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
+            async with get_session() as session:
+                return "twilio", await credenciales_de_envio(
+                    session, connection, {str(k): str(v) for k, v in creds.items()}
+                )
+        if connection.provider == "telegram":
+            # Telegram (ADR-0199): solo su bot, sin respaldo. Borrada, pausada, sin credenciales o con el kill-switch
+            # apagado: no envía (no sale por la primaria ni por el número de la plataforma).
+            from core.gateway.telegram.habilitado import habilitado
+
+            if (
+                not habilitado()
+                or not connection.credentials_encrypted
+                or connection.deleted_at is not None
+                or not connection.active
+            ):
+                return "telegram", {}
+            creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
+            bot_id = connection.external_id or ""
+            if creds.get("bot_id") not in (None, "", bot_id):
+                # `external_id` es la única fuente del `bot_id` (0137): si las credenciales dicen otro bot, algo se
+                # desalineó y no se envía (los tokens de botón, el ritmo y los ids saldrían con otro bot).
+                log.error("telegram_credenciales_de_otro_bot", connection_id=str(connection_id))
+                return "telegram", {}
+            return "telegram", {"bot_token": str(creds.get("bot_token") or ""), "bot_id": bot_id}
         if connection and connection.credentials_encrypted:
             creds = get_secret_box().decrypt_json(connection.credentials_encrypted)
             return connection.provider, {str(k): str(v) for k, v in creds.items()}
@@ -144,6 +348,14 @@ async def resolve_credentials(
         creds = await _resolve_meta_connection_credentials(meta_connection_id, expected_tenant_id)
         if creds:
             return "meta", creds
+        # Sin respaldo silencioso (ADR-0122): la conversación tiene su número, y si esa
+        # conexión no puede enviar (pausada, eliminada, sin número o sin token), la respuesta
+        # no sale desde la primaria ni desde el número de la plataforma. El envío falla.
+        log.warning(
+            "credenciales_de_la_conexion_no_disponibles",
+            meta_connection_id=str(meta_connection_id),
+        )
+        return "meta", {}
 
     # Fallback: conexión primaria de MENSAJERÍA en BD -- `tenant_id` explícito
     # además de RLS (defensa en profundidad): sin este filtro, dos tenants con
@@ -161,12 +373,23 @@ async def resolve_credentials(
                     ChannelConnection.category == CATEGORY_COMMUNICATION,
                     ChannelConnection.category.is_(None),
                 ),
+                # Twilio y Telegram no son respaldo de nada (ADR-0186, ADR-0199): sus conversaciones siempre llevan su
+                # conexión, y una conversación sin conexión no debe salir por un número de Twilio ni por un bot.
+                ChannelConnection.provider.not_in(("twilio", "telegram")),
             ).limit(1)
         )
         primary = result.scalars().first()
     if primary and primary.credentials_encrypted:
         creds = get_secret_box().decrypt_json(primary.credentials_encrypted)
         return primary.provider, {str(k): str(v) for k, v in creds.items()}
+
+    if not allow_env_fallback:
+        log.warning(
+            "credenciales_sin_fallback_de_plataforma",
+            connection_id=str(connection_id) if connection_id else None,
+            meta_connection_id=str(meta_connection_id) if meta_connection_id else None,
+        )
+        return "meta", {}
 
     # Último fallback: .env
     return "meta", {
@@ -175,17 +398,122 @@ async def resolve_credentials(
     }
 
 
-def validate_service_window(conversation: Conversation, *, is_template: bool) -> None:
-    """Ventana de 24h de WhatsApp: fuera de ventana solo se puede enviar una
-    plantilla. Se llama ANTES de encolar -- nunca gasta un ciclo de cola/
-    rate-limit en un envío libre que Meta va a rechazar seguro (131047)."""
+def validate_service_window(conversation: Conversation, *, is_template: bool, sender_type: str = "agent") -> None:
+    """Ventana de 24h de Meta: fuera de ventana solo se puede enviar una
+    plantilla (WhatsApp). Se llama ANTES de encolar -- nunca gasta un ciclo de cola/
+    rate-limit en un envío libre que Meta va a rechazar seguro (131047).
+
+    Messenger e Instagram no tienen plantillas: fuera de la ventana solo una PERSONA puede
+    responder, hasta 7 días después del último mensaje del cliente (etiqueta `HUMAN_AGENT`,
+    ADR-0152). El asistente nunca."""
     if is_template:
         return
     expires_at = conversation.service_window_expires_at
-    if expires_at is not None and expires_at < utcnow():
-        raise OutboundWindowExpiredError(
-            "La ventana de servicio de 24h venció -- reenviá como plantilla"
+    if expires_at is None or expires_at >= utcnow():
+        return
+    if conversation.channel in ("messenger", "instagram"):
+        from core.gateway.meta_messenger import MessengerSendError, plan_de_envio
+
+        try:
+            plan_de_envio(
+                service_window_expires_at=expires_at, humano=sender_type == "human", ahora=utcnow(),
+                canal=conversation.channel,
+            )
+        except MessengerSendError as exc:
+            raise OutboundWindowExpiredError(str(exc)) from exc
+        return
+    raise OutboundWindowExpiredError("La ventana de servicio de 24h venció -- reenviá como plantilla")
+
+
+async def _registrar_si_pausada(conversation: Conversation, content: str, sender_type: str) -> bool:
+    """Si la conexión de la conversación está pausada o eliminada (ADR-0122), deja el
+    mensaje como `failed` con el motivo y devuelve True: no se encola nada.
+
+    Los llamadores que escalan cuando el envío falla (consumer, debounce) ya revisan la
+    pausa antes de llegar acá: una pausa no es un fallo que tenga que atender una persona."""
+    from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
+
+    # La cuenta sale de la conexión canónica si la conversación la tiene (ADR-0115 §2).
+    motivo = await motivo_pausa_de_conversacion(conversation)
+    if motivo is None:
+        return False
+    log.info("envio_con_conexion_pausada", conversation_id=str(conversation.id), motivo=motivo)
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=get_current_tenant_id(), conversation_id=conversation.id,
+                direction="outbound", sender_type=sender_type, content=content,
+                status="failed", error_reason=motivo,
+            )
         )
+    return True
+
+
+async def _registrar_si_frenada(
+    conversation: Conversation,
+    content: str,
+    sender_type: str,
+    *,
+    customer: Customer | None = None,
+    client_message_id: str | None = None,
+) -> str | None:
+    """La pausa del negocio o del cliente frena lo automático (HU-ARCH-37, D-76): deja el mensaje `failed` con
+    el motivo y lo devuelve (`negocio_pausado` o `cliente_pausado`), sin encolar; None si sale. Lo que escribe una persona sigue. Va antes del canal de prueba, así
+    el Centro de pruebas también la ve."""
+    from core.gateway.pausa_automatica import es_envio_automatico, motivo_pausa_automatica
+
+    if not es_envio_automatico(sender_type, client_message_id):
+        return None
+    motivo = await motivo_pausa_automatica(conversation, customer)
+    if motivo is None:
+        return None
+    log.info("envio_frenado_por_pausa", conversation_id=str(conversation.id), motivo=motivo)
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=conversation.tenant_id, conversation_id=conversation.id,
+                direction="outbound", sender_type=sender_type, content=content,
+                status="failed", error_reason=motivo,
+            )
+        )
+    return motivo
+
+
+async def _guardar_saliente_de_prueba(
+    conversation: Conversation,
+    content: str,
+    sender_type: str,
+    *,
+    interactive: dict[str, Any] | None = None,
+    client_message_id: str | None = None,
+    image_url: str | None = None,
+) -> bool:
+    """Conversación del playground (canal `test`): no hay proveedor, ventana ni cola. El mensaje saliente queda
+    guardado como entregado (el navegador lo pinta), igual que `playground._guardar_mensaje`: una sola fila, sin
+    partir en burbujas, sin Celery y sin `ON_MESSAGE_SENT`."""
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None or conversation.tenant_id != tenant_id:
+        # Defensa en profundidad (además de RLS): nunca se escribe en la conversación de otro negocio.
+        log.error("envio_prueba_tenant_distinto", conversation_id=str(conversation.id))
+        return False
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=tenant_id,
+                conversation_id=conversation.id,
+                direction="outbound",
+                sender_type=sender_type,
+                content=content,
+                status="sent",
+                client_message_id=client_message_id or str(uuid.uuid4()),
+                media_type="image" if image_url else None,
+                media_url=image_url,
+                # Sin `interactive` la columna queda en NULL del SQL: pasar None guardaría un JSON `null`, que el
+                # CHECK `ck_messages_interactive_objeto` rechaza.
+                **({"interactive": dict(interactive)} if interactive is not None else {}),
+            )
+        )
+    return True
 
 
 async def send_to_conversation(
@@ -195,6 +523,8 @@ async def send_to_conversation(
     sender_type: str = "agent",
     *,
     is_template: bool = False,
+    raise_on_window_expired: bool = False,
+    client_message_id_prefix: str | None = None,
 ) -> bool:
     """Encola el envío al canal (cada burbuja, su propia tarea Celery).
     Devuelve True si se encoló correctamente -- NO si Meta ya lo entregó
@@ -205,6 +535,12 @@ async def send_to_conversation(
     'failed' más tarde) para que un envío roto quede auditado en BD y
     pueda reintentarse/escalarse, en vez de descartarse en silencio
     (incidente de envío silencioso detectado en producción).
+
+    `raise_on_window_expired`: el operador humano necesita saber que la ventana
+    venció para ofrecer una plantilla (409 `window_expired`, HU-ARCH-13); el
+    mensaje fallido se guarda igual y después se relanza el error.
+    `client_message_id_prefix`: id estable (`<prefijo>:<burbuja>`) para que un
+    aviso por evento reintentado no se duplique (índice único por tenant).
     """
     async with get_session() as session:
         conversation = await session.get(Conversation, conversation_id)
@@ -214,8 +550,23 @@ async def send_to_conversation(
         if customer is None:
             return False
 
+    if await _registrar_si_frenada(
+        conversation, text, sender_type, customer=customer,
+        client_message_id=f"{client_message_id_prefix}:0" if client_message_id_prefix else None,
+    ):
+        return False
+
+    if is_test_channel(conversation.channel):
+        return await _guardar_saliente_de_prueba(
+            conversation, text, sender_type, image_url=image_url,
+            client_message_id=f"{client_message_id_prefix}:0" if client_message_id_prefix else None,
+        )
+
+    if await _registrar_si_pausada(conversation, text, sender_type):
+        return False
+
     try:
-        validate_service_window(conversation, is_template=is_template)
+        validate_service_window(conversation, is_template=is_template, sender_type=sender_type)
     except OutboundWindowExpiredError as exc:
         async with get_session() as session:
             session.add(
@@ -225,11 +576,20 @@ async def send_to_conversation(
                     status="failed", error_reason=str(exc),
                 )
             )
+        if raise_on_window_expired:
+            raise
         return False
+
+    # Canal `web` (HU-CHAN-02): no hay proveedor externo ni credenciales. La
+    # respuesta se persiste y el widget la recoge por polling; se salta la
+    # maquinaria de Meta (ventana de 24h, pausas por uso, phone_number_id).
+    is_web = conversation.channel == "web"
 
     _provider, credentials = await resolve_credentials(
         conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
     )
+    if is_web:
+        _provider, credentials = "web", {}
 
     from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
 
@@ -237,7 +597,7 @@ async def send_to_conversation(
     meta_connection_id = await connection_id_for_phone_number(
         credentials.get("phone_number_id", ""), current_tenant_id
     )
-    if await is_paused(current_tenant_id, meta_connection_id):
+    if not is_web and await is_paused(current_tenant_id, meta_connection_id):
         log.error(
             "envio_pausado_por_uso_de_api",
             conversation_id=str(conversation_id),
@@ -267,7 +627,9 @@ async def send_to_conversation(
 
     for index, bubble in enumerate(bubbles):
         is_last = index == len(bubbles) - 1
-        client_message_id = str(uuid.uuid4())
+        client_message_id = (
+            f"{client_message_id_prefix}:{index}" if client_message_id_prefix else str(uuid.uuid4())
+        )
         async with get_session() as session:
             message = Message(
                 tenant_id=current_tenant_id,
@@ -288,6 +650,360 @@ async def send_to_conversation(
 
     await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=text)
     return True
+
+
+async def send_voice_to_conversation(
+    conversation_id: uuid.UUID,
+    text: str,
+    *,
+    sender_type: str = "agent",
+    include_text: bool = True,
+) -> bool:
+    """Encola una nota de voz (pack-voice, ADR-0197).
+
+    Sale por cualquier conexión cuyo tipo declare la capacidad `voz` (ADR-0199 §13: QR y Telegram hoy), sin atarse a
+    un canal ni a un proveedor. El texto (si `include_text`) se encola primero con el camino normal; luego una fila
+    `audio/tts` que el worker sintetiza y envía. Si el audio no se puede encolar, el texto ya entregado sigue siendo la
+    respuesta.
+    """
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        if conversation is None:
+            return False
+
+    if await _registrar_si_frenada(conversation, text, sender_type):
+        return False
+
+    try:
+        provider, _credentials = await resolve_credentials(
+            conversation.connection_id,
+            conversation.meta_connection_id,
+            expected_tenant_id=conversation.tenant_id,
+        )
+    except Exception:
+        log.warning("voice_credentials_failed", conversation_id=str(conversation_id), exc_info=True)
+        return False
+    if not capacidades_de(conversation.channel, provider).voz:
+        return False
+
+    texto_entregado = False
+    if include_text:
+        texto_entregado = await send_to_conversation(conversation_id, text, sender_type=sender_type)
+        if not texto_entregado:
+            return False
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return texto_entregado
+    try:
+        async with get_session() as session:
+            message = Message(
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                direction="outbound",
+                sender_type=sender_type,
+                content="",
+                media_type="audio/tts",
+                media_transcription=text,
+                status="queued",
+                client_message_id=str(uuid.uuid4()),
+            )
+            session.add(message)
+            await session.flush()
+            message_id = message.id
+    except Exception:
+        log.exception("voice_enqueue_failed", conversation_id=str(conversation_id))
+        return texto_entregado
+
+    from core.tasks.outbound_send import outbound_send_task
+
+    outbound_send_task.delay(str(message_id), str(tenant_id))
+    return True
+
+
+async def send_template_to_conversation(
+    conversation_id: uuid.UUID,
+    *,
+    template_name: str,
+    language: str,
+    components: list[dict[str, object]],
+    preview_text: str,
+    sender_type: str = "agent",
+    client_message_id: str | None = None,
+) -> bool:
+    """Encola una plantilla aprobada de WhatsApp (HU-ARCH-13, ADR-0108).
+
+    No mira la ventana de 24 h (una plantilla sale siempre) pero sí la pausa por
+    uso de la API de Meta, igual que el texto. `components` ya viene resuelto;
+    `preview_text` es el cuerpo renderizado que se guarda en `content` para el
+    panel. Devuelve True si quedó encolada.
+    """
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        if conversation is None or conversation.channel == "web":
+            return False
+
+    if await _registrar_si_frenada(conversation, preview_text, sender_type, client_message_id=client_message_id):
+        return False
+
+    if await _registrar_si_pausada(conversation, preview_text, sender_type):
+        return False
+
+    _provider, credentials = await resolve_credentials(
+        conversation.connection_id,
+        conversation.meta_connection_id,
+        expected_tenant_id=conversation.tenant_id,
+        allow_env_fallback=False,
+    )
+    from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
+
+    current_tenant_id = get_current_tenant_id()
+    meta_connection_id = await connection_id_for_phone_number(
+        credentials.get("phone_number_id", ""), current_tenant_id
+    )
+    paused = await is_paused(current_tenant_id, meta_connection_id)
+    if paused:
+        # No se usa el `client_message_id` estable del aviso: así un reintento del
+        # evento (cuando pase la pausa) puede volver a intentarlo (ADR-0108).
+        client_message_id = None
+    async with get_session() as session:
+        message = Message(
+            tenant_id=current_tenant_id,
+            conversation_id=conversation_id,
+            direction="outbound",
+            sender_type=sender_type,
+            content=preview_text,
+            status="failed" if paused else "queued",
+            error_reason=(
+                "Envío pausado: uso de la API de Meta cerca del límite (>=90%)" if paused else None
+            ),
+            client_message_id=client_message_id or str(uuid.uuid4()),
+            template_name=template_name,
+            template_language=language,
+            template_components=list(components),
+        )
+        session.add(message)
+        await session.flush()
+        message_id = message.id
+    if paused:
+        log.error("envio_pausado_por_uso_de_api", conversation_id=str(conversation_id))
+        return False
+
+    from core.tasks.outbound_send import outbound_send_task
+
+    outbound_send_task.delay(str(message_id), str(current_tenant_id))
+    await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=preview_text)
+    return True
+
+
+# Topes de un mensaje interactivo de WhatsApp Cloud: botones de respuesta y lista.
+_MAX_CUERPO_INTERACTIVO = 1024
+_MAX_TITULO_BOTON = 20
+_MAX_ID_BOTON = 256
+_MAX_BOTONES = 3
+_MAX_FILAS_LISTA = 10
+_MAX_ID_FILA = 200
+_MAX_TITULO_FILA = 24
+_MAX_DESCRIPCION_FILA = 72
+_MAX_TEXTO_BOTON_LISTA = 20
+_MAX_PIE = 60
+
+
+def _lista_valida(interactive: dict[str, Any]) -> bool:
+    """`{"type": "list", "body", "button", "rows": [{"id", "title", "description"?}]}`: una sola
+    sección (la primera versión no admite títulos de sección ni varias). Meta exige ids de fila
+    únicos y rechaza textos vacíos, así que se validan aquí y no con un 400 del Graph. Una descripción
+    vacía o en blanco equivale a no tenerla (el adaptador no la envía): no degrada la lista a texto."""
+    boton = interactive.get("button")
+    filas = interactive.get("rows")
+    if not isinstance(boton, str) or not boton.strip() or len(boton) > _MAX_TEXTO_BOTON_LISTA:
+        return False
+    if not isinstance(filas, list) or not 1 <= len(filas) <= _MAX_FILAS_LISTA:
+        return False
+    ids: set[str] = set()
+    for f in filas:
+        if not isinstance(f, dict):
+            return False
+        fid, titulo, descripcion = f.get("id"), f.get("title"), f.get("description")
+        if not isinstance(fid, str) or not fid or len(fid) > _MAX_ID_FILA or fid in ids:
+            return False
+        if not isinstance(titulo, str) or not titulo.strip() or len(titulo) > _MAX_TITULO_FILA:
+            return False
+        if descripcion is not None and (not isinstance(descripcion, str) or len(descripcion) > _MAX_DESCRIPCION_FILA):
+            return False
+        ids.add(fid)
+    return True
+
+
+def interactivo_valido(interactive: dict[str, Any]) -> bool:
+    """¿Cumple los topes de Meta? Se valida antes de encolar: un payload inválido no gasta la
+    cola ni termina escalado por la DLQ."""
+    cuerpo = interactive.get("body")
+    tipo = interactive.get("type")
+    if tipo not in ("button", "list") or not isinstance(cuerpo, str) or not cuerpo.strip():
+        return False
+    if len(cuerpo) > _MAX_CUERPO_INTERACTIVO:
+        return False
+    pie = interactive.get("footer")
+    if pie is not None and (not isinstance(pie, str) or len(pie) > _MAX_PIE):
+        return False
+    if tipo == "list":
+        return _lista_valida(interactive)
+    botones = interactive.get("buttons")
+    if not isinstance(botones, list) or not 1 <= len(botones) <= _MAX_BOTONES:
+        return False
+    return all(
+        isinstance(b, dict)
+        and isinstance(b.get("id"), str) and 0 < len(b["id"]) <= _MAX_ID_BOTON
+        and isinstance(b.get("title"), str) and 0 < len(b["title"]) <= _MAX_TITULO_BOTON
+        for b in botones
+    )
+
+
+_MAX_ETIQUETA_CONTACTO = 64
+
+
+def contacto_valido(interactive: dict[str, Any]) -> bool:
+    """`{"type": "contacto", "body", "button"}`: el botón que pide el teléfono (ADR-0199 §10). No son topes de Meta
+    (Meta no tiene este tipo y `interactivo_valido` lo rechaza): cuerpo no vacío con el tope de siempre y la etiqueta
+    del botón no vacía y corta. Sin opciones: el único botón lo arma el adaptador."""
+    if interactive.get("type") != "contacto":
+        return False
+    cuerpo, etiqueta = interactive.get("body"), interactive.get("button")
+    if not isinstance(cuerpo, str) or not cuerpo.strip() or len(cuerpo) > _MAX_CUERPO_INTERACTIVO:
+        return False
+    if not isinstance(etiqueta, str) or not etiqueta.strip() or len(etiqueta) > _MAX_ETIQUETA_CONTACTO:
+        return False
+    return "buttons" not in interactive and "rows" not in interactive
+
+
+def _interactivo_enviable(interactive: dict[str, Any]) -> bool:
+    if interactive.get("type") == "contacto":
+        return contacto_valido(interactive)
+    return interactivo_valido(interactive)
+
+
+async def send_interactive_to_conversation(
+    conversation_id: uuid.UUID,
+    interactive: dict[str, Any],
+    *,
+    fallback_text: str,
+    sender_type: str = "agent",
+    sin_degradar: bool = False,
+    client_message_id: str | None = None,
+) -> bool:
+    """Encola un mensaje con botones de respuesta, con lista (HU-AOS-09, HU-INMO-03) o con el botón que pide el
+    teléfono (`contacto`, ADR-0199 §10; solo donde la capacidad `pedir_contacto` lo permite).
+
+    La capacidad del canal se decide aquí, no por excepción en el adaptador: solo WhatsApp
+    Cloud (`meta`) con la ventana de 24 h abierta envía interactivos. En cualquier otro caso (web,
+    waweb, Messenger, ventana cerrada, payload fuera de topes) sale `fallback_text` por el camino
+    de texto de siempre, que registra el fallo si la ventana está cerrada. `content` guarda el
+    cuerpo para el panel; `interactive`, el payload. Devuelve True si quedó encolado.
+    El playground (canal `test`) también cuenta como canal con botones: el mensaje queda guardado como entregado.
+    `sin_degradar`: si no se puede mandar el interactivo, no manda `fallback_text` y devuelve False (quien
+    pide un botón para CONFIRMAR algo no puede conformarse con un texto que no confirma nada).
+    `client_message_id`: id estable del mensaje (índice único por negocio) para que un envío repetido no
+    se duplique (opciones directas, HU-OPC-02); sin él, uno nuevo por llamada."""
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+        if conversation is None:
+            return False
+        customer = await session.get(Customer, conversation.customer_id)
+        if customer is None:
+            return False
+    if conversation.tenant_id != get_current_tenant_id():
+        # Defensa en profundidad (además de RLS): la fila sale con el negocio de la conversación.
+        log.error("envio_interactivo_tenant_distinto", conversation_id=str(conversation_id))
+        return False
+    # Antes de degradar a texto: así lo frenado queda registrado una sola vez (HU-ARCH-37).
+    if await _registrar_si_frenada(
+        conversation, str(interactive.get("body") or fallback_text), sender_type,
+        customer=customer, client_message_id=client_message_id,
+    ):
+        return False
+
+    # Qué admite el canal sale de `connection_types.CAPACIDADES_POR_TIPO`. Antes de conocer el proveedor se usa lo
+    # máximo que admite alguno de los del canal; con el proveedor resuelto, la decisión final.
+    capacidad = capacidades_del_canal(conversation.channel)
+    if capacidad.ventana_24h:
+        expira = conversation.service_window_expires_at
+        ventana_abierta = expira is None or expira >= utcnow()
+    else:
+        ventana_abierta = True  # sin ventana de 24 h (playground) siempre se puede escribir
+    if not capacidad.admite(interactive.get("type")) or not ventana_abierta or not _interactivo_enviable(interactive):
+        if sin_degradar:
+            return False
+        return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
+    if is_test_channel(conversation.channel):
+        # Playground: sin proveedor. El interactivo queda guardado como entregado y lo pinta el navegador.
+        return await _guardar_saliente_de_prueba(
+            conversation, str(interactive["body"]), sender_type,
+            interactive=interactive, client_message_id=client_message_id,
+        )
+    provider, credentials = await resolve_credentials(
+        conversation.connection_id, conversation.meta_connection_id, expected_tenant_id=conversation.tenant_id
+    )
+    if not capacidades_de(conversation.channel, provider).admite(interactive.get("type")):
+        if sin_degradar:
+            return False
+        return await send_to_conversation(conversation_id, fallback_text, sender_type=sender_type)
+
+    cuerpo = str(interactive["body"])
+    if await _registrar_si_pausada(conversation, cuerpo, sender_type):
+        return False
+    from core.gateway.meta_usage import connection_id_for_phone_number, is_paused
+
+    current_tenant_id = get_current_tenant_id()
+    meta_connection_id = await connection_id_for_phone_number(credentials.get("phone_number_id", ""), current_tenant_id)
+    paused = await is_paused(current_tenant_id, meta_connection_id)
+    if paused:
+        # Sin el `client_message_id` estable: un reintento cuando pase la pausa puede volver a intentarlo (ADR-0108).
+        client_message_id = None
+    async with get_session() as session:
+        message = Message(
+            tenant_id=current_tenant_id,
+            conversation_id=conversation_id,
+            direction="outbound",
+            sender_type=sender_type,
+            content=cuerpo,
+            status="failed" if paused else "queued",
+            error_reason="Envío pausado: uso de la API de Meta cerca del límite (>=90%)" if paused else None,
+            client_message_id=client_message_id or str(uuid.uuid4()),
+            interactive=dict(interactive),
+        )
+        session.add(message)
+        await session.flush()
+        message_id = message.id
+    if paused:
+        log.error("envio_pausado_por_uso_de_api", conversation_id=str(conversation_id))
+        return False
+
+    from core.tasks.outbound_send import outbound_send_task
+
+    outbound_send_task.delay(str(message_id), str(current_tenant_id))
+    await event_bus.emit(ON_MESSAGE_SENT, conversation_id=conversation_id, content=cuerpo)
+    return True
+
+
+async def send_options_to_conversation(
+    conversation_id: uuid.UUID,
+    clave: str,
+    *,
+    datos: dict[str, Any] | None = None,
+    clave_idempotencia: str | None = None,
+    actor: str = "agent",
+) -> ResultadoEnvio:
+    """Envía la plantilla con opciones `clave` (versión vigente publicada) a la conversación (SPEC-40,
+    ADR-0172, HU-OPC-02): crea el `option_sends` con su contexto y sus payloads firmados y encola por la
+    cascada interactivo (ventana de 24 h abierta) → plantilla de Meta aprobada → texto numerado sin ejecución
+    directa. Con la bandera `opciones_directas` apagada no sale nada. Nunca lanza: devuelve el resultado.
+    Ver `core/gateway/opciones_envio.py`."""
+    from core.gateway.opciones_envio import enviar_opciones
+
+    return await enviar_opciones(
+        conversation_id, clave, datos=datos, clave_idempotencia=clave_idempotencia, actor=actor
+    )
 
 
 async def _behavior_config() -> dict[str, object]:

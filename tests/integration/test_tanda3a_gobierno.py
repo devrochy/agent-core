@@ -113,6 +113,14 @@ def test_within_business_hours() -> None:
     assert within_business_hours(bh, monday_10) is True
     monday_20 = datetime(2026, 9, 28, 3, 0, tzinfo=ZoneInfo("UTC"))  # 22:00 Bogotá domingo -> no
     assert within_business_hours(bh, monday_20) is False
+    # El índice es 0=lunes … 6=domingo (`weekday()`): day=0 no abre el martes ni el domingo.
+    tuesday_10 = datetime(2026, 9, 29, 15, 0, tzinfo=ZoneInfo("UTC"))
+    sunday_10 = datetime(2026, 9, 27, 15, 0, tzinfo=ZoneInfo("UTC"))
+    assert within_business_hours(bh, tuesday_10) is False
+    assert within_business_hours(bh, sunday_10) is False
+    bh_domingo = {"tz": "America/Bogota", "ranges": [{"day": 6, "from": "08:00", "to": "18:00"}]}
+    assert within_business_hours(bh_domingo, sunday_10) is True
+    assert within_business_hours(bh_domingo, monday_10) is False
 
     # Padding: "8:00" se normaliza (hallazgo de auditoría).
     bh_nopad = {"tz": "America/Bogota", "ranges": [{"day": 0, "from": "8:00", "to": "18:00"}]}
@@ -209,6 +217,47 @@ async def test_guardrails_propios_persisten_en_spec(app_client) -> None:
         spec = await load_active_spec()
     rules = (spec.extensions or {}).get("guardrails") or []
     assert {r["kind"] for r in rules} == {"forbidden_phrase", "max_length"}
+
+
+async def test_tools_declarativas_rechazan_dominios_internos(app_client) -> None:
+    """Anti-SSRF (ADR-0052): `allowed_domains` solo acepta FQDN públicos."""
+    import json
+    from urllib.parse import unquote
+
+    from core.agents.spec import load_active_spec
+    from core.shared.tenant import tenant_scope
+
+    tid = await _tenant_id()
+    session = await _login(app_client)
+    headers = {"Cookie": await _switch(app_client, session, tid)}
+
+    def _tools(domains: list[str]) -> str:
+        return json.dumps(
+            [{"name": "consulta", "url": "https://api.negocio.com/x", "allowed_domains": domains}]
+        )
+
+    r = await app_client.post(
+        "/admin/configuracion/habilidades",
+        headers=headers,
+        data={"declarative_tools_json": _tools(["api.negocio.com", "redis", "127.1"])},
+    )
+    assert r.status_code == 303
+    location = unquote(r.headers["location"])
+    assert "flash_type=danger" in location and "redis, 127.1" in location
+    async with tenant_scope(tid):
+        spec = await load_active_spec()
+    assert not any(t["name"] == "consulta" for t in (spec.extensions or {}).get("tools") or [])
+
+    r = await app_client.post(
+        "/admin/configuracion/habilidades",
+        headers=headers,
+        data={"declarative_tools_json": _tools(["API.negocio.com."])},
+    )
+    assert r.status_code == 303 and "flash_type=success" in r.headers["location"]
+    async with tenant_scope(tid):
+        spec = await load_active_spec()
+    [tool] = [t for t in (spec.extensions or {}).get("tools") or [] if t["name"] == "consulta"]
+    assert tool["allowed_domains"] == ["api.negocio.com"]
 
 
 # ---------------------------------------------------------------- 3A.4 evals

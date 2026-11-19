@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentcore-channel-web"
+version = "0.1.0"
+description = "Canal de chat web embebible para agent-core (HU-CHAN-02)"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.entry-points."agent_core.channels"]
+web = "agentcore_channel_web"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agentcore_channel_web*"]

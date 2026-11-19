@@ -19,6 +19,7 @@ import uuid
 import pytest
 
 pytestmark = [
+    pytest.mark.aislamiento,  # subconjunto de las PRs a develop (ADR-0120)
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
@@ -32,7 +33,7 @@ async def _attacker_tenant():
     exige una fila real en `tenant_user`; `TEST_ALPHA_ID`/`test-alpha` NO
     tiene ese vínculo -- solo se usa para queries directas por `tenant_scope`
     en otros tests, nunca a través del panel HTTP)."""
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = f"attacker-{uuid.uuid4().hex[:8]}"
     tid, _steps = await onboard_tenant(name="Attacker", slug=slug, admin_email="admin@local")
@@ -109,6 +110,7 @@ async def test_order_update_status_no_afecta_pedido_de_otro_tenant(app_client, m
                 delivery_method="domicilio",
                 total=50_000,
                 order_seq=order_seq,
+                public_order_number=f"OC-{order_seq:04d}",
                 idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
             )
             session.add(order)

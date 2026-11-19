@@ -12,6 +12,19 @@ import uuid
 ADMIN_EMAIL = "admin@local"
 
 
+def capturar_avisos(monkeypatch, forma=lambda _tenant_id, spec: spec) -> list:
+    """Captura las notificaciones que emiten los disparadores (`notify_standalone`, ADR-0167) en
+    lugar de escribirlas: devuelve la lista de lo emitido, con la forma que pida `forma`."""
+    avisos: list = []
+
+    async def _emitir(tenant_id, spec):
+        avisos.append(forma(tenant_id, spec))
+        return uuid.uuid4()
+
+    monkeypatch.setattr("core.notifications.service.notify_standalone", _emitir)
+    return avisos
+
+
 def uniq(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex[:6]}"
 
@@ -36,3 +49,78 @@ async def api_headers(
         "Authorization": f"Bearer {r.json()['token']}",
         "X-Tenant-Id": str(tenant_id),
     }
+
+
+def stub_meta_pair_ok(monkeypatch) -> None:
+    """Graph confirma que el número es de la WABA y que el token la ve (ADR-0095).
+
+    Las altas (BYOK, manual, Embedded Signup) lo verifican antes de guardar; los tests
+    que ya falsean Graph para el resto del alta lo falsean también aquí."""
+    import core.gateway.meta_asset_claims as claims_mod
+    import core.gateway.meta_byok as byok_mod
+
+    async def _pair_ok(**_kwargs):
+        return {}
+
+    monkeypatch.setattr(claims_mod, "verify_waba_and_phone", _pair_ok)
+    monkeypatch.setattr(byok_mod, "verify_waba_and_phone", _pair_ok)
+
+
+APP_ID_PLATAFORMA = "platform-app-test"
+
+
+class MetaSimulado:
+    """Meta simulado para las altas de Messenger: las Páginas del usuario y qué responde cada suscripción."""
+
+    def __init__(
+        self,
+        paginas: list[dict],
+        *,
+        suscripcion_falla: set[str] | None = None,
+        campos_previos: dict[str, list[str]] | None = None,
+    ):
+        self.paginas = paginas
+        self.suscripcion_falla = suscripcion_falla or set()
+        self.llamadas: list[tuple[str, str, str]] = []
+        # Con `campos_previos` la suscripción tiene estado (como Meta): el POST REEMPLAZA la lista de la Página.
+        self.suscritos: dict[str, list[str]] | None = None if campos_previos is None else dict(campos_previos)
+        self.pedidos: list[str] = []
+
+    async def graph_fetch(self, path, *, token, app_secret, method="GET", body=None, query=None, **_kw):
+        from core.gateway.meta_errors import GraphError
+
+        self.llamadas.append((method, path, token))
+        if path == "/me/accounts":
+            return {"data": self.paginas}
+        page_id = path.split("/")[1]
+        if path.endswith("/subscribed_apps"):
+            if page_id in self.suscripcion_falla:
+                raise GraphError("(#200) Permissions error", category="PERMANENT", code=200)
+            if method == "POST":
+                assert "subscribed_fields" in (query or {})  # el nombre correcto del parámetro
+                self.pedidos.append(query["subscribed_fields"])
+                if self.suscritos is not None:
+                    self.suscritos[page_id] = query["subscribed_fields"].split(",")
+                return {"success": True}
+            if self.suscritos is not None:
+                campos = self.suscritos.get(page_id)
+                return {"data": [{"id": APP_ID_PLATAFORMA, "subscribed_fields": campos}] if campos else []}
+            return {"data": [{"id": APP_ID_PLATAFORMA, "subscribed_fields": ["messages", "messaging_postbacks"]}]}
+        raise AssertionError(f"llamada inesperada a Graph: {method} {path}")
+
+
+def pagina_de_meta(page_id: str, *, tasks=("MESSAGING", "MANAGE"), token: str | None = None) -> dict:
+    """Una Página como la devuelve `GET /me/accounts`."""
+    return {
+        "id": page_id, "name": f"Página {page_id}", "category": "Tienda",
+        "tasks": list(tasks), "access_token": token or f"tok-{page_id}",
+    }
+
+
+def pagina_con_instagram(
+    page_id: str, ig_user_id: str, *, username: str | None = None, tasks=("MESSAGING", "MANAGE"), token: str | None = None
+) -> dict:
+    """Una Página con su cuenta de Instagram vinculada, como la devuelve `GET /me/accounts`."""
+    pagina = pagina_de_meta(page_id, tasks=tasks, token=token)
+    pagina["instagram_business_account"] = {"id": ig_user_id, "username": username or f"cuenta_{ig_user_id}"}
+    return pagina

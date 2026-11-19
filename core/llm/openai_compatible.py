@@ -4,10 +4,13 @@ Cubre: DeepSeek (default del framework), OpenAI, xAI, Groq, Together, etc.
 Sin SDK: httpx nativo (mismo criterio que agent-sale ADR-010 — menos deps,
 control total del payload).
 
-DeepSeek:
-  - deepseek-chat     -> V3, function calling nativo, económico. Default.
-  - deepseek-reasoner -> R1, razonamiento profundo. NO soporta function calling:
-    el difficulty_router solo lo usa en turnos sin tools.
+DeepSeek (V4, vigente desde 2026):
+  - deepseek-flash -> V4.1-Flash. Function calling nativo. `thinking` se apaga
+    explícitamente para el turno normal y se enciende para razonamiento.
+  - deepseek-v4-pro -> tier superior (más caro); se elige tras evaluación.
+  Los nombres viejos `deepseek-chat` / `deepseek-reasoner` se discontinuaron el
+  2026-07-24; `resolve_thinking_for_model` los mapea por compatibilidad y se
+  registra un aviso.
 """
 
 from __future__ import annotations
@@ -38,21 +41,89 @@ MAX_RETRIES = 2
 RETRY_BACKOFF_S = 1.5
 
 # USD por millón de tokens (input, output) — actualizar si cambia el pricing.
+# Fuente: DeepSeek pricing 2026-07-24; OpenAI 2026. (verificado 2026-10-02)
 PRICING: dict[str, tuple[float, float]] = {
+    "deepseek-flash": (0.14, 0.28),
+    "deepseek-v4-flash": (0.14, 0.28),
+    "deepseek-v4-pro": (0.435, 0.87),
+    # Nombres discontinuados el 2026-07-24: se conservan solo para costear
+    # configs viejas mientras se migran, nunca como valor por defecto.
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
     "gpt-4o": (2.50, 10.00),
     "gpt-4o-mini": (0.15, 0.60),
 }
 
+# IDs que DeepSeek retiró el 2026-07-24. Cualquier config que los use se avisa
+# (y, si son el default, se sustituye por el vigente).
+RETIRED_DEEPSEEK_MODELS = frozenset({"deepseek-chat", "deepseek-reasoner"})
+
+
+def resolve_thinking_for_model(model: str, thinking: bool) -> bool:
+    """Traduce el modo deseado según el ID de modelo.
+
+    - `deepseek-v4-pro`: thinking opcional; se respeta `thinking`.
+    - `deepseek-flash`/`deepseek-v4-*`/desconocido compatible: se respeta.
+    - Viejos alias (discontinuados): se avisa y se devuelve su modo histórico
+      (chat=sin thinking, reasoner=con thinking) solo para no romper en seco.
+    """
+    if model in RETIRED_DEEPSEEK_MODELS:
+        log.warning(
+            "llm_model_discontinuado",
+            model=model,
+            note="DeepSeek discontinuó este ID el 2026-07-24; migrar a deepseek-flash (P-05).",
+        )
+        return model == "deepseek-reasoner"
+    return thinking
+
+
+def _tokens_cacheados(usage: dict[str, Any]) -> int:
+    """Tokens de entrada leídos de la caché del proveedor: DeepSeek los da en
+    `prompt_cache_hit_tokens` y OpenAI en `prompt_tokens_details.cached_tokens`."""
+    if usage.get("prompt_cache_hit_tokens") is not None:
+        return int(usage.get("prompt_cache_hit_tokens") or 0)
+    detalle = usage.get("prompt_tokens_details")
+    return int(detalle.get("cached_tokens") or 0) if isinstance(detalle, dict) else 0
+
+
+class _NoReintentar(LLMProviderError):
+    """Un 4xx (salvo 429) con `reintentar_4xx = False`: el request está mal y repetirlo no lo
+    arregla. Lo usa la política de riesgo alto (HU-AOS-09) para degradar rápido."""
+
 
 class OpenAICompatibleProvider(BaseLLMProvider):
-    def __init__(self, api_key: str, model: str, base_url: str, provider_name: str = "openai_compatible") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str,
+        provider_name: str = "openai_compatible",
+        thinking: bool | None = None,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.provider_name = provider_name
         self.pricing_per_mtok = PRICING.get(model, (0.0, 0.0))
+        # `None` = no enviar el campo (proveedores que no lo conocen, como OpenAI).
+        self.thinking = thinking
+        # Con False, un 4xx distinto de 429 falla sin reintentos (HU-AOS-09). Por defecto, como
+        # siempre: se reintenta todo error HTTP.
+        self.reintentar_4xx = True
+
+    def _thinking_payload(self) -> dict[str, Any]:
+        if self.thinking is None or self.provider_name != "deepseek":
+            return {}
+        return {"thinking": {"type": "enabled" if self.thinking else "disabled"}}
+
+    def _razonamiento(self, msg: LLMMessage) -> dict[str, Any]:
+        """DeepSeek con thinking y tools exige devolver `reasoning_content` en las vueltas
+        siguientes del turno (si no, responde 400). Solo va a DeepSeek con thinking encendido y si
+        el mensaje lo trae: otro proveedor no conoce el campo, y sin la política de riesgo alto
+        (HU-AOS-09) el request es idéntico al de siempre."""
+        if self.provider_name != "deepseek" or not self.thinking:
+            return {}
+        return {"reasoning_content": msg.reasoning_content} if msg.role == "assistant" and msg.reasoning_content else {}
 
     # ------------------------------------------------------------ serialización
     def _serialize_messages(self, system_blocks: list[str], messages: list[LLMMessage]) -> list[dict[str, Any]]:
@@ -77,10 +148,11 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                             }
                             for tc in msg.tool_calls
                         ],
+                        **self._razonamiento(msg),
                     }
                 )
             else:
-                out.append({"role": msg.role, "content": msg.content})
+                out.append({"role": msg.role, "content": msg.content, **self._razonamiento(msg)})
         return out
 
     @staticmethod
@@ -106,6 +178,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             "model": self.model,
             "messages": self._serialize_messages(system_blocks, messages),
             "max_tokens": max_tokens,
+            **self._thinking_payload(),
         }
         if temperature is not None:
             payload["temperature"] = temperature
@@ -143,6 +216,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             stop_reason = "end_turn"
 
         usage = data.get("usage", {})
+        razonamiento = message.get("reasoning_content")
         return LLMResponse(
             content=message.get("content") or "",
             stop_reason=stop_reason,
@@ -150,10 +224,12 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             usage=LLMUsageInfo(
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
-                cache_read_tokens=usage.get("prompt_cache_hit_tokens", 0),
+                cache_read_tokens=_tokens_cacheados(usage),
+                reasoning_tokens=int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0),
             ),
             model=self.model,
             latency_ms=latency_ms,
+            reasoning_content=razonamiento if isinstance(razonamiento, str) else "",
         )
 
     # ------------------------------------------------------------ stream
@@ -170,6 +246,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
             "messages": self._serialize_messages(system_blocks, messages),
             "max_tokens": max_tokens,
             "stream": True,
+            **self._thinking_payload(),
         }
         if temperature is not None:
             payload["temperature"] = temperature
@@ -207,11 +284,15 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                     raise LLMProviderError(
                         f"{self.provider_name} HTTP {response.status_code}: {response.text[:300]}"
                     )
+                if not self.reintentar_4xx and 400 <= response.status_code < 500:
+                    raise _NoReintentar(f"{self.provider_name} HTTP {response.status_code}: {response.text[:300]}")
                 response.raise_for_status()
                 result = response.json()
                 if not isinstance(result, dict):
                     raise LLMProviderError(f"Respuesta no-JSON de {self.provider_name}")
                 return result
+            except _NoReintentar:
+                raise
             except (httpx.HTTPError, LLMProviderError) as exc:
                 last_error = exc
                 if attempt < MAX_RETRIES:

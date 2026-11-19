@@ -25,14 +25,6 @@
             <textarea name="brand_voice" class="form-control" rows="3"
               placeholder="Misión, valores, frases características...">{{ s.brand_voice }}</textarea>
           </div>
-          <div class="mb-3">
-            <label class="form-label">Tono</label>
-            <select name="tono" class="form-select">
-              {% for t in ['calido', 'formal', 'divertido'] %}
-              <option value="{{ t }}" {{ 'selected' if behavior.tono == t }}>{{ t }}</option>
-              {% endfor %}
-            </select>
-          </div>
           <hr>
           <p class="text-secondary small mb-2">Personalidad del agente (AgentSpec)</p>
           <div class="row g-3">

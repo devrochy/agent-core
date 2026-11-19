@@ -114,8 +114,12 @@ def upgrade() -> None:
     for table in TABLES:
         op.create_index(f"ix_{table}_tenant", table, ["tenant_id"])
 
-    # 6. GRANT al rol de runtime (no es dueño de estas tablas; RLS debe aplicar)
-    op.execute("grant select, insert, update, delete on all tables in schema public to app_runtime")
+    # 6. GRANT al rol de runtime (no es dueño de estas tablas; RLS debe aplicar). Solo sobre las
+    # tablas de este pack: antes era `on all tables in schema public` y, en una base nueva (los packs
+    # migran después del head del core), deshacía los REVOKE del core (p. ej. 0066 y 0068-0069 de
+    # HU-AOS-02). En las bases donde ya corrió, este cambio no tiene efecto.
+    for table in [*TABLES, "crm_order_counters"]:
+        op.execute(f"grant select, insert, update, delete on {table} to app_runtime")
     op.execute("grant usage, select on all sequences in schema public to app_runtime")
 
 

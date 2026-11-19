@@ -17,6 +17,7 @@ from core.api.deps import Principal
 from core.api.errors import ApiError
 from core.api.pagination import PageParams, build_page
 from core.db.models import Admin
+from core.shared.tenant import NegociosDeCuenta
 
 
 def _request(headers: dict[str, str] | None = None) -> Request:
@@ -83,20 +84,22 @@ async def test_resolve_admin_lee_cookie_y_bearer(monkeypatch) -> None:
 
 
 # ------------------------------------------------------------------ get_principal
-async def _principal_for(request: Request, x_tenant_id: str | None, monkeypatch, tenants):
+async def _principal_for(
+    request: Request, x_tenant_id: str | None, monkeypatch, tenants, suspendidos=None
+):
     admin = _admin("owner")
 
     async def fake_admin_from_token(_token: str):
         return admin
 
-    async def fake_admin_tenants(_admin_id):
-        return tenants
+    async def fake_negocios(_admin):
+        return NegociosDeCuenta(operativos=list(tenants), suspendidos=set(suspendidos or ()))
 
     async def fake_permissions_for(_admin, _sections):
         return {"dashboard": "read"}
 
     monkeypatch.setattr(deps, "admin_from_token", fake_admin_from_token)
-    monkeypatch.setattr(deps, "admin_tenants", fake_admin_tenants)
+    monkeypatch.setattr(deps, "negocios_de_cuenta", fake_negocios)
     monkeypatch.setattr(deps, "permissions_for", fake_permissions_for)
 
     agen = deps.get_principal(request, x_tenant_id=x_tenant_id)
@@ -130,6 +133,32 @@ async def test_principal_tenant_ajeno_es_403(monkeypatch) -> None:
             _request({"authorization": "Bearer t"}), str(uuid.uuid4()), monkeypatch, tenants
         )
     assert exc.value.status_code == 403
+
+
+async def test_principal_negocio_suspendido_es_403_con_codigo(monkeypatch) -> None:
+    """ADR-0136: un dueño cuyo único negocio está suspendido no usa la sesión."""
+    suspendido = uuid.uuid4()
+    with pytest.raises(ApiError) as exc:
+        await _principal_for(
+            _request({"authorization": "Bearer t"}), None, monkeypatch, [], suspendidos={suspendido}
+        )
+    assert exc.value.status_code == 403
+    assert exc.value.code == "tenant_suspended"
+
+
+async def test_principal_header_de_negocio_suspendido_es_403_y_el_activo_sigue(monkeypatch) -> None:
+    activo, suspendido = uuid.uuid4(), uuid.uuid4()
+    tenants = [(activo, "Activo", "owner")]
+    with pytest.raises(ApiError) as exc:
+        await _principal_for(
+            _request({"authorization": "Bearer t"}), str(suspendido), monkeypatch, tenants, {suspendido}
+        )
+    assert exc.value.code == "tenant_suspended"
+    principal = await _principal_for(
+        _request({"authorization": "Bearer t"}), None, monkeypatch, tenants, {suspendido}
+    )
+    assert principal.tenant_id == activo
+    assert [t[0] for t in principal.tenants] == [activo]
 
 
 async def test_principal_master_sin_tenants(monkeypatch) -> None:

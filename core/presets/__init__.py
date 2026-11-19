@@ -1,0 +1,351 @@
+"""Presets de agente (ADR-0110, HU-FWK-03).
+
+Un preset es un **manifiesto corto** (`core/presets/<id>.json`) que referencia packs;
+cada pack aporta su **fragmento** por vertical (`packages/pack-x/presets/<vertical>.json`:
+config sin secretos + datos de ejemplo para `seed_data`). `apply_preset` compone las dos
+cosas sobre un negocio, sin copiar nada de los packs y sin prompts.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Annotated, Any, Literal
+
+from agentcore_contracts.contracts import Tone
+from agentcore_contracts.kernelspec import RoutingWhen
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+PRESETS_DIR = Path(__file__).resolve().parent
+PLANTILLAS_DIR = PRESETS_DIR / "plantillas"
+REPO_ROOT = PRESETS_DIR.parent.parent
+_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
+
+
+class PresetError(ValueError):
+    """El preset o un fragmento no es válido, o no se puede aplicar al negocio."""
+
+
+class PresetPersona(BaseModel):
+    """Campos estructurados del `AgentSpec.persona`: nada de texto libre (invariante 3)."""
+
+    model_config = ConfigDict(extra="forbid")
+    tone: Tone | None = None
+    warmth: int | None = Field(default=None, ge=0, le=5)
+    emojis: Literal["none", "sparse", "free"] | None = None
+    maxLength: int | None = Field(default=None, ge=80, le=2000)
+
+
+class PresetAppSettings(BaseModel):
+    """Claves de `app_settings` que un preset puede fijar. `extra="forbid"`: una clave que no está acá
+    (por ejemplo, una clave de comportamiento inventada) falla al cargar nombrando la clave."""
+
+    model_config = ConfigDict(extra="forbid")
+    split_style: str | None = None
+    language: str | None = Field(default=None, max_length=8)
+    currency: str | None = Field(default=None, max_length=3)
+    timezone: str | None = Field(default=None, max_length=64)
+
+    @field_validator("split_style")
+    @classmethod
+    def _estilo_conocido(cls, value: str | None) -> str | None:
+        from core.gateway.message_splitter import CAPS
+
+        if value is not None and value not in CAPS:
+            raise ValueError(f"split_style «{value}» no es válido: usa uno de {', '.join(CAPS)}")
+        return value
+
+
+class PresetManifest(BaseModel):
+    """Manifiesto de un preset (ADR-0110 § 1). `extra="forbid"`: un campo desconocido
+    (por ejemplo, un prompt colado) es un error de carga, no un dato."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    version: int = Field(ge=1)
+    nombre: str = Field(max_length=80)
+    descripcion: str = Field(default="", max_length=300)
+    # Cómo lo llama un cliente ("tienda", "pizzería"): el resolver del tipo de negocio de un plan
+    # (pack-commerce, adenda 2026-10-13 de ADR-0113) lo lleva al id del preset. Dato del preset.
+    sinonimos: list[Annotated[str, Field(min_length=2, max_length=40)]] = Field(default_factory=list, max_length=40)
+    plan_minimo: str
+    packs: list[str] = Field(min_length=1)
+    playbooks: list[str] = Field(default_factory=list)
+    persona: PresetPersona = Field(default_factory=PresetPersona)
+    app_settings: PresetAppSettings = Field(default_factory=PresetAppSettings)
+    conexiones_requeridas: list[str] = Field(default_factory=list)
+    pasos_de_activacion: list[str] = Field(default_factory=list)
+    golden_set: str | None = None
+    # HU-SH-01: proveedor de suscripciones que fija el preset (HU-SUB-09); debe ser
+    # uno de sus packs. Solo se guarda si queda habilitado.
+    proveedor_suscripciones: str | None = None
+    # Presets v2 (ADR-0139, HU-AOS-46): keys de las plantillas de agente especialista
+    # (`core/presets/plantillas/<key>.json`) que el preset instala en el negocio.
+    # Sin `agentes` el manifiesto es v1 y no instala especialistas.
+    agentes: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{2,40}$")]] = Field(default_factory=list, max_length=10)
+
+    @property
+    def es_v2(self) -> bool:
+        return bool(self.agentes)
+
+
+class ReglaDePlantilla(BaseModel):
+    """Regla del Coordinador que aporta una plantilla: `when` del contrato `kernelspec/1`
+    (DSL sin regex); el destino es siempre el agente de la plantilla."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^preset_[a-z0-9_]{1,33}$")
+    when: RoutingWhen
+
+
+class OpcionDePregunta(BaseModel):
+    """Una respuesta posible del guion. Su efecto es solo estructural: qué superpoderes de la
+    plantilla quedan en el agente y el largo máximo de su respuesta. Nunca texto para el prompt."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    texto: str = Field(min_length=1, max_length=120)
+    ayuda: str = Field(default="", max_length=200)
+    # Subconjunto de `PlantillaAgente.procedimientos`; vacío = esta respuesta no cambia los superpoderes.
+    procedimientos: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$")]] = Field(
+        default_factory=list, max_length=20
+    )
+    # `AgentSpec.persona.maxLength` del agente (tope blando); `None` = el del General.
+    largo_maximo: int | None = Field(default=None, ge=100, le=2000)
+
+
+class PreguntaDePlantilla(BaseModel):
+    """Pregunta del asistente de creación (HU-AOS-48, SPEC-39). El servidor es la fuente de verdad:
+    el panel y la APK pintan lo que reciben. `opcion` elige entre `opciones`; `texto` es el nombre
+    del agente. Solo se pregunta lo que decide algo: catálogo, citas y cartera se verifican con los
+    requisitos de la plantilla, no se preguntan."""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[a-z0-9_]{1,40}$")
+    texto: str = Field(min_length=1, max_length=160)
+    ayuda: str = Field(default="", max_length=300)
+    tipo: Literal["opcion", "texto"] = "opcion"
+    opciones: list[OpcionDePregunta] = Field(default_factory=list, max_length=8)
+    # Id de la opción que se aplica si el cliente no responde (obligatoria en las de tipo `opcion`).
+    defecto: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,40}$")
+
+    @model_validator(mode="after")
+    def _coherente(self) -> PreguntaDePlantilla:
+        if self.tipo == "texto":
+            if self.opciones or self.defecto is not None:
+                raise ValueError("una pregunta de texto no lleva opciones ni valor por defecto")
+            return self
+        ids = [o.id for o in self.opciones]
+        if len(ids) < 2:
+            raise ValueError(f"la pregunta {self.id!r} necesita al menos dos opciones")
+        if len(set(ids)) != len(ids):
+            raise ValueError(f"la pregunta {self.id!r} repite opciones")
+        if self.defecto not in ids:
+            raise ValueError(f"la pregunta {self.id!r} necesita un `defecto` que sea una de sus opciones")
+        return self
+
+
+class PlantillaAgente(BaseModel):
+    """Plantilla de un agente especialista «para un fin» (ADR-0139). Es configuración del core,
+    como el manifiesto: solo datos (nombres, ids y frases de enrutamiento), nunca prompts. El
+    contenido `agentspec/3` del agente se DERIVA al aplicarla (`core/presets/agentes.py`)."""
+
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(pattern=r"^[a-z0-9_]{2,40}$")
+    nombre: str = Field(min_length=1, max_length=80)
+    # Metadato del agente (`agents.description` y `description` del agentspec/3): no entra al prompt.
+    descripcion: str = Field(default="", max_length=300)
+    # Sección del producto a la que pertenece el agente (menú: Ventas, Agenda, Cobranza, Suscripciones;
+    # HU-AOS-51, SPEC-39). Es solo metadato de catálogo: el asistente de creación la muestra.
+    seccion: str = Field(default="", max_length=40)
+    # Todas tienen que estar habilitadas en el negocio; si no, la plantilla no se instala.
+    habilidades: list[str] = Field(min_length=1, max_length=10)
+    # Se suman si están habilitadas (p. ej. pagos para Ventas, que suele quedar pendiente de claves).
+    opcionales: list[str] = Field(default_factory=list, max_length=10)
+    # Acota una habilidad opcional a algunas de sus acciones (HU-AOS-22): p. ej. Agenda toma solo
+    # `crear_lead` de pack_commerce, no la caja de ventas. Una opcional sin entrada entra completa.
+    acciones_opcionales: dict[
+        str, list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,64}$")]]
+    ] = Field(default_factory=dict, max_length=10)
+    # Captar leads (ADR-0193 §2): el agente nace con las acciones del grupo `leads` del core y asegura el lead del
+    # cliente en cada conversación. Es independiente de las habilidades (no hace falta comercio).
+    captar_leads: bool = False
+    # Ids `procedure/1` publicados por esas habilidades: el agente los declara con `^M.0`.
+    procedimientos: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$")]] = Field(
+        min_length=1, max_length=20
+    )
+    playbooks: list[Annotated[str, Field(pattern=r"^[a-zA-Z0-9_-]{1,80}$")]] = Field(default_factory=list, max_length=20)
+    reglas: list[ReglaDePlantilla] = Field(default_factory=list, max_length=5)
+    # Datos de prueba del agente (HU-QA-10, ADR-0146) cuando no salen de sus habilidades:
+    # `<pack>.<modo>` de una forma que declara otro pack (p. ej. `pack_subscriptions.planes`).
+    datos_de_prueba: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$")
+    # Guion del asistente de creación (HU-AOS-48): máximo 10 pasos entre preguntas y verificaciones;
+    # el asistente suma identidad, conexión, verificación del contenido y publicación.
+    preguntas: list[PreguntaDePlantilla] = Field(default_factory=list, max_length=8)
+    # Ids de preguntas que el guion ya no hace (SPEC-43, HU-COM-17: `que_vendes` de Ventas). Los
+    # clientes viejos (panel y APK de antes) todavía las envían: el servidor las IGNORA en vez de
+    # rechazarlas con 422 y no cambian nada. Nunca coinciden con una pregunta vigente.
+    preguntas_retiradas: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{1,40}$")]] = Field(
+        default_factory=list, max_length=8
+    )
+
+    @model_validator(mode="after")
+    def _coherente(self) -> PlantillaAgente:
+        from core.agents.claves import KEYS_RESERVADAS
+
+        if self.key in KEYS_RESERVADAS:
+            raise ValueError(f"la key {self.key!r} está reservada para los agentes del sistema")
+        fuera = sorted(set(self.acciones_opcionales) - (set(self.opcionales) - set(self.habilidades)))
+        if fuera:
+            raise ValueError(f"acciones_opcionales de habilidades que no son opcionales (o que son obligatorias): {fuera}")
+        if any(not acciones for acciones in self.acciones_opcionales.values()):
+            raise ValueError("acciones_opcionales: cada habilidad lista al menos una acción")
+        propias = {*self.habilidades, *self.opcionales}
+        ajenos = sorted(p for p in self.procedimientos if p.split(".", 1)[0] not in propias)
+        if ajenos:
+            raise ValueError(f"procedimientos de habilidades que la plantilla no declara: {ajenos}")
+        ids = [q.id for q in self.preguntas]
+        if len(set(ids)) != len(ids):
+            raise ValueError("preguntas con id repetido")
+        repetidas = sorted(set(ids) & set(self.preguntas_retiradas))
+        if repetidas:
+            raise ValueError(f"preguntas vigentes y retiradas a la vez: {repetidas}")
+        if sum(q.tipo == "texto" for q in self.preguntas) > 1:
+            raise ValueError("solo una pregunta de texto (el nombre del agente)")
+        for q in self.preguntas:
+            for o in q.opciones:
+                fuera = sorted(set(o.procedimientos) - set(self.procedimientos))
+                if fuera:
+                    raise ValueError(f"la opción {o.id!r} de {q.id!r} nombra procedimientos que la plantilla no tiene: {fuera}")
+        return self
+
+
+def load_plantilla(key: str) -> PlantillaAgente:
+    if not re.fullmatch(r"[a-z0-9_]{2,40}", key):
+        raise PresetError(f"Key de plantilla inválida: {key!r}")
+    path = PLANTILLAS_DIR / f"{key}.json"
+    if not path.exists():
+        raise PresetError(f"No existe la plantilla de agente {key!r}")
+    try:
+        plantilla = PlantillaAgente.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    except (ValidationError, json.JSONDecodeError) as exc:
+        raise PresetError(f"Plantilla inválida {key!r}: {exc}") from exc
+    if plantilla.key != key:
+        raise PresetError(f"La plantilla {path.name} declara key {plantilla.key!r}")
+    return plantilla
+
+
+def plantillas_del_preset(manifest: PresetManifest) -> list[PlantillaAgente]:
+    """Las plantillas del manifiesto, validadas; una que no existe es error de carga."""
+    plantillas = [load_plantilla(k) for k in manifest.agentes]
+    reglas = [r.id for p in plantillas for r in p.reglas]
+    if len(reglas) != len(set(reglas)):
+        raise PresetError(f"El preset {manifest.id} repite ids de reglas del Coordinador")
+    return plantillas
+
+
+@dataclass(frozen=True)
+class PackFragment:
+    pack_id: str
+    vertical: str
+    config: dict[str, Any] = field(default_factory=dict)
+    seed: dict[str, Any] = field(default_factory=dict)
+
+
+def _check_id(value: str, que: str) -> None:
+    if not _ID_RE.match(value):
+        raise PresetError(f"{que} inválido: {value!r}")
+
+
+def load_preset(preset_id: str) -> PresetManifest:
+    _check_id(preset_id, "Id de preset")
+    path = PRESETS_DIR / f"{preset_id}.json"
+    if not path.exists():
+        raise PresetError(f"No existe el preset {preset_id!r}")
+    try:
+        manifest = PresetManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    except (ValidationError, json.JSONDecodeError) as exc:
+        raise PresetError(f"Manifiesto inválido {preset_id!r}: {exc}") from exc
+    if manifest.id != preset_id:
+        raise PresetError(f"El manifiesto {path.name} declara id {manifest.id!r}")
+    for plantilla in plantillas_del_preset(manifest):
+        faltan = sorted(set(plantilla.habilidades) - set(manifest.packs))
+        if faltan:
+            raise PresetError(f"El preset {preset_id}: la plantilla {plantilla.key!r} usa {faltan}, que no están en sus packs")
+    return manifest
+
+
+def list_presets() -> list[PresetManifest]:
+    return [load_preset(p.stem) for p in sorted(PRESETS_DIR.glob("*.json"))]
+
+
+def _pack_dir(pack_id: str) -> Path | None:
+    for pattern in ("packages/pack-*", "plugins/*"):
+        for folder in REPO_ROOT.glob(pattern):
+            if folder.name.replace("-", "_") == pack_id:
+                return folder
+    return None
+
+
+def _secret_fields(config_schema: Any) -> set[str]:
+    if config_schema is None:
+        return set()
+    return {
+        name
+        for name, info in config_schema.model_fields.items()
+        if info.annotation is SecretStr or "SecretStr" in str(info.annotation)
+    }
+
+
+def load_fragment(pack_id: str, vertical: str, config_schema: Any = None) -> PackFragment:
+    """Fragmento del pack para la vertical. Sin archivo → fragmento vacío (defaults).
+
+    Rechaza claves de config que el `config_schema` del pack no declara y cualquier
+    campo secreto (`SecretStr`): los secretos los carga el negocio, nunca un preset.
+    """
+    _check_id(vertical, "Vertical")
+    folder = _pack_dir(pack_id)
+    path = folder / "presets" / f"{vertical}.json" if folder else None
+    if path is None or not path.exists():
+        return PackFragment(pack_id=pack_id, vertical=vertical)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise PresetError(f"Fragmento inválido {pack_id}/{vertical}: {exc}") from exc
+    if not isinstance(raw, dict) or set(raw) - {"config", "seed"}:
+        raise PresetError(f"Fragmento {pack_id}/{vertical}: solo admite 'config' y 'seed'")
+    config = dict(raw.get("config") or {})
+    if config_schema is not None:
+        desconocidas = set(config) - set(config_schema.model_fields)
+        if desconocidas:
+            raise PresetError(f"Fragmento {pack_id}/{vertical}: claves desconocidas {sorted(desconocidas)}")
+        secretas = set(config) & _secret_fields(config_schema)
+        if secretas:
+            raise PresetError(f"Fragmento {pack_id}/{vertical}: no puede traer secretos {sorted(secretas)}")
+    return PackFragment(pack_id=pack_id, vertical=vertical, config=config, seed=dict(raw.get("seed") or {}))
+
+
+__all__ = [
+    "OpcionDePregunta",
+    "PackFragment",
+    "PlantillaAgente",
+    "PreguntaDePlantilla",
+    "PresetError",
+    "PresetManifest",
+    "ReglaDePlantilla",
+    "list_presets",
+    "load_fragment",
+    "load_plantilla",
+    "load_preset",
+    "plantillas_del_preset",
+]

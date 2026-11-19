@@ -1,0 +1,516 @@
+"""Avisos por evento con plantillas de WhatsApp (HU-ARCH-13, ADR-0108).
+
+Un aviso (cobro, recordatorio, seguimiento) sale así:
+
+- ventana de 24 h abierta → texto de respaldo (más barato que una plantilla);
+- ventana cerrada y el evento mapeado a una plantilla APROBADA de la WABA de la
+  conversación → la plantilla, con las variables resueltas del contexto del evento;
+- ventana cerrada sin mapeo (o la plantilla no está aprobada) → se registra un
+  mensaje `failed` con `error_reason = "sin_plantilla"` y el panel lo muestra.
+
+Eso es para WhatsApp. Con la bandera `avisos_por_canal` del negocio encendida (ADR-0178 D2, `avisos_canal`), el aviso
+también sale como texto por QR, chat web, Messenger o Instagram, con el texto que el negocio definió para ese canal
+(`fallback_text_by_channel`); sin ese texto, o si la política del canal lo impide, se omite con log y métrica. Con la
+bandera apagada (`por_canal=False`, el valor por defecto) nada de eso existe: el camino es el de antes, byte a byte.
+
+Las variables salen SOLO del contexto que arma el servidor a partir del evento y de
+la base (rutas permitidas por evento en `EVENTOS`). Nunca del texto del LLM.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy import select
+
+from core.db.models import AppSettings, Conversation, Message, MessageTemplate, WabaAccount
+from core.db.session import get_session
+from core.kernel.mensajes import (
+    EVENTOS,
+    LLAVE_DE_RUTA,
+    MAX_PARAM,  # noqa: F401  (reexport: nombre público desde ADR-0108)
+    DatoFaltante,
+    RutaNoPermitida,
+    clean_param,
+    componente,
+    placeholders_del_cuerpo,
+    render_meta,
+    resolver_ruta,
+    tiene_variables_fuera_del_cuerpo,
+)
+from core.kernel.mensajes import render_fallback as _render_fallback
+from core.shared.exceptions import OutboundWindowExpiredError
+from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
+
+log = get_logger(__name__)
+
+SIN_PLANTILLA = "sin_plantilla"
+
+class NoticeConfigError(ValueError):
+    """La configuración de un evento no es válida (ruta, plantilla o variables)."""
+
+
+class NoticeNotSentError(RuntimeError):
+    """El aviso no se pudo encolar (pausa por uso, carrera con la ventana): se
+    lanza para que el outbox reintente el evento con backoff (ADR-0107)."""
+
+
+@dataclass(frozen=True)
+class NoticeResult:
+    # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada" | "omitido_canal" | "opciones"
+    # | "negocio_pausado" | "cliente_pausado" (HU-ARCH-37: el aviso no sale y no se reintenta)
+    # ("omitido_canal": solo con la bandera `avisos_por_canal`, un canal de texto sin texto definido o con la política en
+    # contra. "opciones": solo con esa bandera y la de `opciones_directas`, el aviso salió como plantilla con opciones,
+    # ADR-0178 D3; `detalle` es la vía: interactivo, plantilla o texto).
+    modo: str
+    detalle: str = ""
+
+
+# ---------------------------------------------------------------- plantillas
+def template_placeholders(template_components: Any) -> list[str]:
+    """Placeholders del cuerpo en orden de aparición, sin repetir ("1", "2" o nombres)."""
+    return placeholders_del_cuerpo(template_components)
+
+
+def template_has_non_body_variables(template_components: Any) -> bool:
+    """v1 solo resuelve variables del cuerpo: cabecera o botones con variables no se mapean."""
+    return tiene_variables_fuera_del_cuerpo(template_components)
+
+
+def build_components(template: MessageTemplate, values: dict[str, str]) -> list[dict[str, Any]]:
+    """Componentes de Graph para el cuerpo. `values`: placeholder → texto."""
+    placeholders = template_placeholders(template.components)
+    if not placeholders:
+        return []
+    named = (template.parameter_format or "").upper() == "NAMED"
+    parametros = []
+    for nombre in placeholders:
+        parametro: dict[str, Any] = {"type": "text", "text": clean_param(values[nombre])}
+        if named:
+            parametro["parameter_name"] = nombre
+        parametros.append(parametro)
+    return [{"type": "body", "parameters": parametros}]
+
+
+def render_body(template: MessageTemplate, values: dict[str, str]) -> str:
+    body = componente(template.components, "BODY")
+    return render_meta(str((body or {}).get("text", "")), values)
+
+
+# ---------------------------------------------------------------- variables
+def resolve_values(
+    event_key: str, variables: list[str] | dict[str, str], placeholders: list[str], context: dict[str, Any]
+) -> dict[str, str]:
+    """placeholder → valor, solo con rutas permitidas del evento. Lanza
+    `NoticeConfigError` si una ruta no está permitida o falta el dato."""
+    permitidas = EVENTOS.get(event_key, {})
+    if isinstance(variables, dict):
+        mapeo = {str(k): str(v) for k, v in variables.items()}
+    else:
+        mapeo = {nombre: str(ruta) for nombre, ruta in zip(placeholders, variables, strict=False)}
+    if set(mapeo) != set(placeholders):
+        raise NoticeConfigError(
+            f"La plantilla pide {len(placeholders)} variables y el mapeo tiene {len(mapeo)}."
+        )
+    valores: dict[str, str] = {}
+    for nombre in placeholders:
+        ruta = mapeo[nombre]
+        try:
+            valores[nombre] = resolver_ruta(context, ruta, permitidas)
+        except RutaNoPermitida:
+            raise NoticeConfigError(f"La ruta «{ruta}» no está permitida para {event_key}.") from None
+        except DatoFaltante:
+            raise NoticeConfigError(f"Falta el dato «{ruta}» en el evento.") from None
+    return valores
+
+
+def render_fallback(texto: str, context: dict[str, Any], event_key: str) -> str:
+    """Texto de respaldo con `{ruta}` reemplazadas por datos del evento (solo rutas permitidas)."""
+    return _render_fallback(texto, context, EVENTOS.get(event_key, {}))
+
+
+# ---------------------------------------------------------------- config
+async def load_templates_map(tenant_id: uuid.UUID) -> dict[str, Any]:
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                )
+            )
+        ).scalar_one_or_none()
+    return dict((app_settings.message_templates_map if app_settings else None) or {})
+
+
+async def approved_template_for(
+    conversation: Conversation, name: str, language: str
+) -> MessageTemplate | None:
+    """Plantilla APROBADA con ese nombre e idioma en la WABA de la conexión de la
+    conversación. Sin conexión de Meta no hay plantillas. La cuenta es la misma con la que
+    salen las credenciales (ADR-0115 §2): la de la conexión canónica si la hay."""
+    from core.gateway.meta_connection_state import cuenta_de_plantillas_de_conversacion
+
+    cuenta = await cuenta_de_plantillas_de_conversacion(conversation)
+    if cuenta is None:
+        return None
+    async with get_session() as session:
+        return (
+            await session.execute(
+                select(MessageTemplate)
+                .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
+                .where(
+                    WabaAccount.connection_id == cuenta,
+                    WabaAccount.deleted_at.is_(None),
+                    WabaAccount.tenant_id == conversation.tenant_id,
+                    MessageTemplate.tenant_id == conversation.tenant_id,
+                    MessageTemplate.name == name,
+                    MessageTemplate.language == language,
+                    MessageTemplate.status == "APPROVED",
+                )
+            )
+        ).scalars().first()
+
+
+async def approved_templates_for_conversation(conversation: Conversation) -> list[MessageTemplate]:
+    from core.gateway.meta_connection_state import cuenta_de_plantillas_de_conversacion
+
+    cuenta = await cuenta_de_plantillas_de_conversacion(conversation)
+    if cuenta is None:
+        return []
+    async with get_session() as session:
+        return list(
+            (
+                await session.execute(
+                    select(MessageTemplate)
+                    .join(WabaAccount, WabaAccount.id == MessageTemplate.waba_account_id)
+                    .where(
+                        WabaAccount.connection_id == cuenta,
+                        WabaAccount.deleted_at.is_(None),
+                        WabaAccount.tenant_id == conversation.tenant_id,
+                        MessageTemplate.tenant_id == conversation.tenant_id,
+                        MessageTemplate.status == "APPROVED",
+                    )
+                    .order_by(MessageTemplate.name, MessageTemplate.language)
+                )
+            ).scalars().all()
+        )
+
+
+# ---------------------------------------------------------------- envío
+async def _ya_enviado(notice_key: str) -> bool:
+    async with get_session() as session:
+        existe = (
+            await session.execute(
+                select(Message.id).where(
+                    Message.tenant_id == get_current_tenant_id(),
+                    Message.client_message_id.in_((notice_key, f"{notice_key}:0")),
+                )
+            )
+        ).first()
+    return existe is not None
+
+
+async def _registrar_sin_plantilla(
+    conversation_id: uuid.UUID, notice_key: str, event_key: str, detalle: str
+) -> None:
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=get_current_tenant_id(),
+                conversation_id=conversation_id,
+                direction="outbound",
+                sender_type="agent",
+                content=f"Aviso «{event_key}» sin enviar: {detalle}",
+                status="failed",
+                error_reason=SIN_PLANTILLA,
+                client_message_id=notice_key,
+            )
+        )
+    log.warning(
+        "event_notice_sin_plantilla",
+        tenant_id=str(get_current_tenant_id()),
+        conversation_id=str(conversation_id),
+        event_key=event_key,
+        detalle=detalle,
+    )
+
+
+async def _registrar_aviso_frenado(conversation: Conversation, event_key: str, notice_key: str) -> NoticeResult | None:
+    """Si el negocio o el cliente está en pausa, deja el aviso `failed` con el motivo y devuelve el resultado."""
+    from core.gateway.pausa_automatica import motivo_pausa_automatica
+
+    motivo = await motivo_pausa_automatica(conversation)
+    if motivo is None:
+        return None
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=conversation.tenant_id,
+                conversation_id=conversation.id,
+                direction="outbound",
+                sender_type="agent",
+                content=f"Aviso «{event_key}» sin enviar: {motivo}",
+                status="failed",
+                error_reason=motivo,
+                client_message_id=notice_key,
+            )
+        )
+    log.info("event_notice_frenado_por_pausa", conversation_id=str(conversation.id), event_key=event_key, motivo=motivo)
+    return NoticeResult(motivo, motivo)
+
+
+async def _pausa_tras_envio(conversation: Conversation) -> NoticeResult | None:
+    from core.gateway.pausa_automatica import motivo_pausa_automatica
+
+    motivo = await motivo_pausa_automatica(conversation)
+    return NoticeResult(motivo, motivo) if motivo else None
+
+
+async def send_event_notice(
+    conversation_id: uuid.UUID,
+    event_key: str,
+    context: dict[str, Any],
+    *,
+    notice_key: str,
+    default_fallback_text: str = "",
+    por_canal: bool = False,
+) -> NoticeResult:
+    """Envía el aviso de `event_key` a la conversación (ver el docstring del módulo).
+
+    `notice_key` es estable por aviso (p. ej. `sub_charge:<cargo>`): un reintento
+    del evento no duplica el mensaje. Corre dentro del `tenant_scope` del evento.
+    `por_canal`: la bandera `avisos_por_canal` del negocio (la lee quien llama, `avisos_bandera.habilitada_actual`).
+    """
+    from core.db.models import utcnow
+    from core.gateway.sender import send_template_to_conversation, send_to_conversation
+
+    if await _ya_enviado(notice_key):
+        return NoticeResult("duplicado")
+    async with get_session() as session:
+        conversation = await session.get(Conversation, conversation_id)
+    if conversation is None or conversation.tenant_id != get_current_tenant_id():
+        return NoticeResult("no_enviado", "conversación inexistente")
+
+    # Conexión pausada o eliminada (ADR-0122, enmienda a ADR-0108): el aviso no se
+    # reintenta. La pausa es a propósito y puede durar días; con `NoticeNotSentError` el
+    # outbox lo reintentaría 5 veces, dejando 5 mensajes fallidos, y lo perdería igual.
+    # Queda un solo `failed` con el motivo, con el id estable del aviso.
+    from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
+
+    if motivo := await motivo_pausa_de_conversacion(conversation):
+        async with get_session() as session:
+            session.add(
+                Message(
+                    tenant_id=get_current_tenant_id(),
+                    conversation_id=conversation_id,
+                    direction="outbound",
+                    sender_type="agent",
+                    content=f"Aviso «{event_key}» sin enviar: {motivo}",
+                    status="failed",
+                    error_reason=motivo,
+                    client_message_id=notice_key,
+                )
+            )
+        log.info("event_notice_conexion_pausada", conversation_id=str(conversation_id), event_key=event_key)
+        return NoticeResult("conexion_pausada", motivo)
+
+    # Negocio o cliente en pausa (HU-ARCH-37, D-76): lo mismo que la conexión pausada. Un solo `failed` con el
+    # motivo bajo el id estable del aviso; el evento termina sin reintentos y al reactivar no se reenvía.
+    if pausa := await _registrar_aviso_frenado(conversation, event_key, notice_key):
+        return pausa
+
+    entrada = (await load_templates_map(conversation.tenant_id)).get(event_key) or {}
+    fallback = str(entrada.get("fallback_text") or default_fallback_text).strip()
+
+    if por_canal:
+        # ADR-0178 D3: si el evento apunta a una plantilla con opciones y se puede enviar, ese es el aviso.
+        por_opciones = await _aviso_con_opciones(conversation, event_key, context, notice_key, entrada)
+        if por_opciones is not None:
+            return por_opciones
+        por_texto = await _aviso_por_canal(conversation, event_key, context, notice_key, entrada)
+        if por_texto is not None:
+            return por_texto
+
+    # Ventana desconocida (sin `service_window_expires_at`: filas viejas o una
+    # conversación que no abrió un mensaje entrante) cuenta como CERRADA: un texto
+    # libre ahí lo rechaza Meta (131047) sin dejar rastro de `sin_plantilla`.
+    expira = conversation.service_window_expires_at
+    ventana_abierta = expira is not None and expira >= utcnow()
+
+    if ventana_abierta:
+        if not fallback:
+            return NoticeResult("no_enviado", "sin texto de respaldo")
+        try:
+            enviado = await send_to_conversation(
+                conversation_id,
+                render_fallback(fallback, context, event_key),
+                client_message_id_prefix=notice_key,
+            )
+        except OutboundWindowExpiredError:
+            enviado = False
+        if not enviado:
+            # El negocio o el cliente se pausó entre el chequeo y el envío: el sender ya lo dejó `failed`.
+            if pausa := await _pausa_tras_envio(conversation):
+                return pausa
+            raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa o ventana cerrada)")
+        return NoticeResult("texto")
+
+    nombre = str(entrada.get("template") or "").strip()
+    idioma = str(entrada.get("language") or "es").strip()
+    if not nombre:
+        await _registrar_sin_plantilla(conversation_id, notice_key, event_key, "evento sin plantilla")
+        return NoticeResult(SIN_PLANTILLA, "evento sin plantilla")
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+    if await twilio_tpl.es_de_twilio(conversation):
+        # WhatsApp vía Twilio (ADR-0186): la plantilla aprobada de su conexión, por `ContentSid`.
+        return await _aviso_con_plantilla_de_twilio(
+            conversation, event_key, context, notice_key, entrada, nombre, idioma
+        )
+    plantilla = await approved_template_for(conversation, nombre, idioma)
+    if plantilla is None:
+        detalle = f"la plantilla {nombre} ({idioma}) no está aprobada en esta conexión"
+        await _registrar_sin_plantilla(conversation_id, notice_key, event_key, detalle)
+        return NoticeResult(SIN_PLANTILLA, detalle)
+    try:
+        valores = resolve_values(
+            event_key,
+            entrada.get("variables") or [],
+            template_placeholders(plantilla.components),
+            context,
+        )
+    except NoticeConfigError as exc:
+        await _registrar_sin_plantilla(conversation_id, notice_key, event_key, str(exc))
+        return NoticeResult(SIN_PLANTILLA, str(exc))
+
+    enviado = await send_template_to_conversation(
+        conversation_id,
+        template_name=plantilla.name,
+        language=plantilla.language,
+        components=build_components(plantilla, valores),
+        preview_text=render_body(plantilla, valores),
+        client_message_id=notice_key,
+    )
+    if not enviado:
+        # El negocio o el cliente se pausó entre el chequeo y el envío: el sender ya lo dejó `failed`.
+        if pausa := await _pausa_tras_envio(conversation):
+            return pausa
+        raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso de la API)")
+    return NoticeResult("plantilla")
+
+
+async def _aviso_con_plantilla_de_twilio(
+    conversation: Conversation,
+    event_key: str,
+    context: dict[str, Any],
+    notice_key: str,
+    entrada: dict[str, Any],
+    nombre: str,
+    idioma: str,
+) -> NoticeResult:
+    """Ventana cerrada en una conversación de Twilio: la plantilla aprobada de su conexión, con los valores del
+    servidor (`resolve_values`, las variables son `{{1}}`, `{{2}}`…). Mismos resultados que la rama de Meta."""
+    from core.gateway.sender import send_template_to_conversation
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+    plantilla = await twilio_tpl.aprobada(conversation, nombre, idioma)
+    if plantilla is None:
+        detalle = f"la plantilla {nombre} ({idioma}) no está aprobada en esta conexión"
+        await _registrar_sin_plantilla(conversation.id, notice_key, event_key, detalle)
+        return NoticeResult(SIN_PLANTILLA, detalle)
+    try:
+        valores = resolve_values(
+            event_key, entrada.get("variables") or [], twilio_tpl.placeholders(plantilla.body), context
+        )
+    except NoticeConfigError as exc:
+        await _registrar_sin_plantilla(conversation.id, notice_key, event_key, str(exc))
+        return NoticeResult(SIN_PLANTILLA, str(exc))
+    enviado = await send_template_to_conversation(
+        conversation.id,
+        template_name=plantilla.friendly_name,
+        language=plantilla.language,
+        components=twilio_tpl.componentes(plantilla, valores),
+        preview_text=twilio_tpl.vista_previa(plantilla, valores),
+        client_message_id=notice_key,
+    )
+    if not enviado:
+        # El negocio o el cliente se pausó entre el chequeo y el envío: el sender ya lo dejó `failed`.
+        if pausa := await _pausa_tras_envio(conversation):
+            return pausa
+        raise NoticeNotSentError(f"Aviso {event_key} sin encolar")
+    return NoticeResult("plantilla")
+
+
+async def _aviso_con_opciones(
+    conversation: Conversation, event_key: str, context: dict[str, Any], notice_key: str, entrada: dict[str, Any]
+) -> NoticeResult | None:
+    """El puente evento → plantilla con opciones (ADR-0178 D3, `avisos_opciones`). None = seguir con el camino de
+    siempre. Un fallo inesperado del puente nunca pierde el aviso: queda en el log y sigue D2/legacy."""
+    from core.gateway import avisos_opciones
+
+    if avisos_opciones.clave_de_opciones(event_key, entrada) is None:
+        return None
+    try:
+        return await avisos_opciones.intentar(conversation, event_key, context, notice_key, entrada)
+    except NoticeNotSentError:
+        raise  # resultado ambiguo del envío: que el outbox reintente (ver `avisos_opciones.intentar`)
+    except Exception:
+        log.error("event_notice_opciones_error", event_key=event_key, conversation_id=str(conversation.id), exc_info=True)
+        return None
+
+
+async def _aviso_por_canal(
+    conversation: Conversation, event_key: str, context: dict[str, Any], notice_key: str, entrada: dict[str, Any]
+) -> NoticeResult | None:
+    """La vía de un aviso con la bandera `avisos_por_canal` encendida (ADR-0178 D2). Devuelve el resultado si este
+    camino lo resolvió (salió el texto del canal, o se omitió), o None para seguir con el camino de siempre
+    (WhatsApp Meta, o un canal que ya tenía el suyo). Ver `avisos_canal` por las políticas de cada canal."""
+    from core.db.models import utcnow
+    from core.gateway import avisos_canal as ac
+    from core.gateway.sender import send_to_conversation
+
+    proveedor = await ac.proveedor_de_conversacion(conversation)
+    tipo = ac.tipo_de_conexion(conversation.channel, proveedor)
+    texto = ac.texto_del_canal(entrada, tipo)
+    expira = conversation.service_window_expires_at
+    decision = ac.decidir_via_aviso(
+        canal=conversation.channel,
+        proveedor=proveedor,
+        evento=event_key,
+        texto_definido=bool(texto),
+        ventana_abierta=expira is not None and expira >= utcnow(),
+    )
+    if decision.motivo:
+        ac.aviso_omitido(event_key, conversation.channel, decision.motivo, conversation_id=conversation.id)
+    if decision.via == ac.LEGACY:
+        return None
+    if decision.via == ac.OMITIDO:
+        return NoticeResult("omitido_canal", decision.motivo)
+
+    if decision.tipo == ac.QR and (motivo := await ac.waweb_bloqueo(conversation.tenant_id)):
+        ac.aviso_omitido(event_key, conversation.channel, motivo, conversation_id=conversation.id)
+        return NoticeResult("omitido_canal", motivo)
+    renderizado = render_fallback(texto, context, event_key).strip()
+    if not renderizado:
+        ac.aviso_omitido(event_key, conversation.channel, ac.TEXTO_VACIO, conversation_id=conversation.id)
+        return NoticeResult("omitido_canal", ac.TEXTO_VACIO)
+    if LLAVE_DE_RUTA.search(renderizado):
+        # Una `{ruta}` que no es del evento (texto guardado antes de validarse): nunca se manda cruda al cliente.
+        ac.aviso_omitido(event_key, conversation.channel, ac.VARIABLES_SIN_RESOLVER, conversation_id=conversation.id)
+        return NoticeResult("omitido_canal", ac.VARIABLES_SIN_RESOLVER)
+    try:
+        enviado = await send_to_conversation(
+            conversation.id, renderizado, client_message_id_prefix=notice_key, raise_on_window_expired=True
+        )
+    except OutboundWindowExpiredError:
+        ac.aviso_omitido(event_key, conversation.channel, ac.VENTANA_CERRADA, conversation_id=conversation.id)
+        return NoticeResult("omitido_canal", ac.VENTANA_CERRADA)
+    if not enviado:
+        # El negocio o el cliente se pausó entre el chequeo y el envío: el sender ya lo dejó `failed`.
+        if pausa := await _pausa_tras_envio(conversation):
+            return pausa
+        raise NoticeNotSentError(f"Aviso {event_key} sin encolar (pausa por uso o conversación)")
+    return NoticeResult("texto", decision.tipo or "")

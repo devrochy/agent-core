@@ -27,6 +27,24 @@ que el core (ver docs/MONOLITH-MODEL.md). Aporta:
 - **Suscripciones a eventos** del core (opcional)
 - **Rutas y menú del panel admin** (opcional)
 
+### 1.1 Pack vs. plugin del tenant (ADR-0089)
+
+El orden de personalización es **configuración → pack → plugin del tenant →
+topología**. La diferencia entre los dos paquetes:
+
+| | **Pack** (multi-tenant) | **Plugin del tenant** |
+|---|---|---|
+| Sirve a | varios negocios | **un solo negocio** |
+| Activación | por AgentSpec de cada tenant | solo el negocio dueño |
+| Uso típico | vertical reutilizable (comercio, cobranza) | caso particular con datos/tareas propias |
+| Scaffold | `agent-core plugin scaffold <nombre>` | `agent-core plugin scaffold <nombre> --tenant` |
+
+Ambos son paquetes instalables con las **mismas garantías** (RLS, migraciones
+propias, cron con `@register_cron`) y las mismas reglas de este contrato. Un
+plugin del tenant **pasa revisión del master** antes de desplegarse: es código de
+negocio con RLS. El scaffold `--tenant` ya genera `models.py`, `jobs.py`,
+`alembic/` y un test que verifica `tenant_id` + RLS en la migración.
+
 ## 2. Ciclo de vida
 
 ```
@@ -99,6 +117,13 @@ class Module(BaseModule):
     def on_deactivate(self) -> None:
         ...  # limpieza opcional; el host retira skills/guardrails/eventos solo
 ```
+
+**Hooks opcionales** (todos con default no-op): `seed_data(tenant_id, data)` (ADR-0083),
+`on_collaborator_role(...)` (ADR-0066) y `contenido_cargado(tenant_id)` (HU-SH-06, ADR-0124). Este
+último dice cuánto contenido propio cargó el negocio (catálogo, servicios, cartera) para el paso
+«catálogo o servicios» de los primeros pasos: devuelve un
+`core.primeros_pasos.contrato.ContenidoCargado(tipo, cantidad, primero_en, seccion)`, solo lee y
+filtra por `tenant_id`. El core lo llama solo si la habilidad está habilitada en el negocio.
 
 ### 5.1 Panel admin propio (rutas + plantillas)
 
@@ -176,15 +201,25 @@ class MiSkill(BaseSkill):
         )]
 
     async def mi_tool(self, arguments: dict, context: ToolContext) -> dict:
-        # context: conversation_id, customer_id, idempotency_key, channel
+        # context: conversation_id, customer_id, idempotency_key, channel, http,
+        # write_namespaces (writeNamespaces del agente v3; None en el runtime legacy),
+        # agent_id, agent_version_id y knowledge (agente v3 en foco y su bloque `knowledge`
+        # congelado, ADR-0145; None en legacy o sin release)
         # ¡Inyectados por el core! El LLM NUNCA los ve ni los controla.
         return {"status": "ok"}
 ```
 
 Reglas de las tools:
 - El handler es una **corrutina** que devuelve un dict JSON-serializable.
+- **Auditoría:** el resultado completo va a `audit_log`. Si devuelve contenido que el negocio puede
+  borrar (p. ej. fragmentos de documentos), define `MCPTool.resumen_de_auditoria` para guardar solo
+  ids y puntajes (ADR-0145 §4). El LLM sigue recibiendo el resultado completo.
 - **Idempotencia obligatoria en escrituras**: usa `context.idempotency_key` con un
   UNIQUE en tu tabla (ver `crear_lead` en pack_commerce).
+- **Memoria del cliente**: el perfil (`customers.attributes`) es proyección de
+  `memory_facts` (ADR-0114). Se escribe con `core.memory.entity.upsert_attributes`
+  (o `upsert_attributes_en_sesion` dentro de tu transacción), nunca asignando
+  `attributes` directamente: un test estático lo vigila.
 - **El LLM propone, la tool decide**: valida SIEMPRE contra la BD, nunca confíes
   en los argumentos del modelo para datos críticos.
 - Errores: deja que las excepciones suban. El core convierte cualquier excepción en
@@ -260,6 +295,45 @@ host.register_guardrail("mi_check", mi_guardrail, priority=5)  # menor = primero
 Presupuesto del core: 1 reintento; si reincide, escala a humano. Un guardrail que
 lanza excepción se ignora (fail-open) y se loggea: un guardrail roto no silencia al bot.
 
+### 11.1 Afirmaciones de cierre y montos (verificador del core, ADR-0119)
+
+Antes de los guardrails de los packs corre el **verificador de afirmaciones** del core
+(`core/orchestrator/verificador/`). Compara el borrador con lo que el sistema hizo:
+
+- **Montos:** toda cifra en `$`/`COP` tiene que haber salido de una tool, de este turno o de
+  uno anterior. Un pack que devuelve un monto verificado lo pone bajo una clave de
+  `core.shared.dinero.MONEY_KEYS` (`price`, `unit_price`, `line_total`, `subtotal`, `total`,
+  `discount`, `monto`, `valor_periodo`, y de la cotización de un plan con promoción: `precio_lista`, `descuento`,
+  `total_primer_cargo`, `precio_periodo_siguiente`, `monto_bruto`; y de la inscripción y el cambio de plan:
+  `monto_a_pagar`, `precio_nuevo`; y el precio de un plan del catálogo: `precio`; y de las tools de consulta: `saldo`, `saldo_total`, `total_vigente`). Un monto que el LLM pasó como argumento (`amount`)
+  no cuenta.
+- **Links:** una URL que no devolvió una tool del turno ni está en el contexto (prompt o
+  mensajes del cliente) se quita del texto. El link exacto se entrega con `_safe_append`.
+- **Afirmaciones de cierre:** el pack declara qué frases dan por hecha una acción y qué
+  tools la respaldan. El core descarta preguntas, negaciones y condicionales.
+
+```python
+from core.mcp.types import Afirmacion
+
+async def mis_afirmaciones() -> list[Afirmacion]:
+    # Corre en el tenant_scope del negocio: puede leer la config del pack.
+    return [
+        Afirmacion(
+            label="reserva",
+            patron=re.compile(r"reserv\w*\s+(?:qued|est)\w*\s+confirmad\w*", re.IGNORECASE),
+            tools=frozenset({"crear_reserva"}),
+            basta_url=False,  # True: también la respalda cualquier URL devuelta en el turno
+        )
+    ]
+
+# en on_activate:
+host.register_afirmaciones(mis_afirmaciones)  # una fuente por plugin
+```
+
+Las frases que configura un negocio se escapan (`re.escape`, ADR-0025): nunca regex crudo.
+Los interruptores del verificador por negocio son `verificador_montos`, `verificador_cierre`
+y `verificador_links` (en `disabled_guardrails`).
+
 ## 12. Eventos del core
 
 | Evento | Payload | Cuándo |
@@ -277,12 +351,14 @@ Un handler que falla se loggea y NO interrumpe el flujo.
 ## 13. Qué puede importar un plugin (y qué NO)
 
 ```
-✓ core.mcp.types          (BaseModule, BaseSkill, MCPTool, ToolContext, GuardrailResult)
+✓ core.mcp.types          (BaseModule, BaseSkill, MCPTool, ToolContext, GuardrailResult, Afirmacion)
+✓ core.shared.dinero      (MONEY_KEYS, MONEY_IN_TEXT, parse_money)
 ✓ core.db.session         (get_session)
 ✓ core.memory.entity      (upsert_attributes, get_profile)
 ✓ core.tasks.decorators   (register_cron)
 ✓ core.shared.events      (constantes de eventos)
 ✓ core.shared.logger / exceptions
+✓ core.primeros_pasos.contrato (ContenidoCargado, ADR-0124; nada más de ese paquete)
 ✓ core.gateway.sender     (send_to_conversation — SOLO desde jobs, nunca desde tools)
 
 ✗ core.orchestrator.*     (el loop es del core; usa eventos y el host)
@@ -290,6 +366,21 @@ Un handler que falla se loggea y NO interrumpe el flujo.
 ✗ core.admin.views        (aporta tu propio admin_router)
 ✗ Modelos de otro plugin  (los dominios no se importan entre sí; coordina vía eventos)
 ```
+
+### Salida a red (ADR-0052)
+
+Un pack no importa `httpx` (ni otro cliente HTTP). Declara sus dominios en
+`BaseModule.network_allowlist` (y los mismos en `network` de `[tool.agent_core.plugin]`):
+
+- **Tools**: usan `context.http`. El core lo arma por tool con
+  `plugin_manager.scoped_http(plugin_id)`: allowlist del módulo, `GET/POST/PUT/PATCH/DELETE`,
+  sin IPs internas. Responde `{"status", "data"}` o `{"error"}`; nunca lanza.
+- **Panel, jobs, OAuth** (sin `ToolContext`): `core.mcp.types.plugin_http(<su allowlist>)`,
+  el mismo cliente. Ejemplos: `pack_calendar/google_api.py`, `pack_payments/providers/wompi.py`
+  (el proveedor recibe `context.http` desde la tool) y el Turnstile de `pack_commerce/api.py`.
+
+`tests/test_packs_salida_a_red.py` falla si un archivo de `packages/pack-*` importa un cliente
+HTTP, o si la `network_allowlist` de un módulo no está en `network` de su manifest.
 
 ## 14. Checklist antes de publicar
 

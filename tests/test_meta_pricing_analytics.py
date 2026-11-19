@@ -60,6 +60,32 @@ async def test_parsea_con_extra_allow_sin_reventar(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_lee_los_puntos_agrupados_en_data_points(monkeypatch):
+    # Forma real de la respuesta de Meta (WABA de test, 2026-10-08).
+    async def _fake_graph_fetch(path, *, query=None, **kwargs):
+        return {
+            "pricing_analytics": {
+                "data": [
+                    {
+                        "data_points": [
+                            {"start": 1000, "end": 2000, "country": "CO", "pricing_type": "FREE_CUSTOMER_SERVICE",
+                             "pricing_category": "SERVICE", "volume": 2, "cost": 0},
+                            {"start": 1000, "end": 2000, "country": "CO", "pricing_type": "REGULAR",
+                             "pricing_category": "UTILITY", "volume": 3, "cost": 0},
+                        ]
+                    }
+                ]
+            }
+        }
+
+    monkeypatch.setattr(pricing_mod, "graph_fetch", _fake_graph_fetch)
+
+    points = await fetch_pricing_analytics("waba-1", 1000, 2000, "tok", "secret", "v21.0", uuid.uuid4())
+    assert [(p.pricing_category, p.volume, p.cost) for p in points] == [("SERVICE", 2, 0), ("UTILITY", 3, 0)]
+    assert all(p.country == "CO" and p.start == 1000 for p in points)
+
+
+@pytest.mark.asyncio
 async def test_data_point_invalido_se_omite_sin_reventar(monkeypatch):
     async def _fake_graph_fetch(path, *, query=None, **kwargs):
         return {"pricing_analytics": {"data": [{"start": 1000}]}}  # sin volume/cost obligatorios

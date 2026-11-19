@@ -1,7 +1,8 @@
 """Configuración del agente (lectura y escritura).
 
 `GET /api/v1/admin/settings` devuelve la configuración del tenant activo;
-`PUT .../identity` y `PUT .../brain` la actualizan. Reusa la maquinaria de
+`PUT .../identity` y `PUT .../brain` la actualizan, y `PUT .../bot-paused` pausa
+o reactiva el asistente sin tocar el resto de la identidad. Reusa la maquinaria de
 versionado del `AgentSpec` (`core.agents.spec`) para no duplicar lógica con el
 panel SSR. Requiere la sección `settings`.
 
@@ -11,13 +12,18 @@ Habilidades y Avanzado del panel SSR quedan pendientes.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
+from core.admin.envios_segmento import PALABRAS_DE_BAJA_POR_DEFECTO, limpiar_palabras_de_baja
+from core.admin.roles import actua_como_master
 from core.admin.settings_service import (
     read_memory,
     read_skills,
@@ -25,29 +31,77 @@ from core.admin.settings_service import (
     save_skills,
     validate_business_ranges,
 )
-from core.agents.spec import enabled_packs, load_active_spec, save_spec_if_changed
+from core.agents.spec import (
+    con_tenant_de_la_fila,
+    enabled_packs,
+    leer_spec_activo,
+    load_active_spec,
+    save_spec_if_changed,
+    save_spec_version,
+)
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
-from core.db.models import AppSettings
+from core.config import DEBOUNCE_DELAY_MS, get_settings
+from core.config_limites import leer_entero, rango
+from core.config_registro import (
+    POR_CLAVE,
+    Catalogo,
+    Propuesta,
+    RespuestasInvalidas,
+    catalogo_para,
+    resolver,
+)
+from core.config_registro.opciones import PRESUPUESTO_USD, SIMILITUD_RAG, TEMPERATURA
+from core.config_registro.validar import validar_valor
+from core.db.models import AppSettings, AuditLog
 from core.db.session import get_session
+from core.gateway import avisos_opciones
+from core.gateway.message_splitter import CAPS
+from core.kernel.fuera_de_horario import texto_por_defecto
+from core.kernel.horario_de_servicio import modo_del_horario
 from core.llm.difficulty_router import (
     DIFFICULTY_SCORE_THRESHOLD,
     LONG_MESSAGE_THRESHOLD,
     TURNOS_SIN_RESOLVER_THRESHOLD,
 )
+from core.llm.prompt_builder import DEFAULT_TIMEZONE
 from core.mcp.host import mcp_host
+from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
+from core.shared.logger import get_logger
+from core.waweb.policy import MODE_ALLOW_OUTBOUND, RISK_ACK_VERSION, policy_from_behavior
 
 router = APIRouter(prefix="/admin/settings", tags=["admin · configuración"])
+log = get_logger(__name__)
+
+# Qué hace el loop al agotar los reintentos del guardrail (ADR-0092).
+GuardrailFailAction = Literal["escalate", "neutral"]
 
 
 # ------------------------------------------------------------------ modelos
+# Franjas del horario de atención (ADR-0051): `day` es 0=lunes … 6=domingo, el mismo
+# índice que `datetime.weekday()` en `within_business_hours`.
+_BUSINESS_RANGES_DESC = (
+    "Franjas del horario de atención: [{day, from, to}]. `day` va de 0=lunes a 6=domingo "
+    "(criterio de `datetime.weekday()`); `from`/`to` en HH:MM, hora local de `business_tz`."
+)
+
+
 class IdentitySettings(BaseModel):
     assistant_name: str
     business_description: str
     brand_voice: str
-    tono: str
+    brand_voice_warning: bool = False  # True si quedó vacía (#158): el asistente no tiene voz de marca
+    # Obsoleto (HU-CFG-01, D-SPEC-37-3): ningún código lo lee; la voz es `persona_tone`. Se sigue
+    # devolviendo para la APK instalada, hasta que la mínima soportada deje de leerlo.
+    tono: str = Field(default="calido", deprecated=True)
     debounce_mode: str
+    split_style: str = "un_mensaje"
+    # Moneda del negocio (HU-UI-01): COP por defecto.
+    currency: str = "COP"
+    # Zona horaria del negocio (HU-CAL-04, ADR-0091).
+    timezone: str = DEFAULT_TIMEZONE
     guardrail_max_retries: int
+    guardrail_fail_action: GuardrailFailAction = "escalate"
     disabled_guardrails: list[str]
     available_guardrails: list[str]
     difficulty_long_message_threshold: int
@@ -55,6 +109,9 @@ class IdentitySettings(BaseModel):
     difficulty_score_threshold: int
     escalation_keywords: list[str]
     out_of_hours_message: str
+    # Solo lectura (adenda 2026-10-18 de ADR-0051): lo que recibe el cliente fuera de horario
+    # si `out_of_hours_message` está vacío, en el idioma y con el nombre guardados del negocio.
+    out_of_hours_default_message: str
     auto_escalate_after_turns: int
     persona_tone: str
     persona_warmth: int
@@ -63,31 +120,105 @@ class IdentitySettings(BaseModel):
     persona_forbidden: list[str]
     bot_paused: bool
     business_tz: str
-    business_ranges: list[dict[str, Any]]
+    business_ranges: list[dict[str, Any]] = Field(description=_BUSINESS_RANGES_DESC)
+    business_hours_mode: Literal["bloquea", "informativo"] = Field(
+        default="bloquea",
+        description=(
+            "`bloquea`: fuera del horario el asistente no atiende y responde el mensaje fuera de horario "
+            "(comportamiento de siempre). `informativo`: el horario es el del equipo humano del comercio, "
+            "el asistente responde 24/7 y lo conoce para informarlo (HU-AOS-58)."
+        ),
+    )
 
 
 class IdentityUpdate(BaseModel):
     assistant_name: str
     business_description: str = ""
     brand_voice: str = ""
-    tono: str = "calido"
+    # Obsoleto (HU-CFG-01): se acepta de las APK viejas y se ignora; no se escribe.
+    tono: str | None = Field(default=None, deprecated=True)
     debounce_mode: str = "natural"
-    guardrail_max_retries: int = 1
+    split_style: str = "un_mensaje"
+    currency: str = "COP"
+    # `None` = no cambiar: un cliente que todavía no conoce el campo no lo pisa.
+    timezone: str | None = None
+    # Rangos explícitos (P0 de pruebas 2026-10-17): un valor fuera de rango responde 422 con
+    # el campo marcado, en vez de recortarse en silencio y "guardar con éxito". Son los mismos
+    # rangos que aplica `save_identity`.
+    guardrail_max_retries: int = Field(
+        default=1, ge=rango("guardrail_max_retries").minimo, le=rango("guardrail_max_retries").maximo
+    )
+    guardrail_fail_action: GuardrailFailAction | None = None
     disabled_guardrails: list[str] = []
-    difficulty_long_message_threshold: int = LONG_MESSAGE_THRESHOLD
-    difficulty_turnos_sin_resolver_threshold: int = TURNOS_SIN_RESOLVER_THRESHOLD
-    difficulty_score_threshold: int = DIFFICULTY_SCORE_THRESHOLD
+    difficulty_long_message_threshold: int = Field(
+        default=LONG_MESSAGE_THRESHOLD,
+        ge=rango("difficulty_long_message_threshold").minimo,
+        le=rango("difficulty_long_message_threshold").maximo,
+    )
+    difficulty_turnos_sin_resolver_threshold: int = Field(
+        default=TURNOS_SIN_RESOLVER_THRESHOLD,
+        ge=rango("difficulty_turnos_sin_resolver_threshold").minimo,
+        le=rango("difficulty_turnos_sin_resolver_threshold").maximo,
+    )
+    difficulty_score_threshold: int = Field(
+        default=DIFFICULTY_SCORE_THRESHOLD,
+        ge=rango("difficulty_score_threshold").minimo,
+        le=rango("difficulty_score_threshold").maximo,
+    )
     escalation_keywords: list[str] = []
     out_of_hours_message: str = ""
-    auto_escalate_after_turns: int = 0
+    # `None` = no cambiar (un cliente que no conoce el campo no lo pisa).
+    business_hours_mode: Literal["bloquea", "informativo"] | None = None
+    auto_escalate_after_turns: int = Field(
+        default=0, ge=rango("auto_escalate_after_turns").minimo, le=rango("auto_escalate_after_turns").maximo
+    )
     persona_tone: str = ""
-    persona_warmth: int = 3
+    persona_warmth: int = Field(
+        default=3, ge=rango("persona_warmth").minimo, le=rango("persona_warmth").maximo
+    )
     persona_emojis: str = "sparse"
-    persona_max_length: int = 500
+    persona_max_length: int = Field(
+        default=500, ge=rango("persona_max_length").minimo, le=rango("persona_max_length").maximo
+    )
     persona_forbidden: list[str] = []
-    bot_paused: bool = False
+    # `None` = no cambiar: la pausa tiene su propio endpoint (`PUT .../bot-paused`) y un
+    # formulario abierto desde antes no debe reactivar ni pausar el asistente al guardar.
+    bot_paused: bool | None = None
     business_tz: str = ""
-    business_ranges: list[dict[str, Any]] = []
+    business_ranges: list[dict[str, Any]] = Field(default=[], description=_BUSINESS_RANGES_DESC)
+
+    # Lista cerrada de valores (registro de opciones): un texto desconocido responde 422 con la lista
+    # válida, en vez de guardarse y comportarse como «sin espera» (HU-CFG-03). `persona_*` vacío
+    # significa «no cambiar».
+    @field_validator("debounce_mode", "split_style")
+    @classmethod
+    def _valor_de_la_lista(cls, value: str, info) -> str:
+        return validar_valor(info.field_name, value)
+
+    @field_validator("persona_tone", "persona_emojis")
+    @classmethod
+    def _valor_de_la_lista_o_vacio(cls, value: str, info) -> str:
+        return validar_valor(info.field_name, value) if value else value
+
+    @field_validator("timezone")
+    @classmethod
+    def _zona_horaria_valida(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        value = value.strip()
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"zona horaria desconocida: {value}") from exc
+        return value
+
+
+class BotPausedUpdate(BaseModel):
+    paused: bool
+
+
+class BotPausedState(BaseModel):
+    paused: bool
 
 
 class BrainSettings(BaseModel):
@@ -99,10 +230,30 @@ class BrainSettings(BaseModel):
     policy_budget: float = 0.5
 
 
+class BrainUpdate(BrainSettings):
+    """Entrada de `PUT /brain`: mismos rangos que recorta `save_brain` (temperatura 0–2,
+    1–50 llamadas a tools por turno, presupuesto ≥ 0); fuera de rango responde 422."""
+
+    model_temperature: float = Field(default=0.3, ge=TEMPERATURA[0], le=TEMPERATURA[1])
+    policy_max_tool_calls: int = Field(
+        default=10, ge=rango("policy_max_tool_calls").minimo, le=rango("policy_max_tool_calls").maximo
+    )
+    policy_budget: float = Field(default=0.5, ge=PRESUPUESTO_USD[0], le=PRESUPUESTO_USD[1])
+
+
 class MemorySettings(BaseModel):
     short_term_turns: int
     rag_top_k: int
     rag_min_score: float
+
+
+class MemoryUpdate(MemorySettings):
+    """Entrada de `PUT /memory`: turnos de contexto 1–200, top-k 0–20 (0 = sin RAG) y
+    umbral 0–1 (los rangos de `save_memory`); fuera de rango responde 422."""
+
+    short_term_turns: int = Field(ge=rango("short_term_turns").minimo, le=rango("short_term_turns").maximo)
+    rag_top_k: int = Field(ge=rango("rag_top_k").minimo, le=rango("rag_top_k").maximo)
+    rag_min_score: float = Field(ge=SIMILITUD_RAG[0], le=SIMILITUD_RAG[1])
 
 
 class SkillBinding(BaseModel):
@@ -116,6 +267,24 @@ class SkillBinding(BaseModel):
 
 class SkillsUpdate(BaseModel):
     tools: list[SkillBinding]
+
+
+class WebChatSettings(BaseModel):
+    """Configuración del chat web embebible (HU-CHAN-02). El secreto de Turnstile
+    NUNCA se devuelve; solo si está configurado (`turnstile_configured`)."""
+
+    enabled: bool = False
+    key: str = ""  # clave pública que va en el fragmento del widget
+    allowed_origins: list[str] = []
+    turnstile_configured: bool = False
+    snippet: str = ""  # fragmento <script> listo para pegar
+
+
+class WebChatUpdate(BaseModel):
+    enabled: bool = False
+    allowed_origins: list[str] = []
+    turnstile_secret: str | None = None  # None = no tocar; "" = borrar
+    rotate_key: bool = False
 
 
 class SettingsResponse(BaseModel):
@@ -139,8 +308,59 @@ async def _load_app_settings(tenant_id) -> AppSettings | None:
 
 
 def _available_guardrails(spec) -> list[str]:
+    """Guardrails de los packs habilitados más los interruptores del verificador
+    del core (ADR-0119): sin ellos, guardar la configuración borraría lo que el
+    negocio había apagado."""
     enabled = enabled_packs(spec)
-    return sorted(g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled)
+    return sorted({g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled} | set(TOGGLES))
+
+
+def _normalize_origins(origins: list[str]) -> list[str]:
+    """Normaliza dominios permitidos: esquema+host, sin barra final, únicos.
+    Solo se aceptan orígenes `http(s)://host[:puerto]`."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in origins:
+        value = (raw or "").strip().rstrip("/")
+        if not value:
+            continue
+        if not (value.startswith("http://") or value.startswith("https://")):
+            continue
+        if value.lower() in seen:
+            continue
+        seen.add(value.lower())
+        out.append(value)
+    return out
+
+
+def _web_chat_out(app_settings: AppSettings | None) -> WebChatSettings:
+    config = dict((app_settings.web_chat_config if app_settings else {}) or {})
+    key = str(config.get("key", "") or "")
+    landing = get_settings().landing_base_url.rstrip("/")
+    snippet = (
+        f'<script src="{landing}/widget.js" data-key="{key}" async></script>'
+        if key
+        else ""
+    )
+    return WebChatSettings(
+        enabled=bool(config.get("enabled")),
+        key=key,
+        allowed_origins=list(config.get("allowed_origins", []) or []),
+        turnstile_configured=bool(str(config.get("turnstile_secret", "") or "").strip()),
+        snippet=snippet,
+    )
+
+
+def _modo_efectivo(guardado: object, validos: dict, defecto: str, si_desconocido: str) -> str:
+    """El valor que de verdad aplica el runtime, para que el cliente nunca reenvíe uno inválido.
+
+    Ausente = el defecto. Un texto fuera de la lista (fila escrita por un script o anterior a la
+    validación, HU-CFG-03) se muestra como lo trata el runtime: `si_desconocido`. Así el siguiente
+    guardado desde el panel o la APK no responde 422 por algo que el dueño no puede ver ni corregir.
+    """
+    if guardado is None:
+        return defecto
+    return guardado if isinstance(guardado, str) and guardado in validos else si_desconocido
 
 
 def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) -> IdentitySettings:
@@ -151,33 +371,43 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
         assistant_name=(app_settings.assistant_name if app_settings else "") or "",
         business_description=(app_settings.business_description if app_settings else "") or "",
         brand_voice=(app_settings.brand_voice if app_settings else "") or "",
+        brand_voice_warning=not bool(((app_settings.brand_voice if app_settings else "") or "").strip()),
         tono=behavior.get("tono", "calido"),
-        debounce_mode=behavior.get("debounce_mode", "natural"),
-        guardrail_max_retries=int(behavior.get("guardrail_max_retries", 1) or 0),
-        disabled_guardrails=list(behavior.get("disabled_guardrails", []) or []),
+        debounce_mode=_modo_efectivo(behavior.get("debounce_mode"), DEBOUNCE_DELAY_MS, "natural", "inmediato"),
+        split_style=_modo_efectivo(behavior.get("split_style"), CAPS, "un_mensaje", "pocos_cortos"),
+        currency=(app_settings.currency if app_settings and app_settings.currency else "COP"),
+        timezone=(app_settings.timezone if app_settings and app_settings.timezone else DEFAULT_TIMEZONE),
+        guardrail_max_retries=leer_entero(behavior, "guardrail_max_retries", 1),
+        guardrail_fail_action="neutral" if behavior.get("guardrail_fail_action") == "neutral" else "escalate",
+        disabled_guardrails=normalizar_desactivados(behavior.get("disabled_guardrails", [])),
         available_guardrails=available,
-        difficulty_long_message_threshold=int(
-            behavior.get("difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD)
+        difficulty_long_message_threshold=leer_entero(
+            behavior, "difficulty_long_message_threshold", LONG_MESSAGE_THRESHOLD
         ),
-        difficulty_turnos_sin_resolver_threshold=int(
-            behavior.get("difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD)
+        difficulty_turnos_sin_resolver_threshold=leer_entero(
+            behavior, "difficulty_turnos_sin_resolver_threshold", TURNOS_SIN_RESOLVER_THRESHOLD
         ),
-        difficulty_score_threshold=int(
-            behavior.get("difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD)
+        difficulty_score_threshold=leer_entero(
+            behavior, "difficulty_score_threshold", DIFFICULTY_SCORE_THRESHOLD
         ),
         escalation_keywords=list(escalation.get("keywords", []) or []),
         out_of_hours_message=escalation.get("out_of_hours_message", "") or "",
-        auto_escalate_after_turns=int(escalation.get("auto_escalate_after_turns", 0) or 0),
+        out_of_hours_default_message=texto_por_defecto(
+            app_settings.language if app_settings else None,
+            app_settings.assistant_name if app_settings else None,
+        ),
+        auto_escalate_after_turns=leer_entero(escalation, "auto_escalate_after_turns", 0),
         persona_tone=persona.get("tone", "") or "",
-        persona_warmth=int(persona.get("warmth", 3) or 3),
+        persona_warmth=rango("persona_warmth").recortar(int(persona.get("warmth", 3) or 0)),
         persona_emojis=persona.get("emojis", "sparse") or "sparse",
-        persona_max_length=int(persona.get("maxLength", 500) or 0),
+        persona_max_length=rango("persona_max_length").recortar(int(persona.get("maxLength", 500) or 0)),
         persona_forbidden=list(persona.get("forbiddenPhrases", []) or []),
         bot_paused=bool(app_settings.bot_paused) if app_settings else False,
         business_tz=str(((escalation.get("business_hours") or {}).get("tz")) or ""),
         business_ranges=validate_business_ranges(
             (escalation.get("business_hours") or {}).get("ranges") or []
         ),
+        business_hours_mode=modo_del_horario(escalation),
     )
 
 
@@ -210,6 +440,21 @@ async def get_settings_api(
     )
 
 
+@router.get("/catalog", response_model=Catalogo)
+async def get_catalog_api(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> Catalogo:
+    """Catálogo de opciones de Identidad y comportamiento (SPEC-37, ADR-0166): qué es cada una,
+    qué valores acepta, qué cambia y quién la edita. Las del master solo las ve el master; la lista
+    de guardrails se calcula con los packs habilitados del negocio activo."""
+    spec = await load_active_spec()
+    return catalogo_para(
+        es_master=actua_como_master(principal.admin),
+        guardrails_disponibles=_available_guardrails(spec),
+        guardrails_info={g.name: (g.etiqueta, g.explicacion) for g in mcp_host.get_guardrails()},
+    )
+
+
 @router.put("/identity", response_model=IdentitySettings)
 async def save_identity(
     payload: IdentityUpdate,
@@ -233,41 +478,59 @@ async def save_identity(
         app_settings.assistant_name = payload.assistant_name
         app_settings.business_description = payload.business_description
         app_settings.brand_voice = payload.brand_voice
+        # Moneda del negocio (HU-UI-01): ISO-4217 en mayúsculas, default COP.
+        app_settings.currency = (payload.currency or "COP").strip().upper()[:3] or "COP"
+        zona_anterior = app_settings.timezone or DEFAULT_TIMEZONE
+        if payload.timezone is not None:
+            app_settings.timezone = payload.timezone
         behavior = dict(app_settings.behavior_config)
         behavior.update(
-            tono=payload.tono,
             debounce_mode=payload.debounce_mode,
-            guardrail_max_retries=max(0, payload.guardrail_max_retries),
-            disabled_guardrails=sorted(set(available) & set(payload.disabled_guardrails)),
-            difficulty_long_message_threshold=max(
-                50, min(5000, payload.difficulty_long_message_threshold)
+            split_style=payload.split_style,
+            # Los rangos ya los validó `IdentityUpdate` (422); se recorta igual con la misma fuente.
+            guardrail_max_retries=rango("guardrail_max_retries").recortar(payload.guardrail_max_retries),
+            disabled_guardrails=sorted(set(available) & set(normalizar_desactivados(payload.disabled_guardrails))),
+            difficulty_long_message_threshold=rango("difficulty_long_message_threshold").recortar(
+                payload.difficulty_long_message_threshold
             ),
-            difficulty_turnos_sin_resolver_threshold=max(
-                1, min(20, payload.difficulty_turnos_sin_resolver_threshold)
+            difficulty_turnos_sin_resolver_threshold=rango(
+                "difficulty_turnos_sin_resolver_threshold"
+            ).recortar(payload.difficulty_turnos_sin_resolver_threshold),
+            difficulty_score_threshold=rango("difficulty_score_threshold").recortar(
+                payload.difficulty_score_threshold
             ),
-            difficulty_score_threshold=max(1, min(10, payload.difficulty_score_threshold)),
         )
+        if payload.guardrail_fail_action is not None:
+            behavior["guardrail_fail_action"] = payload.guardrail_fail_action
         app_settings.behavior_config = behavior
         ranges = validate_business_ranges(payload.business_ranges)
-        business_hours = (
-            {"tz": payload.business_tz.strip() or "UTC", "ranges": ranges} if ranges else None
-        )
+        # Sin zona propia, el horario de atención usa la del negocio (ADR-0091).
+        business_tz = payload.business_tz.strip() or app_settings.timezone or DEFAULT_TIMEZONE
+        # El horario que seguía la zona del negocio la sigue al cambiarla (HU-CFG-09); uno con zona propia no se toca.
+        if business_tz == zona_anterior and payload.timezone is not None:
+            business_tz = payload.timezone
+        business_hours = {"tz": business_tz, "ranges": ranges} if ranges else None
         app_settings.escalation_config = {
             **dict(app_settings.escalation_config or {}),
             "keywords": [k.strip() for k in payload.escalation_keywords if k.strip()],
             "out_of_hours_message": payload.out_of_hours_message.strip(),
-            "auto_escalate_after_turns": max(0, payload.auto_escalate_after_turns),
+            "auto_escalate_after_turns": rango("auto_escalate_after_turns").recortar(
+                payload.auto_escalate_after_turns
+            ),
             "business_hours": business_hours,
         }
-        app_settings.bot_paused = payload.bot_paused
+        if payload.business_hours_mode is not None:
+            app_settings.escalation_config["business_hours_mode"] = payload.business_hours_mode
+        if payload.bot_paused is not None:
+            app_settings.bot_paused = payload.bot_paused
 
     persona_data = spec.model_dump(mode="json")
     persona_data["persona"].update(
         {
             "tone": payload.persona_tone or persona_data["persona"].get("tone", ""),
-            "warmth": max(0, min(5, payload.persona_warmth)),
+            "warmth": rango("persona_warmth").recortar(payload.persona_warmth),
             "emojis": payload.persona_emojis or persona_data["persona"].get("emojis", "sparse"),
-            "maxLength": max(0, payload.persona_max_length),
+            "maxLength": rango("persona_max_length").recortar(payload.persona_max_length),
             "forbiddenPhrases": [p.strip() for p in payload.persona_forbidden if p.strip()],
         }
     )
@@ -277,9 +540,400 @@ async def save_identity(
     return _identity_out(refreshed, spec, available)
 
 
+# ------------------------------------------------------------------ asistente de configuración
+class AsistenteRespuestas(BaseModel):
+    """Lo que el dueño contestó: id de pregunta → id de opción (o lista de ids en las de varias)."""
+
+    respuestas: dict[str, str | list[str]] = Field(default_factory=dict)
+
+
+class AsistenteAplicar(AsistenteRespuestas):
+    # La que devolvió la vista previa: si lo que se escribiría cambió desde entonces, 409.
+    huella: str
+
+
+def _actuales_del_registro(app_settings: AppSettings | None, spec) -> dict[str, Any]:
+    """Los valores de hoy con las claves del registro (las de `IdentitySettings` son las mismas)."""
+    identidad = _identity_out(app_settings, spec, _available_guardrails(spec))
+    return {k: v for k, v in identidad.model_dump().items() if k in POR_CLAVE}
+
+
+async def _proponer(seccion: str, respuestas: dict[str, Any], tenant_id) -> tuple[Propuesta, Any]:
+    spec = await load_active_spec()
+    app_settings = await _load_app_settings(tenant_id)
+    try:
+        propuesta = resolver(seccion, respuestas, _actuales_del_registro(app_settings, spec))
+    except RespuestasInvalidas as exc:
+        raise ApiError(422, "validation_error", "Revisa las respuestas marcadas.", fields=exc.por_pregunta) from None
+    except ValueError as exc:
+        raise ApiError(404, "not_found", str(exc)) from None
+    return propuesta, spec
+
+
+def _escribir_opcion(app_settings: AppSettings, persona: dict[str, Any], clave: str, valor: Any) -> None:
+    """Escribe una opción del registro en su almacén. Solo los almacenes que usa el asistente."""
+    tipo, _, ruta = POR_CLAVE[clave].almacen.partition(":")
+    if tipo == "behavior_config":
+        app_settings.behavior_config = {**dict(app_settings.behavior_config or {}), ruta: valor}
+    elif tipo == "escalation_config":
+        escalation = dict(app_settings.escalation_config or {})
+        if ruta == "business_hours.ranges":
+            ranges = validate_business_ranges(valor)
+            tz = ((escalation.get("business_hours") or {}).get("tz")) or app_settings.timezone or DEFAULT_TIMEZONE
+            escalation["business_hours"] = {"tz": tz, "ranges": ranges} if ranges else None
+        elif ruta == "keywords":
+            escalation["keywords"] = [k.strip() for k in valor if k.strip()]
+        elif "." in ruta:
+            raise ValueError(f"El asistente no escribe «{clave}».")
+        else:
+            escalation[ruta] = valor
+        app_settings.escalation_config = escalation
+    elif tipo == "spec" and ruta.startswith("persona."):
+        persona[ruta.removeprefix("persona.")] = [p.strip() for p in valor if p.strip()] if isinstance(valor, list) else valor
+    else:
+        raise ValueError(f"El asistente no escribe «{clave}».")
+
+
+@router.post("/asistente/{seccion}/vista-previa", response_model=Propuesta)
+async def asistente_vista_previa(
+    seccion: str,
+    payload: AsistenteRespuestas,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> Propuesta:
+    """Qué cambiaría el asistente con esas respuestas (valor actual → propuesto), sin escribir nada."""
+    _exigir_negocio(principal)
+    propuesta, _ = await _proponer(seccion, payload.respuestas, principal.tenant_id)
+    return propuesta
+
+
+@router.post("/asistente/{seccion}/aplicar", response_model=Propuesta)
+async def asistente_aplicar(
+    seccion: str,
+    payload: AsistenteAplicar,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> Propuesta:
+    """Escribe lo que mostró la vista previa. Todo o nada: la configuración del negocio y la persona
+    del agente se guardan en una sola transacción, y si lo que se escribiría ya no es lo que se vio
+    (la configuración cambió en medio) responde 409 sin escribir."""
+    _exigir_negocio(principal)
+    # La fila del spec de la que parte la propuesta se lee ANTES de calcularla: si otra edición del
+    # agente (habilidades, cerebro…) confirma una versión en medio, no se pisa en silencio.
+    activo = await leer_spec_activo(principal.tenant_id)
+    base_id = activo[0] if activo else None
+    propuesta, spec = await _proponer(seccion, payload.respuestas, principal.tenant_id)
+    if propuesta.huella != payload.huella:
+        raise ApiError(409, "conflict", "La configuración cambió mientras decidías: revisa los cambios de nuevo.")
+    if not propuesta.cambios:
+        return propuesta
+
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        datos = spec.model_dump(mode="json")
+        persona = dict(datos.get("persona") or {})
+        for cambio in propuesta.cambios:
+            _escribir_opcion(app_settings, persona, cambio.clave, cambio.propuesto)
+        datos["persona"] = persona
+        nuevo = AgentSpec.model_validate({**datos, "tenantId": str(principal.tenant_id)})
+        if nuevo.model_dump(mode="json") != spec.model_dump(mode="json"):
+            if await save_spec_version(nuevo, principal.tenant_id, base_id=base_id, session=session) is None:
+                raise ApiError(409, "conflict", "El agente cambió mientras guardabas: vuelve a intentarlo.")
+        session.add(
+            AuditLog(
+                tenant_id=principal.tenant_id,
+                actor=f"admin:{principal.admin.email}",
+                action=f"settings.asistente.{seccion}",
+                input={"cambios": [{"clave": c.clave, "antes": c.actual, "despues": c.propuesto} for c in propuesta.cambios]},
+            )
+        )
+    return propuesta
+
+
+# ------------------------------------------------------------------ palabras de baja (HU-CFG-05)
+MAX_PALABRAS_DE_BAJA = 50
+MAX_LARGO_PALABRA_DE_BAJA = 60
+
+
+class BajasSettings(BaseModel):
+    """Palabras con las que un cliente se da de baja de los envíos a segmentos (ADR-0150)."""
+
+    palabras: list[str] = Field(description="Las guardadas por el negocio; vacío = usa las de por defecto.")
+    por_defecto: list[str]
+    usa_por_defecto: bool
+
+
+class BajasUpdate(BaseModel):
+    palabras: list[str] = Field(default=[], max_length=MAX_PALABRAS_DE_BAJA)
+
+    @field_validator("palabras")
+    @classmethod
+    def _largo_razonable(cls, value: list[str]) -> list[str]:
+        for palabra in value:
+            if len(palabra.strip()) > MAX_LARGO_PALABRA_DE_BAJA:
+                raise ValueError(f"Cada palabra admite hasta {MAX_LARGO_PALABRA_DE_BAJA} caracteres.")
+        return value
+
+
+def _bajas_out(app_settings: AppSettings | None) -> BajasSettings:
+    behavior = dict((app_settings.behavior_config if app_settings else {}) or {})
+    guardadas = behavior.get("palabras_de_baja")
+    palabras = limpiar_palabras_de_baja(guardadas) if isinstance(guardadas, list) else []
+    return BajasSettings(
+        palabras=palabras,
+        por_defecto=list(PALABRAS_DE_BAJA_POR_DEFECTO),
+        usa_por_defecto=not palabras,
+    )
+
+
+@router.get("/bajas", response_model=BajasSettings)
+async def get_bajas(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> BajasSettings:
+    _exigir_negocio(principal)
+    return _bajas_out(await _load_app_settings(principal.tenant_id))
+
+
+@router.put("/bajas", response_model=BajasSettings)
+async def save_bajas(
+    payload: BajasUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> BajasSettings:
+    """Guarda las palabras de baja sin vacíos ni repetidos. Lista vacía = restablecer las de por
+    defecto (se quita la clave). Los textos son dato del dueño, nunca instrucción (invariante 7)."""
+    _exigir_negocio(principal)
+    palabras = limpiar_palabras_de_baja(payload.palabras)
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        behavior = dict(app_settings.behavior_config or {})
+        antes = behavior.get("palabras_de_baja")
+        if palabras:
+            behavior["palabras_de_baja"] = palabras
+        else:
+            behavior.pop("palabras_de_baja", None)
+        if behavior != dict(app_settings.behavior_config or {}):
+            app_settings.behavior_config = behavior
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.palabras_de_baja",
+                    input={"antes": antes if isinstance(antes, list) else [], "despues": palabras},
+                )
+            )
+    return _bajas_out(await _load_app_settings(principal.tenant_id))
+
+
+# ------------------------------------------------------------------ política de WhatsApp Web (HU-CFG-05, ADR-0074)
+class WaWebPolicySettings(BaseModel):
+    """Política anti-baneo del canal no oficial. Solo la ve y la edita el master."""
+
+    mode: str
+    send_min_delay_ms: int
+    send_max_delay_ms: int
+    daily_outbound_cap: int
+    warmup_enabled: bool
+    # Versión del aviso de riesgo vigente: para pasar a `allow_outbound` hay que aceptarlo.
+    risk_version: str
+
+
+class WaWebPolicyUpdate(BaseModel):
+    mode: str
+    send_min_delay_ms: int = Field(
+        ge=rango("waweb_send_min_delay_ms").minimo, le=rango("waweb_send_min_delay_ms").maximo
+    )
+    send_max_delay_ms: int = Field(
+        ge=rango("waweb_send_max_delay_ms").minimo, le=rango("waweb_send_max_delay_ms").maximo
+    )
+    daily_outbound_cap: int = Field(
+        ge=rango("waweb_daily_outbound_cap").minimo, le=rango("waweb_daily_outbound_cap").maximo
+    )
+    warmup_enabled: bool
+    # Confirmación explícita del aviso de riesgo al pasar a `allow_outbound`: `acepta_riesgo` y la
+    # versión del aviso que la persona vio (`risk_version` de la lectura), para no aceptar uno viejo.
+    acepta_riesgo: bool = False
+    risk_version: str | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def _modo_conocido(cls, value: str) -> str:
+        return validar_valor("waweb_mode", value)
+
+    @field_validator("send_max_delay_ms")
+    @classmethod
+    def _maximo_no_menor_que_el_minimo(cls, value: int, info) -> int:
+        minimo = info.data.get("send_min_delay_ms")
+        if minimo is not None and value < minimo:
+            raise ValueError("La pausa máxima no puede ser menor que la mínima.")
+        return value
+
+
+def _exigir_master(principal: Principal) -> None:
+    if not actua_como_master(principal.admin):
+        raise ApiError.forbidden("La política de WhatsApp Web la decide el equipo de SolversHub.")
+
+
+def _solo_master(*, write: bool):
+    """Dependencia: sección Configuración y además master. Como es dependencia, el 403 sale antes
+    de validar el cuerpo: un dueño no se entera de los modos ni rangos válidos con un 422."""
+    base = require("settings", write=write)
+
+    # `Depends` va como valor por defecto: con `from __future__ import annotations`, FastAPI no
+    # resolvería `base` (variable local) dentro de un `Annotated[...]` en texto.
+    async def dependency(principal: Principal = Depends(base)) -> Principal:  # noqa: B008
+        _exigir_master(principal)
+        return principal
+
+    return dependency
+
+
+def _exigir_negocio(principal: Principal) -> None:
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+
+
+def _waweb_out(app_settings: AppSettings | None) -> WaWebPolicySettings:
+    politica = policy_from_behavior(dict((app_settings.behavior_config if app_settings else {}) or {}))
+    return WaWebPolicySettings(
+        mode=politica.mode,
+        send_min_delay_ms=politica.send_min_delay_ms,
+        send_max_delay_ms=politica.send_max_delay_ms,
+        daily_outbound_cap=politica.daily_outbound_cap,
+        warmup_enabled=politica.warmup_enabled,
+        risk_version=RISK_ACK_VERSION,
+    )
+
+
+@router.get("/whatsapp-web", response_model=WaWebPolicySettings)
+async def get_waweb_policy(
+    principal: Annotated[Principal, Depends(_solo_master(write=False))],
+) -> WaWebPolicySettings:
+    _exigir_negocio(principal)
+    return _waweb_out(await _load_app_settings(principal.tenant_id))
+
+
+@router.put("/whatsapp-web", response_model=WaWebPolicySettings)
+async def save_waweb_policy(
+    payload: WaWebPolicyUpdate,
+    principal: Annotated[Principal, Depends(_solo_master(write=True))],
+) -> WaWebPolicySettings:
+    """Guarda la política del canal. Pasar a `allow_outbound` exige aceptar el aviso de riesgo
+    vigente; cada cambio deja una fila en `audit_log` con quién, antes y después."""
+    _exigir_negocio(principal)
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        antes = _waweb_out(app_settings)
+        abre_envio = payload.mode == MODE_ALLOW_OUTBOUND and antes.mode != MODE_ALLOW_OUTBOUND
+        if abre_envio and not payload.acepta_riesgo:
+            raise ApiError(
+                422,
+                "validation_error",
+                "Revisa los campos marcados.",
+                fields={"acepta_riesgo": "Acepta el aviso de riesgo para permitir envíos no solicitados."},
+            )
+        if abre_envio and payload.risk_version != RISK_ACK_VERSION:
+            raise ApiError(
+                422,
+                "validation_error",
+                "Revisa los campos marcados.",
+                fields={"risk_version": "El aviso de riesgo cambió: vuelve a leerlo y acéptalo."},
+            )
+        behavior = dict(app_settings.behavior_config or {})
+        behavior.update(
+            waweb_mode=payload.mode,
+            waweb_send_min_delay_ms=payload.send_min_delay_ms,
+            waweb_send_max_delay_ms=payload.send_max_delay_ms,
+            waweb_daily_outbound_cap=payload.daily_outbound_cap,
+            waweb_warmup_enabled=payload.warmup_enabled,
+        )
+        despues = payload.model_dump(exclude={"acepta_riesgo", "risk_version"})
+        if despues != antes.model_dump(exclude={"risk_version"}):
+            app_settings.behavior_config = behavior
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.waweb_allow_outbound" if abre_envio else "settings.waweb_policy",
+                    input={
+                        "antes": antes.model_dump(exclude={"risk_version"}),
+                        "despues": despues,
+                        "riesgo_aceptado": payload.acepta_riesgo if abre_envio else None,
+                        "risk_version": RISK_ACK_VERSION,
+                    },
+                )
+            )
+    return _waweb_out(await _load_app_settings(principal.tenant_id))
+
+
+@router.put("/bot-paused", response_model=BotPausedState)
+async def save_bot_paused(
+    payload: BotPausedUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> BotPausedState:
+    """Pausa o reactiva el asistente del negocio (kill-switch por tenant).
+
+    Fija el valor pedido (repetirlo no cambia nada) y solo escribe
+    `app_settings.bot_paused`: a diferencia de `PUT .../identity`, no reenvía la
+    identidad completa, así que no pisa lo que otra persona esté editando.
+    """
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        if bool(app_settings.bot_paused) != payload.paused:
+            app_settings.bot_paused = payload.paused
+            session.add(
+                AuditLog(
+                    tenant_id=principal.tenant_id,
+                    actor=f"admin:{principal.admin.email}",
+                    action="settings.bot_paused" if payload.paused else "settings.bot_resumed",
+                    input={"paused": payload.paused},
+                )
+            )
+    return BotPausedState(paused=payload.paused)
+
+
 @router.put("/brain", response_model=BrainSettings)
 async def save_brain(
-    payload: BrainSettings,
+    payload: BrainUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> BrainSettings:
     spec = await load_active_spec()
@@ -297,9 +951,65 @@ async def save_brain(
     return _brain_out(updated)
 
 
+@router.get("/web-chat", response_model=WebChatSettings)
+async def get_web_chat_settings(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> WebChatSettings:
+    """Config del chat web embebible (HU-CHAN-02). Nunca devuelve el secreto."""
+    app_settings = await _load_app_settings(principal.tenant_id)
+    return _web_chat_out(app_settings)
+
+
+@router.put("/web-chat", response_model=WebChatSettings)
+async def save_web_chat_settings(
+    payload: WebChatUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> WebChatSettings:
+    """Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave
+    o cambia el secreto de Turnstile. Se guarda en `app_settings.web_chat_config`
+    (JSONB, migración 0047) y, en la misma transacción, en la conexión `webchat` del
+    negocio (ADR-0115 §4, doble escritura hasta el *contract*: `chat_web_conexion`). El
+    primer guardado crea la conexión con sus instancias de agentes si el negocio ya las
+    tiene (HU-AOS-11 parte 2)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from core.gateway import chat_web_conexion
+
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+    try:
+        async with get_session() as session:
+            # Estado previo y nuevo dentro de la misma transacción, bajo el candado de `app_settings`.
+            antes = await chat_web_conexion.estado_bajo_candado(session, principal.tenant_id)
+            await chat_web_conexion.guardar_widget(
+                session,
+                principal.tenant_id,
+                enabled=bool(payload.enabled),
+                allowed_origins=_normalize_origins(payload.allowed_origins),
+                rotar_clave=bool(payload.rotate_key),
+                turnstile_secret=payload.turnstile_secret,
+            )
+            despues = await chat_web_conexion.estado_bajo_candado(session, principal.tenant_id)
+    except IntegrityError:
+        # Sin el detalle de la BD: un choque de la clave (índice global `uq_cc_webchat_key`)
+        # no debe delatar que otro negocio la usa. Con 192 bits aleatorios no pasa en la práctica.
+        log.warning("web_chat_guardado_conflicto", tenant_id=str(principal.tenant_id))
+        raise ApiError(409, "conflict", "No se pudo guardar el chat web: vuelve a intentarlo.") from None
+
+    if antes is not None and despues is not None and antes[1] != despues[1]:
+        # Pausar o reanudar desde aquí deja el mismo rastro que desde la consola (HU-AOS-23).
+        from core.api.routers.connections import audit_connection_action
+
+        await audit_connection_action(
+            principal, "connection.resumed" if despues[1] else "connection.paused", str(despues[0])
+        )
+    refreshed = await _load_app_settings(principal.tenant_id)
+    return _web_chat_out(refreshed)
+
+
 @router.put("/memory", response_model=MemorySettings)
 async def save_memory_settings(
-    payload: MemorySettings,
+    payload: MemoryUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> MemorySettings:
     """Memoria del agente: turnos de contexto y recall RAG."""
@@ -407,11 +1117,12 @@ async def get_advanced(
         read_llm,
         recent_eval_runs,
     )
+    from core.agents.declarativas import spec_para_mostrar
 
     spec = await load_active_spec()
-    spec = await load_active_spec()
     return AdvancedResponse(
-        spec=spec.model_dump(mode="json"),
+        # Los literales sensibles de tools declarativas viejas nunca salen (HU-AOS-12).
+        spec=spec_para_mostrar(spec.model_dump(mode="json")),
         versions=[SpecVersion(**v) for v in await list_spec_versions(principal.tenant_id)],
         llm=LlmSettings(**await read_llm(principal.tenant_id)),
         guardrails_text=read_custom_guardrails(spec),
@@ -486,9 +1197,15 @@ class SpecPayload(BaseModel):
 async def get_raw_spec(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> SpecPayload:
-    """AgentSpec activo tal cual (editor crudo de Configuración → Avanzado)."""
+    """AgentSpec activo (editor crudo de Configuración → Avanzado), con los headers sensibles
+    de las tools declarativas enmascarados (HU-AOS-12). El `tenantId` mostrado es el del
+    negocio de la sesión, aunque la fila traiga otro."""
+    from core.agents.declarativas import spec_para_mostrar
+
     spec = await load_active_spec()
-    return SpecPayload(spec=spec.model_dump(mode="json"))
+    if principal.tenant_id is not None:
+        spec = con_tenant_de_la_fila(spec, principal.tenant_id)
+    return SpecPayload(spec=spec_para_mostrar(spec.model_dump(mode="json")))
 
 
 @router.put("/advanced/spec", response_model=SpecPayload)
@@ -499,15 +1216,684 @@ async def save_raw_spec(
     """Valida el JSON contra el contrato del AgentSpec y guarda si cambió.
 
     `save_spec_if_changed` solo crea versión cuando el contenido difiere, así que
-    guardar el mismo spec es un no-op (no ensucia el historial).
+    guardar el mismo spec es un no-op (no ensucia el historial). El `tenantId` es
+    siempre el del negocio de la sesión: el del cuerpo se ignora.
     """
     from agentcore_contracts import AgentSpec
     from pydantic import ValidationError
 
+    from core.agents.declarativas import (
+        ErroresDeclarativas,
+        spec_para_mostrar,
+        tools_del_editor_crudo,
+    )
+    from core.agents.secretos import SecretoInvalido
+
+    if principal.tenant_id is None:
+        raise ApiError(400, "sin_negocio", "Selecciona un negocio (X-Tenant-Id).")
     try:
         nuevo = AgentSpec.model_validate(payload.spec)
     except ValidationError as exc:
         raise ApiError.bad_request(f"Spec inválido: {str(exc)[:240]}", "invalid_spec") from exc
+    nuevo = con_tenant_de_la_fila(nuevo, principal.tenant_id)
     spec = await load_active_spec()
-    await save_spec_if_changed(spec, nuevo.model_dump(mode="json"), principal.tenant_id)
-    return SpecPayload(spec=nuevo.model_dump(mode="json"))
+    data = nuevo.model_dump(mode="json")
+    # Las tools declarativas pasan por el mismo validador que su editor (sin literales
+    # sensibles, secretos atados a dominios): el editor crudo no es una segunda puerta.
+    ext = dict(data.get("extensions") or {})
+    try:
+        tools = await tools_del_editor_crudo(
+            principal.tenant_id, ext.get("tools"), (spec.extensions or {}).get("tools"), actor=principal.admin.id
+        )
+    except ErroresDeclarativas as exc:
+        raise ApiError(
+            422, "invalid_declarative_tools", "Las tools declarativas no son válidas.",
+            fields={f"extensions.{k}": v for k, v in exc.errores.items()},
+        ) from None
+    except SecretoInvalido as exc:
+        raise ApiError(422, "invalid_secret", str(exc)) from None
+    if tools is None:
+        ext.pop("tools", None)
+    else:
+        ext["tools"] = tools
+    data["extensions"] = ext
+    await save_spec_if_changed(spec, data, principal.tenant_id)
+    return SpecPayload(spec=spec_para_mostrar(data))
+
+
+# ---------------------------------------------------------------- plantillas por evento
+EVENTO_LABEL = {
+    "subscription.charge_created": "Cargo de suscripción",
+    "subscription.charge_reminder": "Recordatorio de pago",
+    "subscription.paused": "Suscripción pausada por mora",
+    "subscription.trial_ending": "Fin de la prueba gratis",
+    "appointment.confirmed": "Cita agendada desde el panel",
+    "appointment.reminder": "Recordatorio de cita",
+    "appointment.no_show": "Cita perdida: oferta de reagendar",
+}
+
+class EventTemplateEntry(BaseModel):
+    """Evento → plantilla aprobada (HU-ARCH-13, ADR-0108)."""
+
+    template: str = ""
+    language: str = "es"
+    # Lista (variables posicionales, en orden) o {placeholder: ruta} (con nombre).
+    variables: list[str] | dict[str, str] = []
+    fallback_text: str = ""
+    # ADR-0178 D2: texto del aviso por tipo de conexión sin plantillas (`whatsapp_waweb`, `webchat`, `messenger_meta`,
+    # `instagram_meta`), con `{ruta}` del evento. Solo se usa con la bandera `avisos_por_canal` del negocio (master);
+    # sin la bandera se guarda pero no se envía. Al guardar, omitir el campo conserva lo que ya hay; `{}` lo borra.
+    fallback_text_by_channel: dict[str, str] = {}
+    # ADR-0178 D3: clave de una plantilla con opciones PUBLICADA del negocio (`/plantillas-opciones`). Con las banderas
+    # `avisos_por_canal` y `opciones_directas` del negocio (master) el aviso sale con sus botones, su lista o su menú
+    # numerado según el canal; si no puede salir, cae al texto/plantilla de siempre. No admite los eventos de cobranza.
+    # Al guardar, omitir el campo conserva lo que ya hay; "" lo borra.
+    option_template: str = ""
+
+
+class EventCatalogItem(BaseModel):
+    event: str
+    variables: dict[str, str]  # ruta permitida → descripción
+
+
+class TenantTemplateItem(BaseModel):
+    """Plantilla APROBADA de alguna WABA del negocio, con los placeholders del cuerpo."""
+
+    name: str
+    language: str
+    category: str | None
+    body: str
+    variables: list[str]
+    named: bool
+
+
+class MessageTemplatesSettings(BaseModel):
+    events: list[EventCatalogItem]
+    mapping: dict[str, EventTemplateEntry]
+    templates: list[TenantTemplateItem] = []
+
+
+def _textos_por_canal(evento: str, textos: dict[str, str]) -> tuple[dict[str, str], str]:
+    """Valida y limpia `fallback_text_by_channel` de un evento: claves de `TIPOS_DE_TEXTO`, texto de hasta 1000
+    caracteres y solo `{ruta}` permitidas para el evento. Devuelve (limpio, error); un texto vacío se descarta."""
+    from core.gateway.avisos_canal import COBRANZA, QR, TIPOS_DE_TEXTO
+    from core.gateway.event_notices import EVENTOS
+    from core.kernel.mensajes import variables_de
+
+    limpio: dict[str, str] = {}
+    for tipo, texto in textos.items():
+        if tipo not in TIPOS_DE_TEXTO:
+            return {}, f"Canal sin texto de respaldo: {tipo} (válidos: {', '.join(TIPOS_DE_TEXTO)})."
+        if tipo == QR and evento in COBRANZA:
+            return {}, "Los avisos de cobranza no salen por QR (no se puede garantizar el horario legal de entrega)."
+        texto = texto.strip()
+        if not texto:
+            continue
+        if len(texto) > 1000:
+            return {}, f"El texto para {tipo} pasa de 1000 caracteres."
+        no_permitidas = [v for v in variables_de(texto) if v not in EVENTOS[evento]]
+        if no_permitidas:
+            return {}, f"Variables no permitidas en el texto de {tipo}: {', '.join(no_permitidas)}."
+        limpio[tipo] = texto
+    return limpio, ""
+
+
+class MessageTemplatesUpdate(BaseModel):
+    mapping: dict[str, EventTemplateEntry]
+
+
+# `client_message_id` de un envío de plantilla con opciones (`opciones_envio.PREFIJO_ID` + «:»); un test lo vigila.
+PREFIJO_OPCIONES = "opt_send:"
+
+
+class MissingTemplateItem(BaseModel):
+    conversation_id: str
+    detail: str
+    created_at: datetime
+    # `evento`: un aviso por evento sin plantilla asignada o aprobada (remedio: Configuración → Plantillas).
+    # `opcion`: una plantilla con opciones (SPEC-40) fuera de la ventana de 24 h sin su plantilla de Meta aprobada
+    # (remedio: publicar la versión en Meta, no el mapeo de eventos); `clave` es la de la plantilla con opciones.
+    tipo: Literal["evento", "opcion"] = "evento"
+    clave: str | None = None
+
+
+class MissingTemplates(BaseModel):
+    total_7d: int
+    recent: list[MissingTemplateItem]
+    # Desglose de `total_7d` por tipo (los dos suman el total).
+    total_eventos_7d: int = 0
+    total_opciones_7d: int = 0
+
+
+async def _message_templates_out(tenant_id) -> MessageTemplatesSettings:
+    from core.db.models import MessageTemplate
+    from core.gateway.event_notices import (
+        EVENTOS,
+        render_body,
+        template_has_non_body_variables,
+        template_placeholders,
+    )
+
+    app_settings = await _load_app_settings(tenant_id)
+    raw = dict((app_settings.message_templates_map if app_settings else None) or {})
+    async with get_session() as session:
+        plantillas = (
+            await session.execute(
+                select(MessageTemplate)
+                .where(MessageTemplate.tenant_id == tenant_id, MessageTemplate.status == "APPROVED")
+                .order_by(MessageTemplate.name, MessageTemplate.language)
+            )
+        ).scalars().all()
+    vistas: set[tuple[str, str]] = set()
+    templates: list[TenantTemplateItem] = []
+    for t in plantillas:
+        # La misma plantilla puede estar en varias WABA del negocio: una sola entrada.
+        if (t.name, t.language) in vistas or template_has_non_body_variables(t.components):
+            continue
+        vistas.add((t.name, t.language))
+        templates.append(
+            TenantTemplateItem(
+                name=t.name,
+                language=t.language,
+                category=t.category,
+                body=render_body(t, {}),
+                variables=template_placeholders(t.components),
+                named=(t.parameter_format or "").upper() == "NAMED",
+            )
+        )
+    # WhatsApp vía Twilio (ADR-0186): también sus plantillas aprobadas, con el mismo formato (`{{1}}`, `{{2}}`…).
+    from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+    for t in await twilio_tpl.del_negocio(tenant_id):
+        if (t.friendly_name, t.language) in vistas:
+            continue
+        vistas.add((t.friendly_name, t.language))
+        templates.append(
+            TenantTemplateItem(
+                name=t.friendly_name,
+                language=t.language,
+                category=t.category,
+                body=t.body,
+                variables=twilio_tpl.placeholders(t.body),
+                named=False,
+            )
+        )
+    return MessageTemplatesSettings(
+        events=[EventCatalogItem(event=k, variables=v) for k, v in EVENTOS.items()],
+        mapping={k: EventTemplateEntry.model_validate(v) for k, v in raw.items() if k in EVENTOS},
+        templates=templates,
+    )
+
+
+@router.get("/message-templates", response_model=MessageTemplatesSettings)
+async def get_message_templates(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> MessageTemplatesSettings:
+    """Catálogo de eventos (con sus variables permitidas) y el mapeo del negocio."""
+    return await _message_templates_out(principal.tenant_id)
+
+
+@router.put("/message-templates", response_model=MessageTemplatesSettings)
+async def save_message_templates(
+    payload: MessageTemplatesUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MessageTemplatesSettings:
+    """Guarda el mapeo evento → plantilla. Valida que el evento exista, que las
+    rutas estén permitidas y que la plantilla exista en alguna WABA del negocio
+    con la misma cantidad de variables en el cuerpo."""
+    from core.db.models import MessageTemplate
+    from core.gateway.event_notices import (
+        EVENTOS,
+        template_has_non_body_variables,
+        template_placeholders,
+    )
+
+    errores: dict[str, str] = {}
+    limpio: dict[str, Any] = {}
+    previo: dict[str, Any] | None = None  # se lee solo si un evento omite `fallback_text_by_channel` u `option_template`
+
+    async def _guardado(evento: str) -> dict[str, Any]:
+        nonlocal previo
+        if previo is None:
+            guardado = await _load_app_settings(principal.tenant_id)
+            previo = dict((guardado.message_templates_map if guardado else None) or {})
+        return dict(previo.get(evento) or {})
+
+    async def _textos_guardados(evento: str) -> dict[str, str]:
+        return dict((await _guardado(evento)).get("fallback_text_by_channel") or {})
+
+    async def _opcion_guardada(evento: str) -> str:
+        valor = (await _guardado(evento)).get("option_template")
+        return valor if isinstance(valor, str) else ""
+
+    for evento, entrada in payload.mapping.items():
+        if evento not in EVENTOS:
+            errores[evento] = "Evento desconocido."
+            continue
+        nombre = entrada.template.strip()
+        idioma = entrada.language.strip() or "es"
+        fallback = entrada.fallback_text.strip()[:1000]
+        # ADR-0178 D2: textos por canal. Omitido en el cuerpo = conservar los guardados (el panel anterior no lo manda
+        # y no debe borrarlos al guardar otra cosa); presente (aun vacío) = reemplazar.
+        pedido = "fallback_text_by_channel" in entrada.model_fields_set
+        por_canal: dict[str, str] = {}
+        if pedido:
+            por_canal, error_canal = _textos_por_canal(evento, entrada.fallback_text_by_channel)
+            if error_canal:
+                errores[evento] = error_canal
+                continue
+        # ADR-0178 D3: plantilla con opciones del evento. Mismo criterio: omitido = conservar; presente (aun vacío) = reemplazar.
+        # `opcion` None = omitido: se lee lo guardado solo al armar `limpio`, después de validar (el mapa se valida
+        # antes de tocar la base).
+        opcion: str | None = None
+        if "option_template" in entrada.model_fields_set:
+            opcion = entrada.option_template.strip()
+            if opcion and (error_opcion := await avisos_opciones.error_de_mapeo(principal.tenant_id, evento, opcion)):
+                errores[evento] = error_opcion
+                continue
+        if not nombre:
+            por_canal = por_canal if pedido else await _textos_guardados(evento)
+            opcion = await _opcion_guardada(evento) if opcion is None else opcion
+            if fallback or por_canal or opcion:
+                limpio[evento] = {
+                    "template": "", "language": idioma, "variables": [], "fallback_text": fallback,
+                    **({"fallback_text_by_channel": por_canal} if por_canal else {}),
+                    **({"option_template": opcion} if opcion else {}),
+                }
+            continue
+        rutas = list(entrada.variables.values()) if isinstance(entrada.variables, dict) else list(entrada.variables)
+        no_permitidas = [r for r in rutas if r not in EVENTOS[evento]]
+        if no_permitidas:
+            errores[evento] = f"Variables no permitidas: {', '.join(no_permitidas)}."
+            continue
+        async with get_session() as session:
+            plantilla = (
+                await session.execute(
+                    select(MessageTemplate).where(
+                        MessageTemplate.tenant_id == principal.tenant_id,
+                        MessageTemplate.name == nombre,
+                        MessageTemplate.language == idioma,
+                    )
+                )
+            ).scalars().first()
+        if plantilla is None:
+            from core.gateway.twilio import plantillas_en_uso as twilio_tpl
+
+            # Plantilla de Twilio (ADR-0186): sus variables son `{{1}}`, `{{2}}`… del cuerpo. El mismo nombre puede
+            # existir en varias conexiones (el aviso usa la de cada conversación): todas tienen que pedir las mismas.
+            de_twilio = [
+                t
+                for t in await twilio_tpl.del_negocio(principal.tenant_id, solo_aprobadas=False)
+                if t.friendly_name == nombre and t.language == idioma
+            ]
+            if not de_twilio:
+                errores[evento] = f"No existe la plantilla {nombre} ({idioma}) en tus conexiones."
+                continue
+            distintas = {tuple(twilio_tpl.placeholders(t.body)) for t in de_twilio}
+            if len(distintas) > 1:
+                errores[evento] = (
+                    f"La plantilla {nombre} ({idioma}) tiene variables distintas en tus conexiones de Twilio."
+                )
+                continue
+            placeholders_twilio = list(next(iter(distintas)))
+            if isinstance(entrada.variables, dict):
+                if set(entrada.variables) != set(placeholders_twilio):
+                    errores[evento] = "Las variables no coinciden con las de la plantilla."
+                    continue
+            elif len(entrada.variables) != len(placeholders_twilio):
+                errores[evento] = "La cantidad de variables no coincide con la de la plantilla."
+                continue
+        else:
+            if template_has_non_body_variables(plantilla.components):
+                errores[evento] = "La plantilla tiene variables fuera del cuerpo (cabecera o botón): no se admite todavía."
+                continue
+            placeholders = template_placeholders(plantilla.components)
+            claves = set(entrada.variables) if isinstance(entrada.variables, dict) else None
+            if (claves is not None and claves != set(placeholders)) or (
+                claves is None and len(rutas) != len(placeholders)
+            ):
+                errores[evento] = f"La plantilla tiene {len(placeholders)} variables y mapeaste {len(rutas)}."
+                continue
+        por_canal = por_canal if pedido else await _textos_guardados(evento)
+        opcion = await _opcion_guardada(evento) if opcion is None else opcion
+        limpio[evento] = {
+            "template": nombre,
+            "language": idioma,
+            "variables": entrada.variables,
+            "fallback_text": fallback,
+            **({"fallback_text_by_channel": por_canal} if por_canal else {}),
+            **({"option_template": opcion} if opcion else {}),
+        }
+    if errores:
+        detalle = " ".join(f"{EVENTO_LABEL.get(k, k)}: {v}" for k, v in errores.items())
+        raise ApiError.bad_request(
+            f"Revisa el mapeo de plantillas. {detalle}", "message_templates_invalid", fields=errores
+        )
+
+    # Un panel anterior no manda los eventos que no tienen plantilla ni texto general; si uno de ellos tiene textos por
+    # canal (ADR-0178 D2) o una plantilla con opciones (D3) guardados, no se pierden: se conservan solos. Para
+    # borrarlos, se manda el evento con `{}` (textos) o `option_template: ""`.
+    for evento in EVENTOS:
+        if evento in payload.mapping:
+            continue
+        guardados = await _textos_guardados(evento)
+        opcion_guardada = await _opcion_guardada(evento)
+        if guardados or opcion_guardada:
+            limpio[evento] = {
+                "template": "", "language": "es", "variables": [], "fallback_text": "",
+                **({"fallback_text_by_channel": guardados} if guardados else {}),
+                **({"option_template": opcion_guardada} if opcion_guardada else {}),
+            }
+
+    async with get_session() as session:
+        app_settings = (
+            await session.execute(
+                select(AppSettings).where(
+                    AppSettings.tenant_id == principal.tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if app_settings is None:
+            app_settings = AppSettings(tenant_id=principal.tenant_id)
+            session.add(app_settings)
+        app_settings.message_templates_map = limpio
+    return await _message_templates_out(principal.tenant_id)
+
+
+@router.get("/message-templates/missing", response_model=MissingTemplates)
+async def get_missing_templates(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> MissingTemplates:
+    """Avisos que no salieron por falta de plantilla en los últimos 7 días (alerta del panel)."""
+    from datetime import UTC, timedelta
+
+    from sqlalchemy import func
+
+    from core.db.models import Message
+    from core.gateway.event_notices import SIN_PLANTILLA
+
+    desde = datetime.now(UTC) - timedelta(days=7)
+    filtro = (
+        Message.tenant_id == principal.tenant_id,
+        Message.error_reason == SIN_PLANTILLA,
+        Message.created_at >= desde,
+        Message.deleted_at.is_(None),
+    )
+    async with get_session() as session:
+        total = (await session.execute(select(func.count()).select_from(Message).where(*filtro))).scalar_one()
+        filas = (
+            await session.execute(
+                select(Message).where(*filtro).order_by(Message.created_at.desc()).limit(10)
+            )
+        ).scalars().all()
+        de_opciones = (
+            await session.execute(select(func.count()).select_from(Message).where(*filtro, Message.client_message_id.startswith(PREFIJO_OPCIONES, autoescape=True)))
+        ).scalar_one()
+    return MissingTemplates(
+        total_7d=int(total),
+        total_opciones_7d=int(de_opciones),
+        total_eventos_7d=int(total) - int(de_opciones),
+        recent=[_missing_item(m) for m in filas],
+    )
+
+
+def _missing_item(m) -> MissingTemplateItem:  # type: ignore[no-untyped-def]
+    """Un aviso que no salió. Una plantilla con opciones deja el mensaje `failed` con el `client_message_id` del
+    envío (`opt_send:<id>:f…`) y el texto «Aviso «opciones:<clave>» sin enviar: …» (ADR-0172, adenda del PR 5)."""
+    clave = None
+    if (m.client_message_id or "").startswith(PREFIJO_OPCIONES):
+        tipo = "opcion"
+        encontrada = re.search(r"«opciones:([a-z0-9_]{1,40})»", m.content or "")
+        clave = encontrada.group(1) if encontrada else None
+    else:
+        tipo = "evento"
+    return MissingTemplateItem(conversation_id=str(m.conversation_id), detail=m.content, created_at=m.created_at, tipo=tipo, clave=clave)
+
+
+# ------------------------------------------------- proveedor de suscripciones (HU-SUB-09)
+class ProveedorSuscripcion(BaseModel):
+    id: str
+    label: str
+
+
+class SubscriptionProviderSettings(BaseModel):
+    estado: Literal["ok", "sin_proveedor", "ambiguo", "invalido"]
+    configurado: str | None = None
+    efectivo: str | None = None
+    habilitados: list[ProveedorSuscripcion] = []
+    mensaje: str = ""
+
+
+class SubscriptionProviderUpdate(BaseModel):
+    provider: str | None = None
+
+
+async def _subscription_provider_out(tenant_id) -> SubscriptionProviderSettings:  # type: ignore[no-untyped-def]
+    from core.plugin_manager import plugin_manager
+    from core.subscriptions import estado_proveedor
+
+    estado = await estado_proveedor(tenant_id)
+
+    def _label(pid: str) -> str:
+        modulo = plugin_manager.get(pid)
+        return (modulo.display_name or modulo.name) if modulo else pid
+
+    return SubscriptionProviderSettings(
+        estado=estado["estado"],  # type: ignore[arg-type]
+        configurado=estado["configurado"],
+        efectivo=estado["efectivo"],
+        habilitados=[ProveedorSuscripcion(id=pid, label=_label(pid)) for pid in estado["habilitados"]],
+        mensaje=estado["mensaje"],
+    )
+
+
+@router.get("/subscription-provider", response_model=SubscriptionProviderSettings)
+async def get_subscription_provider(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> SubscriptionProviderSettings:
+    """Qué habilidad cobra los planes del negocio y, si no hay una clara, por qué."""
+    return await _subscription_provider_out(principal.tenant_id)
+
+
+@router.put("/subscription-provider", response_model=SubscriptionProviderSettings)
+async def save_subscription_provider(
+    payload: SubscriptionProviderUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> SubscriptionProviderSettings:
+    """Elige el proveedor entre los habilitados (o lo borra con `null`).
+
+    Las activaciones de planes que quedaron pendientes por la configuración las
+    reintenta el pack del pedido en su próximo ciclo.
+    """
+    from core.subscriptions import guardar_proveedor, subscription_registry
+
+    tenant_id = principal.tenant_id
+    if tenant_id is None:
+        raise ApiError.bad_request("Elige un negocio primero.", "sin_negocio")
+    provider = (payload.provider or "").strip() or None
+    if provider is not None and provider not in await subscription_registry.enabled_for_tenant(tenant_id):
+        raise ApiError.bad_request(
+            "Ese proveedor de suscripciones no está habilitado para este negocio.", "proveedor_no_habilitado"
+        )
+    await guardar_proveedor(tenant_id, provider)
+    return await _subscription_provider_out(tenant_id)
+
+
+# ------------------------------------------------- multimedia entrante (SPEC-04, ADR-0151)
+class MediaAudioSettings(BaseModel):
+    enabled: bool
+    provider: str
+    model: str
+    has_api_key: bool
+    using_platform_key: bool
+
+
+class MediaVisionSettings(MediaAudioSettings):
+    mode: str
+
+
+class MediaCatalogModel(BaseModel):
+    id: str
+    label: str
+
+
+class MediaCatalogProvider(BaseModel):
+    key: str
+    label: str
+    default_model: str
+    models: list[MediaCatalogModel]
+
+
+class MediaCatalog(BaseModel):
+    audio: list[MediaCatalogProvider]
+    vision: list[MediaCatalogProvider]
+
+
+class MediaSettingsResponse(BaseModel):
+    audio: MediaAudioSettings
+    vision: MediaVisionSettings
+    catalog: MediaCatalog
+
+
+class MediaAudioUpdate(BaseModel):
+    enabled: bool = True
+    provider: str
+    model: str = ""
+    # Vacío = conservar la llave guardada. La llave nunca se devuelve.
+    api_key: str = ""
+
+
+class MediaVisionUpdate(BaseModel):
+    enabled: bool = True
+    mode: Literal["describir", "sin_descripcion"] = "describir"
+    provider: str
+    model: str = ""
+    api_key: str = ""
+
+
+class MediaTestRequest(BaseModel):
+    provider: str
+    model: str = ""
+    api_key: str = ""
+
+
+class MediaTestResponse(BaseModel):
+    ok: bool
+    provider: str
+    model: str
+
+
+def _tenant_de(principal: Principal) -> Any:
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Elige un negocio primero.", "sin_negocio")
+    return principal.tenant_id
+
+
+@router.get("/media", response_model=MediaSettingsResponse)
+async def get_media_settings(
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> MediaSettingsResponse:
+    """Proveedores de audio/visión del negocio, fallback y catálogo para el panel."""
+    from core.media.config import read_media_config
+
+    return MediaSettingsResponse(**await read_media_config(_tenant_de(principal)))
+
+
+@router.put("/media/audio", response_model=MediaAudioSettings)
+async def save_media_audio(
+    payload: MediaAudioUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MediaAudioSettings:
+    """Proveedor/modelo/llave de transcripción de notas de voz (BYOK opcional)."""
+    from core.media.config import MediaConfigError, read_media_config, save_audio_config
+
+    try:
+        await save_audio_config(
+            _tenant_de(principal),
+            enabled=payload.enabled,
+            provider=payload.provider,
+            model=payload.model,
+            api_key=payload.api_key,
+        )
+    except MediaConfigError as exc:
+        raise ApiError.bad_request(str(exc), exc.code) from exc
+    data = await read_media_config(_tenant_de(principal))
+    return MediaAudioSettings(**data["audio"])
+
+
+@router.put("/media/vision", response_model=MediaVisionSettings)
+async def save_media_vision(
+    payload: MediaVisionUpdate,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MediaVisionSettings:
+    """Proveedor/modelo/llave y modo de imagen (`describir` o `sin_descripcion`)."""
+    from core.media.config import MediaConfigError, read_media_config, save_vision_config
+
+    try:
+        await save_vision_config(
+            _tenant_de(principal),
+            enabled=payload.enabled,
+            mode=payload.mode,
+            provider=payload.provider,
+            model=payload.model,
+            api_key=payload.api_key,
+        )
+    except MediaConfigError as exc:
+        raise ApiError.bad_request(str(exc), exc.code) from exc
+    data = await read_media_config(_tenant_de(principal))
+    return MediaVisionSettings(**data["vision"])
+
+
+@router.post("/media/audio/test", response_model=MediaTestResponse)
+async def test_media_audio(
+    payload: MediaTestRequest,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MediaTestResponse:
+    """Prueba la combinación contra el proveedor real sin guardarla."""
+    from core.media.catalog import audio_model_or_default
+    from core.media.config import MediaConfigError, test_audio_config
+    from core.media.errors import MediaProviderError
+
+    try:
+        await test_audio_config(
+            _tenant_de(principal),
+            provider=payload.provider,
+            model=payload.model,
+            api_key=payload.api_key,
+        )
+    except (MediaConfigError, MediaProviderError) as exc:
+        code = getattr(exc, "code", "media_test_failed")
+        raise ApiError(422, code, str(exc)) from exc
+    return MediaTestResponse(
+        ok=True,
+        provider=payload.provider,
+        model=audio_model_or_default(payload.provider, payload.model),  # type: ignore[arg-type]
+    )
+
+
+@router.post("/media/vision/test", response_model=MediaTestResponse)
+async def test_media_vision(
+    payload: MediaTestRequest,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> MediaTestResponse:
+    """Prueba la combinación de visión con una imagen mínima, sin guardarla."""
+    from core.media.catalog import vision_model_or_default
+    from core.media.config import MediaConfigError, test_vision_config
+    from core.media.errors import MediaProviderError
+
+    try:
+        await test_vision_config(
+            _tenant_de(principal),
+            provider=payload.provider,
+            model=payload.model,
+            api_key=payload.api_key,
+        )
+    except (MediaConfigError, MediaProviderError) as exc:
+        code = getattr(exc, "code", "media_test_failed")
+        raise ApiError(422, code, str(exc)) from exc
+    return MediaTestResponse(
+        ok=True,
+        provider=payload.provider,
+        model=vision_model_or_default(payload.provider, payload.model),  # type: ignore[arg-type]
+    )

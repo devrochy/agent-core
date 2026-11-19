@@ -1,36 +1,128 @@
 #!/usr/bin/env python3
-"""Guardia de comandos peligrosos y de migraciones sin RLS/tenant_id.
+"""Guardia de comandos peligrosos y de migraciones sin aislamiento por tenant.
 
-Hook PreToolUse de Claude Code — port de `.opencode/plugins/guards.ts`
-(el plugin de OpenCode, ya no leído por esta herramienta). Recibe el input
-del hook como JSON por stdin y devuelve una decisión de permiso por stdout.
+Hook PreToolUse de Claude Code y ÚNICA implementación de las guardas: el plugin
+de OpenCode (`.opencode/plugins/guards.ts`) ejecuta este mismo script y aplica
+su decisión. Recibe el input del hook como JSON por stdin y responde por stdout:
 
-No bloquea el turno entero: solo deniega la tool call puntual (mismo efecto
-que el `block()` que lanzaba una excepción en el plugin original).
+- deny: operaciones de producción prohibidas desde una sesión, y migraciones
+  (Alembic `.py` del core y de los packs, o `.sql`) que crean tablas sin
+  `tenant_id` + RLS habilitada y forzada + policy de aislamiento.
+- deny: `gh pr create` hacia `develop` de agent-core cuando el verificador de la
+  skill `abrir-pr` encuentra errores en la rama.
+- ask: comandos que operan sobre recursos de producción de Coolify
+  (contenedores, despliegues, la BD); se los pide confirmar al humano.
+
+Solo deniega o pregunta por la tool call puntual, nunca corta el turno. Ante un
+input que no puede interpretar, deja pasar (fail-open): la guardia no debe
+romper la sesión.
+
+Modo archivos (lo usa pre-commit): `guards.py --migraciones <rutas…>` aplica la
+misma regla de migraciones sobre archivos en disco, comparando contra su versión
+en HEAD, y sale con 1 si alguno no cumple.
 """
 
 from __future__ import annotations
 
+import difflib
 import json
+import os
+import re
+import subprocess
 import sys
+from pathlib import Path
 
-PROD_PATTERNS = ("PROD_DATABASE_URL", "--force", "drop database", "truncate ")
+PROD_PATTERNS = ("PROD_DATABASE_URL", "prod.supabase.co", "--force", "drop database", "truncate ")
+
+# Recursos de PRODUCCIÓN en Coolify (fuente: docs/despliegue-coolify.md). En
+# Coolify la app de producción todavía se llama "agent-core-test", así que se
+# identifican por UUID, nunca por nombre.
+PROD_RESOURCES = {
+    "ggzjdyc7zsemt6kzafx5rg7m": "app de producción",
+    "huvhzaxim2notqkcxqa5930a": "Postgres de producción",
+    "gk9bagcojtdrtofcx8tdxkiq": "Redis de producción",
+    "hwh7s5gscnn1k3yqf88xceja": "beat de producción",
+    "wv6kycjeae0lmfj11dprkasq": "worker de producción",
+}
+PROD_DB_PORTS = ("5439", "6381")  # Postgres y Redis de producción en el loopback
+PROD_HOST = "app.solvershub.site"
+
+# Verbos que operan sobre un recurso. Los de solo lectura (docker ps, logs,
+# inspect) pasan sin preguntar.
+OPERATE_RE = re.compile(
+    r"docker\s+(exec|rm|stop|restart|kill|cp|start|update)\b"
+    r"|/(start|restart|stop|deploy)\b"
+    r"|\b(psql|pg_dump|pg_restore|redis-cli)\b",
+    re.IGNORECASE,
+)
+DB_CLIENT_RE = re.compile(r"\b(psql|pg_dump|pg_restore|redis-cli)\b", re.IGNORECASE)
+MUTATING_HTTP_RE = re.compile(
+    r"(-X\s*|--request\s+)(POST|PUT|PATCH|DELETE)\b"
+    r"|\s(-d|--data(-raw|-binary|-urlencode)?|-F|--form)\s",
+    re.IGNORECASE,
+)
+
+# `gh pr create` en posición de comando, no dentro del texto de otro argumento.
+PR_CREATE_RE = re.compile(r"(?:^|&&|\|\||;|\n|\()\s*gh\s+pr\s+create\b([^\n]*)")
+PR_CD_RE = re.compile(r"(?:^|&&|;|\n|\()\s*cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|)]+)")
+PR_VERIFIER = Path(".claude/skills/abrir-pr/verificar_pr.py")
+PR_VERIFIER_TIMEOUT = 45  # segundos: si tarda más, deja pasar (fail-open)
+
+MIGRATION_PY_RE = re.compile(r"(^|/)alembic/versions/[^/]+\.py$")
+# Leer `.env*` (secretos) por Bash: `.env.example` sí pasa. Cubre `cat`, `grep`,
+# `head`, `tail`, `sed`, `awk`, `source`/`.`, `xargs` y redirecciones.
+ENV_FILE_RE = re.compile(r"(?<![\w./-])\.env\b")
+ENV_EXAMPLE_RE = re.compile(r"\.env\.example\b")
+ENV_READ_RE = re.compile(
+    r"\b(cat|bat|less|more|head|tail|sed|awk|grep|rg|source|nl|strings|xxd|od)\b|(^|[;&|])\s*\.\s"
+)
+CREATES_TABLE_RE = re.compile(r"op\.create_table\s*\(|\bcreate\s+table\b", re.IGNORECASE)
+SYSTEM_TABLE_MARK = "tabla de sistema"
+# Se buscan sobre el texto en minúsculas y con los espacios colapsados.
+REQUIRED = (
+    (re.compile(r"tenant_id"), "la columna `tenant_id`"),
+    (re.compile(r"enable row level security"), "`enable row level security`"),
+    # El `no force` del downgrade no cuenta como FORCE.
+    (re.compile(r"(?<!no )force row level security"), "`force row level security`"),
+    (re.compile(r"create policy"), "la policy `create policy tenant_isolation …`"),
+    (re.compile(r"with check"), "`with check` en la policy"),
+    (
+        re.compile(r"nullif\(current_setting\('app\.tenant_id'"),
+        "`nullif(current_setting('app.tenant_id', true), '')::uuid` (falla cerrado sin tenant)",
+    ),
+)
+
+REMEDY = (
+    "Toda tabla de negocio lleva tenant_id + RLS habilitada y FORZADA + policy "
+    "tenant_isolation con nullif en USING y WITH CHECK (skill db-migration).\n"
+    "Si es una tabla de sistema sin RLS, decláralo en la docstring "
+    '("Tabla de SISTEMA (sin RLS): <motivo>, ADR-00NN") y otorga grants mínimos a app_runtime.'
+)
+
+
+def _decide(decision: str, message: str) -> None:
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": decision,
+            "permissionDecisionReason": message,
+        }
+    }
+    if decision == "deny":
+        output["systemMessage"] = message
+    print(json.dumps(output, ensure_ascii=False))
+    sys.exit(0)
 
 
 def deny(message: str) -> None:
-    print(
-        json.dumps(
-            {
-                "systemMessage": message,
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": message,
-                },
-            }
-        )
-    )
-    sys.exit(0)
+    _decide("deny", message)
+
+
+def ask(message: str) -> None:
+    _decide("ask", message)
+
+
+# ---------------------------------------------------------------- Bash
 
 
 def check_bash(tool_input: dict) -> None:
@@ -43,47 +135,258 @@ def check_bash(tool_input: dict) -> None:
                 "Las operaciones sobre producción se ejecutan a mano, nunca desde una sesión."
             )
 
+    if (
+        ENV_FILE_RE.search(command)
+        and not ENV_EXAMPLE_RE.search(command)
+        and ENV_READ_RE.search(command)
+    ):
+        deny(
+            "BLOQUEADO: el comando lee un archivo `.env*` (secretos).\n"
+            "Usa `.env.example` para los nombres de las variables; los valores reales no "
+            "se leen desde una sesión."
+        )
 
-def check_migration_write(tool_input: dict) -> None:
+    targets = [name for uuid, name in PROD_RESOURCES.items() if uuid in command_lower]
+    operates = bool(OPERATE_RE.search(command)) and bool(targets)
+    if DB_CLIENT_RE.search(command) and any(port in command for port in PROD_DB_PORTS):
+        operates, targets = True, [*targets, "puerto local de la BD/Redis de producción"]
+    if PROD_HOST in command_lower and MUTATING_HTTP_RE.search(command):
+        operates, targets = True, [*targets, f"API de {PROD_HOST}"]
+    if operates:
+        ask(
+            "PRODUCCIÓN: el comando opera sobre " + ", ".join(sorted(set(targets))) + ".\n"
+            "Confírmalo solo si es parte de una release o lo pediste explícitamente "
+            "(skill `release`). Para test, el UUID de la app es tr0vpdei5av6szcgwpe1vwcg."
+        )
+
+
+# ---------------------------------------------------------------- abrir PR
+
+
+def _flag(args: str, *names: str) -> str | None:
+    """Valor de una opción de `gh`, con comillas o sin ellas (None si no está)."""
+    options = "|".join(re.escape(name) for name in names)
+    match = re.search(rf"(?:^|\s)(?:{options})[ =](\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)", args)
+    if not match:
+        return None
+    value = match.group(1)
+    return value[1:-1] if value[0] in "\"'" else value
+
+
+def _git(workdir: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(workdir), *args], capture_output=True, text=True, check=False
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def check_pr_create(command: str, cwd: str | None) -> None:
+    """Corre `verificar_pr.py` antes de abrir un PR a `develop` de agent-core.
+
+    Solo revisa lo que puede comprobar: la rama actual del repo donde corre el comando.
+    Los PR a otras bases (release, apilados) y los de otros repos pasan sin revisar.
+    """
+    normalized = command.replace("\\\n", " ")
+    match = PR_CREATE_RE.search(normalized)
+    if not match or not cwd:
+        return
+    args = match.group(1)
+    if (_flag(args, "--base", "-B") or "develop") != "develop":
+        return
+    repo = _flag(args, "--repo", "-R")
+    if repo and repo.rsplit("/", 1)[-1] != "agent-core":
+        return
+
+    workdir = Path(cwd)
+    for target in PR_CD_RE.findall(normalized[: match.start() + 1]):
+        workdir = workdir / target.strip("\"'")
+    root = _git(workdir, "rev-parse", "--show-toplevel")
+    if not root:
+        return
+    origin = _git(workdir, "remote", "get-url", "origin").removesuffix(".git")
+    if origin.rsplit("/", 1)[-1] != "agent-core":
+        return
+    head = _flag(args, "--head", "-H")
+    if head and head.rsplit(":", 1)[-1] != _git(workdir, "branch", "--show-current"):
+        return
+    verifier = Path(root) / PR_VERIFIER
+    if not verifier.exists():
+        return
+
+    argv = [sys.executable, "-I", str(verifier)]
+    title = _flag(args, "--title", "-t")
+    if title and not re.search(r"[$`]", title):
+        argv += ["--titulo", title]
+    try:
+        result = subprocess.run(
+            argv, cwd=root, capture_output=True, text=True, check=False, timeout=PR_VERIFIER_TIMEOUT
+        )
+    except subprocess.TimeoutExpired:
+        return
+    if result.returncode == 1:
+        errors = [line for line in result.stdout.splitlines() if "[ERROR]" in line]
+        deny(
+            "BLOQUEADO: el verificador de `abrir-pr` encontró errores en esta rama.\n"
+            + "\n".join(errors)
+            + "\nCorrígelos y vuelve a abrir el PR (skill `abrir-pr`)."
+        )
+
+
+# ---------------------------------------------------------------- migraciones
+
+
+def _is_migration(path: str) -> bool:
+    normalized = path.replace("\\", "/").lower()
+    if MIGRATION_PY_RE.search(normalized):
+        return True
+    return (
+        normalized.endswith(".sql")
+        and "migrations" in normalized
+        and not normalized.endswith(".down.sql")
+    )
+
+
+def _normalize(content: str) -> str:
+    return re.sub(r"\s+", " ", content.lower())
+
+
+def missing_isolation(content: str) -> list[str]:
+    """Lo que le falta a una migración que crea tablas ([] si cumple o no crea)."""
+    if not CREATES_TABLE_RE.search(content):
+        return []
+    normalized = _normalize(content)
+    if SYSTEM_TABLE_MARK in normalized:
+        return []
+    return [label for pattern, label in REQUIRED if not pattern.search(normalized)]
+
+
+def _read(path: str, cwd: str | None) -> str:
+    target = Path(path)
+    if not target.is_absolute() and cwd:
+        target = Path(cwd) / target
+    try:
+        return target.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _apply_edit(current: str, old: str, new: str, replace_all: bool) -> str:
+    if old and old in current:
+        return current.replace(old, new) if replace_all else current.replace(old, new, 1)
+    return current + "\n" + new
+
+
+def check_migration_write(tool_name: str, tool_input: dict, cwd: str | None) -> None:
     file_path = str(tool_input.get("file_path", ""))
-    path_lower = file_path.lower()
-    if not (path_lower.endswith(".sql") and "migrations" in path_lower):
-        return
-    if path_lower.endswith(".down.sql"):
+    if not _is_migration(file_path):
         return
 
-    # El contenido nuevo puede venir en distintas claves según la tool
-    # (Write: content; Edit: new_string). Se concatena todo el input para
-    # no depender de cuál se use — mismo criterio laxo que el JSON.stringify
-    # del plugin original.
-    content = json.dumps(tool_input).lower()
+    if tool_name == "Write":
+        before = ""
+        after = str(tool_input.get("content", ""))
+        added = after
+    else:
+        before = _read(file_path, cwd)
+        edits = tool_input.get("edits") or [tool_input]  # MultiEdit o Edit
+        after, added = before, ""
+        for edit in edits:
+            new = str(edit.get("new_string", ""))
+            after = _apply_edit(
+                after, str(edit.get("old_string", "")), new, bool(edit.get("replace_all"))
+            )
+            added += "\n" + new
 
-    if "enable row level security" not in content:
-        deny(
-            f"BLOQUEADO: la migración {file_path} no habilita RLS.\n"
-            "Toda tabla de negocio requiere: alter table <t> enable row level security;\n"
-            "más una policy de aislamiento por tenant_id. Ver .claude/skills/db-migration."
+    missing = missing_isolation(after)
+    if not missing:
+        return
+    # Una edición menor a una migración vieja que ya no cumplía pasa; se bloquea
+    # si agrega una tabla o si quita algo que el archivo sí tenía.
+    if tool_name != "Write" and not CREATES_TABLE_RE.search(added):
+        if not set(missing) - set(missing_isolation(before)):
+            return
+
+    deny(
+        f"BLOQUEADO: la migración {file_path} crea tablas y le falta: "
+        + "; ".join(missing)
+        + ".\n"
+        + REMEDY
+    )
+
+
+# ---------------------------------------------------------------- modo archivos
+
+
+def _committed(path: str) -> str:
+    """Contenido del archivo en HEAD ("" si es nuevo o no hay git)."""
+    rel = os.path.relpath(path)
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD:./{rel}"], capture_output=True, text=True, check=False
         )
-    if "tenant_id" not in content:
-        deny(
-            f"BLOQUEADO: la migración {file_path} no menciona tenant_id.\n"
-            "Si es intencional (tabla de sistema), documéntalo en un ADR y usa .down.sql."
-        )
+    except OSError:
+        return ""
+    return result.stdout if result.returncode == 0 else ""
+
+
+def _added_lines(before: str, after: str) -> str:
+    diff = difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0)
+    return "\n".join(
+        line[1:] for line in diff if line.startswith("+") and not line.startswith("+++")
+    )
+
+
+def migration_file_problems(path: str) -> list[str]:
+    """Lo que le falta a una migración en disco, con el mismo criterio que los Edit.
+
+    Un archivo nuevo debe cumplir. Uno que ya estaba en HEAD sin cumplir solo falla
+    si el cambio agrega una tabla o pierde algo que el archivo sí tenía.
+    """
+    after = _read(path, None)
+    missing = missing_isolation(after)
+    if not missing:
+        return []
+    before = _committed(path)
+    if before and not CREATES_TABLE_RE.search(_added_lines(before, after)):
+        if not set(missing) - set(missing_isolation(before)):
+            return []
+    return missing
+
+
+def check_files(paths: list[str]) -> int:
+    failures = 0
+    for path in paths:
+        if not _is_migration(path):
+            continue
+        missing = migration_file_problems(path)
+        if missing:
+            failures += 1
+            print(f"{path}: crea tablas y le falta: {'; '.join(missing)}.", file=sys.stderr)
+    if failures:
+        print(REMEDY, file=sys.stderr)
+    return 1 if failures else 0
 
 
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--migraciones":
+        sys.exit(check_files(sys.argv[2:]))
+
     try:
         payload = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         sys.exit(0)
+    if not isinstance(payload, dict):
+        sys.exit(0)
 
     tool_name = payload.get("tool_name", "")
     tool_input = payload.get("tool_input") or {}
-
-    if tool_name == "Bash":
-        check_bash(tool_input)
-    elif tool_name in ("Write", "Edit"):
-        check_migration_write(tool_input)
+    try:
+        if tool_name == "Bash":
+            check_bash(tool_input)
+            check_pr_create(str(tool_input.get("command", "")), payload.get("cwd"))
+        elif tool_name in ("Write", "Edit", "MultiEdit"):
+            check_migration_write(tool_name, tool_input, payload.get("cwd"))
+    except Exception:  # fail-open: la guardia nunca rompe la sesión
+        sys.exit(0)
 
 
 if __name__ == "__main__":

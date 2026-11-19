@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import func, select
 
 pytestmark = [
+    pytest.mark.aislamiento,  # subconjunto de las PRs a develop (ADR-0120)
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
@@ -190,7 +191,7 @@ async def test_meta_schema_nuevo_aislado_por_tenant(moto_setup) -> None:
     async with tenant_scope(t1):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=t1, channel="whatsapp", environment="production", meta_app_id=f"app-{suffix}"
+                tenant_id=t1, channel="whatsapp", environment="production", origin="byok", meta_app_id=f"app-{suffix}"
             )
             session.add(connection)
             await session.flush()
@@ -237,15 +238,12 @@ async def test_meta_schema_nuevo_aislado_por_tenant(moto_setup) -> None:
 
         # RLS ya esconde la fila (recién verificado arriba); además, aunque
         # alguien pasara el connection_id correcto pero un tenant_id explícito
-        # equivocado a get_token (ej. un bug de contexto), el AAD no matchea:
-        # segundo cinturón independiente de RLS (mismo caso que
+        # equivocado a get_token (ej. un bug de contexto), el WHERE filtra
+        # `tenant_id` (ADR-0126) y, si no, el AAD no matchea (tercer cinturón,
         # tests/test_crypto_envelope.py::test_aad_ata_el_ciphertext_a_la_fila).
         async with tenant_scope(t1):
-            try:
-                await meta_token_store.get_token(conn_id, "app_access", f"app-{suffix}", tenant_id=moto)
-                raise AssertionError("get_token no debería poder leer con un tenant_id distinto al de la fila")
-            except RuntimeError:
-                pass
+            leido = await meta_token_store.get_token(conn_id, "app_access", f"app-{suffix}", tenant_id=moto)
+            assert leido is None, "get_token no debería poder leer con un tenant_id distinto al de la fila"
 
     async with tenant_scope(t1):
         # revoke_token con tenant_id equivocado: filtra por tenant_id en el
@@ -288,9 +286,9 @@ async def test_numeracion_independiente_por_tenant(moto_setup) -> None:
 
 async def test_onboarding_idempotente(moto_setup) -> None:
     """Correr el onboarding dos veces no duplica filas."""
+    from core.alta_negocio import onboard_tenant
     from core.db.models import AgentSpecRecord, AppSettings, Tenant
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     _t1, moto = moto_setup

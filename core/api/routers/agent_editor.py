@@ -1,0 +1,883 @@
+"""Editor de agentes desde plantillas (HU-AOS-24, adenda de ADR-0139 del 2026-10-18).
+
+Completa la API de agentes (`agents.py`: alta, borrador con `lock_version`, versiones) con lo que
+el editor del panel necesita y no existía:
+
+- `GET  /api/v1/admin/agent-templates` — plantillas (Ventas, Cobranza, Agenda, Suscripciones)
+  con sus superpoderes y frases de la habilidad, y si el negocio puede usarlas. Elegir una
+  HABILITA sus habilidades (`will_enable`): no hace falta activarlas de antemano.
+- `POST /api/v1/admin/agent-templates/{key}/agents` — `{name?}` → especialista con la key de la
+  plantilla y su borrador derivado (sin publicar). 409 `key_taken` (con `fields.agent_id`) si
+  ya existe; 409 `plan_limit_agentes` si el plan ya tiene todos sus agentes publicados; 409
+  `template_unavailable` si el despliegue no trae una habilidad; 403 `skills_forbidden` si hay
+  habilidades por habilitar y falta `plugins:write`; 409 `concurrent_edit` (reintentable) si otra
+  edición del negocio ganó la carrera. `enabled_skills` trae lo que esta llamada habilitó.
+- `POST /api/v1/admin/agents/from-script` — `{template_key, answers, name?}` → lo mismo desde las
+  respuestas del guion de la plantilla (`questions` de `agent-templates`, HU-AOS-48), más los
+  `requirements` pendientes. 422 `invalid_answers` por pregunta; 409 igual que arriba.
+- `GET  /api/v1/admin/agent-superpowers` — superpoderes que ofrece el negocio con sus frases;
+  con `?agent_id=` solo los del enfoque de ese agente (404 si no es del negocio).
+- `GET  /api/v1/admin/agents/{id}/requirements` — lo que falta configurar para el enfoque del agente
+  (aviso, no bloquea). También viene en cada plantilla de `agent-templates`.
+- `GET  /api/v1/admin/agent-models` — modelos de la tabla de precios del core, cuáles sirve el
+  proveedor del negocio, si hay un modelo BYOK que manda y el costo estimado por 1.000 turnos
+  con el promedio real de tokens por turno del negocio (30 días); sin historial (o sin acceso a
+  la sección `costs`), `null`. Siempre trae `business_model`, el modelo por defecto del negocio;
+  con `?agent_id=`, `effective_model` y `effective_source` (`negocio` o `agente`) de ese agente
+  (HU-AOS-79). 404 si el agente no es del negocio.
+- `GET  /api/v1/admin/agents/{id}/publish-targets` — conexiones donde se puede instalar.
+- `POST /api/v1/admin/agents/{id}/publish` — `{connection_ids, lock_version?, notes?}`. D-35:
+  sin al menos una conexión no se publica. Publica la versión, instala el agente y construye la
+  release candidata de cada conexión, SIN activarla (el botón «Activar» del panel usa el
+  promote de la API de releases, solo del propietario). 422 por campo antes de escribir nada.
+  Un modelo retirado o de otro proveedor ya no da 422: la versión usa el del negocio y lo anota
+  en sus notas y en `warnings` (HU-AOS-79).
+
+Rutas con prefijos propios (`/agent-templates`, ...) para no depender del orden de los routers
+frente a `/admin/agents/{agent_id}`. Toda lista va paginada (`page`, `page_size`).
+
+Permisos (ADR-0136): lectura con la sección `settings`; crear con `settings` en escritura;
+publicar, además, la sección `connections` en escritura (construye releases, como su API); el
+consumo de `agent-models`, la sección `costs`.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Annotated, Any, Literal
+
+from fastapi import APIRouter, Depends, Path, Query, status
+from pydantic import BaseModel, ConfigDict, Field
+
+from core.admin.permissions import effective_access
+from core.admin.roles import actua_como_master
+from core.agents import editor as svc
+from core.agents import requisitos, versiones
+from core.api.deps import Principal, require
+from core.api.errors import ApiError
+from core.api.pagination import Page, PageParams, build_page, page_params
+from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.api.routers.agents import (
+    AgentDraft,
+    AgentSummary,
+    AgentVersionSummary,
+    _catalogo,
+    _contrato_422,
+    _draft,
+    _puede_escribir,
+    _summary,
+    _tenant,
+    _version,
+)
+from core.billing.enforcement import QuotaExceeded
+from core.presets import PreguntaDePlantilla, PresetError, load_plantilla
+from core.presets.agentes import herramientas_de_plantilla
+
+router = APIRouter(prefix="/admin", tags=["admin · editor de agentes"])
+
+
+# ------------------------------------------------------------------ esquemas
+class Superpower(BaseModel):
+    id: str
+    version: str
+    skill: str
+    title: str
+    description: str
+    phrases: list[str]
+    # Dominio visible en el editor (SPEC-48, HU-AOS-83). Los clientes viejos lo ignoran.
+    group: str
+    group_label: str
+
+
+class Requirement(BaseModel):
+    """Algo que el negocio tiene que configurar para que el agente funcione (aviso, no bloquea)."""
+
+    skill: str
+    kind: Literal["habilidad_sin_configurar", "sin_contenido"]
+    title: str
+    explanation: str
+    section: str
+    content: Literal["catalogo", "servicios", "cartera"] | None = None
+
+
+class QuestionOption(BaseModel):
+    id: str
+    text: str
+    help: str
+
+
+class Question(BaseModel):
+    """Pregunta del guion del asistente de creación (HU-AOS-48). `type` «option» elige entre
+    `options` (`default` es la que se aplica sin respuesta); «text» es el nombre del agente."""
+
+    id: str
+    text: str
+    help: str
+    type: Literal["option", "text"]
+    options: list[QuestionOption]
+    default: str | None
+
+
+class AgentTemplate(BaseModel):
+    key: str
+    name: str
+    description: str
+    # Sección del menú a la que pertenece (HU-AOS-51) y tools de pack que tendrá el agente.
+    section: str
+    tools: list[str]
+    questions: list[Question]
+    skills: list[str]
+    optional_skills: list[str]
+    available: bool
+    # Habilidades que este despliegue no trae: la única razón para no poder elegir la plantilla.
+    missing_skills: list[str]
+    # Habilidades que crear el agente habilitará en el negocio (no hay que activarlas de antemano).
+    will_enable: list[str]
+    superpowers: list[Superpower]
+    requirements: list[Requirement]
+
+
+class FromTemplateIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class FromTemplateOut(BaseModel):
+    agent: AgentSummary
+    draft: AgentDraft
+    warnings: list[str]
+    # Habilidades que esta llamada habilitó en el negocio (vacío si ya estaban).
+    enabled_skills: list[str]
+
+
+class FromScriptIn(BaseModel):
+    """Respuestas del guion de una plantilla: `answers` es `id de la pregunta` → id de la opción
+    (o el texto, en la de nombre). Lo que no se contesta toma el valor por defecto del guion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    template_key: str = Field(pattern=r"^[a-z0-9_]{2,40}$")
+    answers: dict[str, str] = Field(default_factory=dict, max_length=10)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class FromScriptOut(FromTemplateOut):
+    """El borrador creado (sin publicar) y lo que le falta al negocio configurar para que funcione."""
+
+    requirements: list[Requirement]
+
+
+class LlmModel(BaseModel):
+    provider: str
+    model: str
+    input_usd_per_mtok: float
+    output_usd_per_mtok: float
+    selectable: bool
+    retired: bool
+    estimated_usd_per_1000_turns: float | None
+
+
+class LlmModelCatalog(Page[LlmModel]):
+    provider: str
+    byok_model: str | None
+    avg_input_tokens: float | None
+    avg_output_tokens: float | None
+    sample_turns: int
+    min_phrases: int
+    # HU-AOS-79: el modelo por defecto del negocio, el que usa un agente cuyo modelo ya no sirve.
+    business_model: str
+    # Con `?agent_id=`: el modelo con el que atenderá ese agente y de dónde sale.
+    effective_model: str | None = None
+    effective_source: Literal["negocio", "agente"] | None = None
+
+
+class PublishTarget(BaseModel):
+    connection_id: uuid.UUID
+    label: str
+    channel: str
+    installed: bool
+    covers_skills: bool
+    missing_skills: list[str]
+    active_release_id: uuid.UUID | None
+
+
+class EditorPublishIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # D-35: al menos una conexión. El tope y los repetidos los revisa el editor (error por campo).
+    connection_ids: list[uuid.UUID] = Field(min_length=1, max_length=svc.MAX_CONEXIONES)
+    lock_version: int | None = Field(default=None, ge=0, lt=2**31)
+    label: str | None = Field(default=None, max_length=60)
+    notes: str = Field(default="", max_length=2000)
+
+
+class PublishedConnection(BaseModel):
+    connection_id: uuid.UUID
+    instance: str
+    release_id: uuid.UUID | None
+    release_number: int | None
+    release_created: bool | None
+    error: str | None
+
+
+class EditorPublishOut(BaseModel):
+    version: AgentVersionSummary
+    created: bool
+    connections: list[PublishedConnection]
+    warnings: list[str]
+
+
+# ------------------------------------------------------------------ utilidades
+def _superpower(s: svc.Superpoder) -> Superpower:
+    return Superpower(
+        id=s.id,
+        version=s.version,
+        skill=s.pack,
+        title=s.title,
+        description=s.description,
+        phrases=list(s.phrases),
+        group=s.group,
+        group_label=s.group_label,
+    )
+
+
+_TIPOS_DE_CONTENIDO = frozenset({"catalogo", "servicios", "cartera"})
+
+
+def _requirement(r: requisitos.Requisito) -> Requirement:
+    return Requirement(
+        skill=r.pack,
+        kind=r.tipo,
+        title=r.titulo,
+        explanation=r.explicacion,
+        section=r.seccion,
+        # Un pack que declare otro tipo de contenido no tumba la lista: se avisa igual, sin el tipo.
+        content=r.contenido if r.contenido in _TIPOS_DE_CONTENIDO else None,  # type: ignore[arg-type]
+    )
+
+
+def _question(q: PreguntaDePlantilla) -> Question:
+    return Question(
+        id=q.id,
+        text=q.texto,
+        help=q.ayuda,
+        type="option" if q.tipo == "opcion" else "text",
+        options=[QuestionOption(id=o.id, text=o.texto, help=o.ayuda) for o in q.opciones],
+        default=q.defecto,
+    )
+
+
+# Errores que no son de un campo del formulario: las habilidades van en `details`, no en `fields` (el
+# panel pinta cada `fields` como error del paso que lo contiene).
+_ERRORES_CON_DETALLE = frozenset({"skills_forbidden", "concurrent_edit", "template_unavailable"})
+
+
+def _error(exc: svc.ErrorDelEditor) -> ApiError:
+    if exc.code in _ERRORES_CON_DETALLE:
+        skills = [p.strip() for p in exc.campos.get("skills", "").split(",") if p.strip()]
+        return ApiError(exc.status, exc.code, str(exc), details={"skills": skills})
+    return ApiError(exc.status, exc.code, str(exc), fields=exc.campos or None)
+
+
+async def _ve_conexiones(principal: Principal, tid: uuid.UUID, *, write: bool = False) -> None:
+    if actua_como_master(principal.admin):
+        return
+    acceso = await effective_access(principal.admin, "connections", tid)
+    if acceso is None or (write and acceso != "write"):
+        raise ApiError.forbidden("Sin permiso para la sección 'connections'.")
+
+
+async def _puede_habilitar(principal: Principal, tid: uuid.UUID) -> bool:
+    """Elegir una plantilla habilita habilidades: eso exige la sección `plugins` con escritura, igual que
+    `POST /admin/plugins/{id}/action` (el master pasa). `settings:write` por sí solo no lo implica."""
+    if actua_como_master(principal.admin):
+        return True
+    return await effective_access(principal.admin, "plugins", tid) == "write"
+
+
+Paginados = Annotated[PageParams, Depends(page_params)]
+
+
+# ------------------------------------------------------------------ rutas
+@router.get("/agent-templates", response_model=Page[AgentTemplate])
+async def list_templates(
+    principal: Annotated[Principal, Depends(require("settings"))], params: Paginados
+) -> Page[AgentTemplate]:
+    tid = _tenant(principal)
+    habilitados = await svc.habilitados_del_negocio(tid)
+    vistas = svc.plantillas(habilitados)
+    cargadas = {v.key: load_plantilla(v.key) for v in vistas}
+    por_clave = await requisitos.de_plantillas(tid, habilitados, list(cargadas.values()))
+    proveedor = await svc._proveedor_de_suscripciones(tid)
+    catalogo = _catalogo()
+    items = [
+        AgentTemplate(
+            key=v.key,
+            name=v.name,
+            description=v.description,
+            section=cargadas[v.key].seccion,
+            tools=herramientas_de_plantilla(
+                cargadas[v.key], catalogo, habilitados=habilitados, proveedor_suscripciones=proveedor
+            ),
+            questions=[_question(q) for q in cargadas[v.key].preguntas],
+            skills=list(v.skills),
+            optional_skills=list(v.optional_skills),
+            available=v.available,
+            missing_skills=list(v.missing_skills),
+            will_enable=list(v.will_enable),
+            superpowers=[_superpower(s) for s in v.superpowers],
+            requirements=[_requirement(r) for r in por_clave.get(v.key, [])],
+        )
+        for v in vistas
+    ]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+@router.post(
+    "/agent-templates/{template_key}/agents",
+    response_model=FromTemplateOut,
+    status_code=status.HTTP_201_CREATED,
+    responses=plan_limit_responses("agentes"),
+)
+async def create_from_template(
+    template_key: Annotated[str, Path(pattern=r"^[a-z0-9_]{2,40}$")],
+    payload: FromTemplateIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> FromTemplateOut:
+    tid = await _puede_escribir(principal)
+    try:
+        agente, borrador, avisos, habilitadas = await svc.crear_desde_plantilla(
+            tid,
+            template_key,
+            nombre=payload.name,
+            catalogo=_catalogo(),
+            actor=principal.admin.id,
+            puede_habilitar=await _puede_habilitar(principal, tid),
+        )
+    except svc.ErrorDelEditor as exc:
+        raise _error(exc) from None
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from exc
+    except versiones.ErroresDeContrato as exc:
+        raise _contrato_422(exc.issues) from None
+    return FromTemplateOut(
+        agent=_summary(agente, None), draft=_draft(borrador), warnings=avisos, enabled_skills=habilitadas
+    )
+
+
+@router.post(
+    "/agents/from-script",
+    response_model=FromScriptOut,
+    status_code=status.HTTP_201_CREATED,
+    responses=plan_limit_responses("agentes"),
+)
+async def create_from_script(
+    payload: FromScriptIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> FromScriptOut:
+    """Crea el borrador de un especialista (sin publicar) desde las respuestas del guion de su
+    plantilla. 409 `key_taken` (con el `agent_id` existente) si el negocio ya tiene ese agente; 422
+    por pregunta si una respuesta no está en las opciones, sin crear nada."""
+    tid = await _puede_escribir(principal)
+    try:
+        agente, borrador, avisos, habilitadas = await svc.crear_desde_plantilla(
+            tid,
+            payload.template_key,
+            nombre=payload.name,
+            catalogo=_catalogo(),
+            actor=principal.admin.id,
+            respuestas=payload.answers,
+            puede_habilitar=await _puede_habilitar(principal, tid),
+        )
+    except svc.ErrorDelEditor as exc:
+        raise _error(exc) from None
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from exc
+    except versiones.ErroresDeContrato as exc:
+        raise _contrato_422(exc.issues) from None
+    pendientes = await requisitos.de_plantillas(
+        tid, await svc.habilitados_del_negocio(tid), [load_plantilla(payload.template_key)]
+    )
+    return FromScriptOut(
+        agent=_summary(agente, None),
+        draft=_draft(borrador),
+        warnings=avisos,
+        enabled_skills=habilitadas,
+        requirements=[_requirement(r) for r in pendientes.get(payload.template_key, [])],
+    )
+
+
+@router.get("/agent-superpowers", response_model=Page[Superpower])
+async def list_superpowers(
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+    agent_id: Annotated[
+        uuid.UUID | None,
+        Query(description="Con el agente, solo los superpoderes de su enfoque (su plantilla)."),
+    ] = None,
+) -> Page[Superpower]:
+    tid = _tenant(principal)
+    if agent_id is None:
+        poderes = svc.superpoderes(await svc.habilitados_del_negocio(tid))
+    else:
+        try:
+            poderes = await svc.superpoderes_del_agente(tid, agent_id)
+        except versiones.AgenteNoEncontrado:
+            raise ApiError.not_found("Agente no encontrado.") from None
+    items = [_superpower(s) for s in poderes]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+@router.get("/agents/{agent_id}/requirements", response_model=Page[Requirement])
+async def list_requirements(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+) -> Page[Requirement]:
+    """Lo que falta configurar para el enfoque de este agente. Un agente que no es de una plantilla
+    (`general`, `coordinador`, especialistas por API) no tiene requisitos propios."""
+    tid = _tenant(principal)
+    try:
+        agente = await versiones.obtener_agente(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    try:
+        plantilla = load_plantilla(agente.key)
+    except PresetError:
+        return build_page([], 0, params)
+    por_clave = await requisitos.de_plantillas(tid, await svc.habilitados_del_negocio(tid), [plantilla])
+    items = [_requirement(r) for r in por_clave.get(plantilla.key, [])]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+@router.get("/agent-models", response_model=LlmModelCatalog)
+async def list_models(
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+    agent_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> LlmModelCatalog:
+    tid = _tenant(principal)
+    ctx = await svc.contexto_de_modelos(tid)
+    efectivo: tuple[str, Literal["negocio", "agente"]] | None = None
+    if agent_id is not None:
+        try:
+            borrador = await versiones.obtener_borrador(tid, agent_id)
+        except versiones.AgenteNoEncontrado:
+            raise ApiError.not_found("Agente no encontrado.") from None
+        efectivo = svc.modelo_efectivo(borrador.content, ctx)
+    # El consumo (promedios y estimados) es de la sección Costos: sin ella, solo los precios.
+    ve_costos = actua_como_master(principal.admin) or await effective_access(principal.admin, "costs", tid) is not None
+    items = [
+        LlmModel(
+            provider=m.provider,
+            model=m.model,
+            input_usd_per_mtok=m.input_usd_per_mtok,
+            output_usd_per_mtok=m.output_usd_per_mtok,
+            selectable=m.selectable,
+            retired=m.retired,
+            estimated_usd_per_1000_turns=m.estimated_usd_per_1000_turns if ve_costos else None,
+        )
+        for m in ctx.models
+    ]
+    pagina = build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+    return LlmModelCatalog(
+        **pagina.model_dump(),
+        provider=ctx.provider,
+        byok_model=ctx.byok_model,
+        avg_input_tokens=ctx.avg_input_tokens if ve_costos else None,
+        avg_output_tokens=ctx.avg_output_tokens if ve_costos else None,
+        sample_turns=ctx.sample_turns if ve_costos else 0,
+        min_phrases=svc.MIN_FRASES,
+        business_model=ctx.business_model,
+        effective_model=efectivo[0] if efectivo else None,
+        effective_source=efectivo[1] if efectivo else None,
+    )
+
+
+@router.get("/agents/{agent_id}/publish-targets", response_model=Page[PublishTarget])
+async def list_publish_targets(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+) -> Page[PublishTarget]:
+    tid = _tenant(principal)
+    await _ve_conexiones(principal, tid)
+    try:
+        borrador = await versiones.obtener_borrador(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    destinos = await svc.destinos(
+        tid, agent_id, svc.habilidades_del_contenido(borrador.content), await svc.habilitados_del_negocio(tid)
+    )
+    items = [
+        PublishTarget(
+            connection_id=d.connection_id,
+            label=d.label,
+            channel=d.channel,
+            installed=d.installed,
+            covers_skills=d.covers_skills,
+            missing_skills=list(d.missing_skills),
+            active_release_id=d.active_release_id,
+        )
+        for d in destinos
+    ]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+@router.post("/agents/{agent_id}/publish", response_model=EditorPublishOut, responses=plan_limit_responses("agentes"))
+async def publish_to_connections(
+    agent_id: uuid.UUID,
+    payload: EditorPublishIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> EditorPublishOut:
+    tid = await _puede_escribir(principal)
+    await _ve_conexiones(principal, tid, write=True)
+    try:
+        resultado = await svc.publicar_en_conexiones(
+            tid,
+            agent_id,
+            payload.connection_ids,
+            catalogo=_catalogo(),
+            admin_id=principal.admin.id,
+            actor=f"admin:{principal.admin.id}",
+            lock_version=payload.lock_version,
+            notes=payload.notes,
+            label=payload.label,
+        )
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    except svc.ErrorDelEditor as exc:
+        raise _error(exc) from None
+    except versiones.ErroresDeContrato as exc:
+        raise _contrato_422(exc.issues) from None
+    except versiones.Conflicto as exc:
+        raise ApiError(409, "conflict", str(exc)) from None
+    except QuotaExceeded as exc:
+        # Agente nuevo con el plan al tope de agentes publicados (D-35, ADR-0142): no se publicó.
+        raise plan_limit_error(exc) from None
+    return EditorPublishOut(
+        version=_version(resultado.version),
+        created=resultado.created,
+        connections=[
+            PublishedConnection(
+                connection_id=c.connection_id,
+                instance=c.instance,
+                release_id=c.release_id,
+                release_number=c.release_number,
+                release_created=c.release_created,
+                error=c.error,
+            )
+            for c in resultado.connections
+        ],
+        warnings=resultado.warnings,
+    )
+
+
+
+# ------------------------------------------------------------------ habilidades y acciones del agente (ADR-0190)
+class AgentAction(BaseModel):
+    tool: str
+    pack_id: str
+    # Clave del grupo (`pedidos`, `citas`, `leads`…, `otras`); la etiqueta la pone el panel.
+    group: str
+    enabled: bool
+    # Tiene binding en el borrador del agente. Sin binding la acción solo corre si la concede un superpoder (D-67).
+    in_agent: bool
+    # La concede un superpoder que el agente declara (D-67): corre en su etapa aunque no tenga binding.
+    by_superpower: bool = False
+    max_calls_per_conversation: int | None
+    requires_confirmation: bool
+
+
+class AgentSkill(BaseModel):
+    pack_id: str
+    installed: bool
+    status: Literal["active", "pending_config"] | None
+    # Config del agente para esta habilidad, sin secretos (Pagos: `cuenta_id`).
+    config: dict[str, object]
+
+
+class AgentSkillIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    installed: bool
+    config: dict[str, object] | None = None
+
+
+async def _agente_o_404(tid: uuid.UUID, agent_id: uuid.UUID) -> None:
+    try:
+        await versiones.obtener_agente(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+
+
+@router.get("/agents/{agent_id}/actions", response_model=Page[AgentAction])
+async def list_agent_actions(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+) -> Page[AgentAction]:
+    """Las acciones de las habilidades del agente, agrupadas por lo que hacen, con su binding del borrador."""
+    from core.agents import habilidades_del_agente as hda
+
+    tid = _tenant(principal)
+    await _agente_o_404(tid, agent_id)
+    borrador = await versiones.obtener_borrador(tid, agent_id)
+    packs = await hda.packs_del_agente(tid, agent_id, await svc.habilitados_del_negocio(tid))
+    items = [
+        AgentAction(
+            tool=a.tool,
+            pack_id=a.pack_id,
+            group=a.grupo,
+            enabled=a.enabled,
+            in_agent=a.en_el_agente,
+            by_superpower=a.por_superpoder,
+            max_calls_per_conversation=a.max_calls_per_conversation,
+            requires_confirmation=a.requires_confirmation,
+        )
+        for a in hda.acciones(dict(borrador.content or {}), packs)
+    ]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+def _skill(h: object) -> AgentSkill:
+    return AgentSkill(
+        pack_id=h.pack_id,  # type: ignore[attr-defined]
+        installed=h.instalada,  # type: ignore[attr-defined]
+        status=h.status,  # type: ignore[attr-defined]
+        config=h.config,  # type: ignore[attr-defined]
+    )
+
+
+@router.get("/agents/{agent_id}/skills", response_model=Page[AgentSkill])
+async def list_agent_skills(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+    params: Paginados,
+) -> Page[AgentSkill]:
+    """Habilidades que se agregan a uno o varios agentes (Pagos en línea, Conocimiento) y si este agente las tiene."""
+    from core.agents import habilidades_del_agente as hda
+
+    tid = _tenant(principal)
+    await _agente_o_404(tid, agent_id)
+    items = [_skill(h) for h in await hda.transversales(tid, agent_id)]
+    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+@router.put("/agents/{agent_id}/skills/{pack_id}", response_model=AgentSkill)
+async def put_agent_skill(
+    agent_id: uuid.UUID,
+    pack_id: Annotated[str, Path(pattern=r"^[a-z0-9_]{2,60}$")],
+    payload: AgentSkillIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentSkill:
+    """Instala, quita o configura una habilidad del agente. Pagos en línea exige `config.cuenta_id`, una cuenta
+    Wompi del negocio; sin ella queda `pending_config`. 404 si el agente o la habilidad no existen; 422 si la
+    config no valida (sin devolver los valores)."""
+    from core.agents import habilidades_del_agente as hda
+    from core.agents.instalaciones import ConflictoInstalacion, InstalacionNoEncontrada
+
+    tid = await _puede_escribir(principal)
+    await _agente_o_404(tid, agent_id)
+    try:
+        h = await hda.configurar(
+            tid, agent_id, pack_id, instalada=payload.installed, config=payload.config, actor=principal.admin.id
+        )
+    except hda.HabilidadNoDisponible:
+        raise ApiError.not_found("Habilidad no disponible para agentes.") from None
+    except InstalacionNoEncontrada:
+        raise ApiError.not_found("El agente no tiene esa habilidad.") from None
+    except ConflictoInstalacion as exc:
+        raise ApiError(409, exc.code, str(exc)) from None
+    except ValueError as exc:
+        # Sin los valores: la config puede traer datos del negocio.
+        campo = "cuenta_id" if str(exc) == "cuenta_id" else "config"
+        raise ApiError(422, "invalid_config", "Revisa la configuración de la habilidad.", {campo: "Valor inválido."}) from None
+    return _skill(h)
+
+
+# ------------------------------------------------------------------ flujo de atención (ADR-0195)
+class AgentFlowIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    flow: dict[str, Any]
+    lock_version: int = Field(ge=0, lt=2**31)
+
+
+class AgentFlowOut(BaseModel):
+    flow: dict[str, Any]
+    lock_version: int
+    source: Literal["agente", "semilla"] = "agente"
+    seeded: bool = False
+    warnings: list[str] = []
+
+
+class AgentFlowOptionsOut(BaseModel):
+    actions: list[AgentAction]
+    seed: dict[str, Any]
+
+
+def _accion(a: Any) -> AgentAction:
+    return AgentAction(
+        tool=a.tool,
+        pack_id=a.pack_id,
+        group=a.grupo,
+        enabled=a.enabled,
+        in_agent=a.en_el_agente,
+        by_superpower=a.por_superpoder,
+        max_calls_per_conversation=a.max_calls_per_conversation,
+        requires_confirmation=a.requires_confirmation,
+    )
+
+
+async def _flujo_del_agente(
+    tenant_id: uuid.UUID, agent_id: uuid.UUID
+) -> tuple[Any, list[Any], dict[str, Any], set[str]]:
+    """Borrador, acciones, semilla y acciones permitidas del agente."""
+    from core.agents import flujo_agente as fa
+    from core.agents import habilidades_del_agente as hda
+
+    await _agente_o_404(tenant_id, agent_id)
+    borrador = await versiones.obtener_borrador(tenant_id, agent_id)
+    packs = await hda.packs_del_agente(tenant_id, agent_id, await svc.habilitados_del_negocio(tenant_id))
+    acciones = hda.acciones(dict(borrador.content or {}), packs)
+    permitidas = fa.acciones_permitidas(acciones)
+    return borrador, acciones, fa.semilla(packs, permitidas), permitidas
+
+
+@router.get("/agents/{agent_id}/flow", response_model=AgentFlowOut)
+async def get_agent_flow(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> AgentFlowOut:
+    """Flujo del borrador del agente. Sin flujo propio devuelve la semilla de sus packs."""
+    from core.agents import flujo_agente as fa
+
+    borrador, _acciones, semilla, permitidas = await _flujo_del_agente(_tenant(principal), agent_id)
+    propio = borrador.flow is not None
+    flow = borrador.flow if propio else semilla
+    return AgentFlowOut(
+        flow=flow,
+        lock_version=borrador.lock_version,
+        source="agente" if propio else "semilla",
+        seeded=not propio,
+        warnings=fa.avisos_de_acciones(flow, permitidas),
+    )
+
+
+@router.put("/agents/{agent_id}/flow", response_model=AgentFlowOut)
+async def save_agent_flow(
+    agent_id: uuid.UUID,
+    payload: AgentFlowIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentFlowOut:
+    """Guarda el flujo con el mismo `lock_version` del borrador. 422 por sección/acción."""
+    from core.agents import flujo_agente as fa
+
+    tid = await _puede_escribir(principal)
+    _borrador, acciones, _semilla, permitidas = await _flujo_del_agente(tid, agent_id)
+    try:
+        borrador = await versiones.guardar_flujo(
+            tid,
+            agent_id,
+            payload.flow,
+            payload.lock_version,
+            acciones=acciones,
+            actor=principal.admin.id,
+        )
+    except versiones.ErroresDeContrato as exc:
+        raise _contrato_422(exc.issues) from None
+    except versiones.Conflicto as exc:
+        raise ApiError(409, "stale_lock_version", str(exc), fields={"lock_version": str(exc.lock_version)}) from None
+    return AgentFlowOut(
+        flow=borrador.flow or {"sections": []},
+        lock_version=borrador.lock_version,
+        warnings=fa.avisos_de_acciones(borrador.flow or {}, permitidas),
+    )
+
+
+# ------------------------------------------------------------------ horario por agente (HU-AOS-82)
+class AgentScheduleOut(BaseModel):
+    schedule: dict[str, Any] | None = Field(
+        description="Horario propio del agente (`{tz, ranges}`); `null` = hereda el del negocio.",
+    )
+    business_hours: dict[str, Any] | None = Field(description="El horario del negocio (lo que hereda).")
+    source: Literal["agente", "negocio"]
+    lock_version: int
+
+
+class AgentScheduleIn(BaseModel):
+    schedule: dict[str, Any] | None = Field(description="`null` vuelve a heredar el horario del negocio.")
+    lock_version: int
+
+
+async def _horario_del_negocio(tid: uuid.UUID) -> dict[str, Any] | None:
+    from sqlalchemy import select
+
+    from core.db.models import AppSettings
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        escalation_cfg = (
+            await session.execute(select(AppSettings.escalation_config).where(AppSettings.tenant_id == tid))
+        ).scalar_one_or_none() or {}
+    horario = escalation_cfg.get("business_hours")
+    return horario if isinstance(horario, dict) else None
+
+
+@router.get("/agents/{agent_id}/schedule", response_model=AgentScheduleOut)
+async def get_agent_schedule(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> AgentScheduleOut:
+    """Horario del borrador del agente y el del negocio que hereda si no tiene uno propio."""
+    tid = _tenant(principal)
+    try:
+        borrador = await versiones.obtener_borrador(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    return AgentScheduleOut(
+        schedule=borrador.schedule,
+        business_hours=await _horario_del_negocio(tid),
+        source="agente" if borrador.schedule is not None else "negocio",
+        lock_version=borrador.lock_version,
+    )
+
+
+@router.put("/agents/{agent_id}/schedule", response_model=AgentScheduleOut)
+async def save_agent_schedule(
+    agent_id: uuid.UUID,
+    payload: AgentScheduleIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentScheduleOut:
+    """Guarda el horario propio (o `null` para heredar) con el `lock_version` del borrador. Vale al publicar."""
+    from core.agents.horario_agente import HorarioInvalido
+
+    tid = await _puede_escribir(principal)
+    try:
+        borrador = await versiones.guardar_horario(
+            tid, agent_id, payload.schedule, payload.lock_version, actor=principal.admin.id
+        )
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    except HorarioInvalido as exc:
+        raise ApiError.bad_request(str(exc), "invalid_schedule") from None
+    except versiones.Conflicto as exc:
+        raise ApiError(409, "stale_lock_version", str(exc), fields={"lock_version": str(exc.lock_version)}) from None
+    return AgentScheduleOut(
+        schedule=borrador.schedule,
+        business_hours=await _horario_del_negocio(tid),
+        source="agente" if borrador.schedule is not None else "negocio",
+        lock_version=borrador.lock_version,
+    )
+
+
+@router.get("/agents/{agent_id}/flow/options", response_model=AgentFlowOptionsOut)
+async def get_agent_flow_options(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> AgentFlowOptionsOut:
+    """Acciones que el agente puede poner en su flujo y la semilla de sus packs."""
+    _borrador, acciones, semilla, _permitidas = await _flujo_del_agente(_tenant(principal), agent_id)
+    return AgentFlowOptionsOut(actions=[_accion(a) for a in acciones], seed=semilla)

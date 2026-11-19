@@ -174,7 +174,7 @@ graph TB
     G1[guardrails: crm_amount_check · crm_completion_check]
   end
   subgraph PP["pack-payments (ADR-0023)"]
-    S4[payment_skill → generar_link_pago]
+    S4[capacidad de pagos → link del pedido · webhook]
     PB2[playbooks: pagos]
   end
   subgraph PCAL["pack-calendar"]
@@ -185,20 +185,32 @@ graph TB
 Cada pack trae sus propias tablas (prefijo `pack_<nombre>_`), migraciones Alembic
 independientes y su config por tenant.
 
-### Flujo de atención (ADR-0054)
+### Flujo de atención (ADR-0054, ADR-0109)
 
-Al habilitar un pack, el tenant recibe una **base de flujo de venta**: un `flow.json`
-con **etapas** (Saludo, Cotización, Pedido, Escalamiento) que agrupan las tools de
-cada momento. El pack lo declara en `packages/pack-*/flow.json`; el alta lo siembra
-en `TENANTS_ROOT/<slug>/flow.json`, donde el tenant lo personaliza (agregar/quitar/
-reordenar tools o etapas, incluso tools declarativas propias, ADR-0052).
+El flujo agrupa las tools por **etapas** de la atención y se **compone** en cada turno:
 
-- Se inyecta como bloque estable del system prompt (`## Flujo de atención`) y define
-  el conjunto de tools del turno; sin flujo, se cae al `SkillRouter` por keywords.
-- Las secciones **no** restringen en runtime qué tool puede llamarse: la compuerta
-  de ejecución sigue siendo `AgentSpec.tools` + packs (`_tool_denial`).
-- Operación: `agent-core flow show|validate|sync <slug>`; el panel solo lo muestra
-  en lectura (la edición es por archivo del tenant, ADR-0017/0026).
+- `core/flow.json`: `core:saludo` y `core:escalamiento`, una sola vez para todo negocio;
+- `packages/pack-*/flow.json`: las secciones de **todos** los packs habilitados (`pack_x:id`), siempre al día;
+- `TENANTS_ROOT/<slug>/flow.json`: solo las secciones propias del negocio (`tenant`) y overrides explícitos.
+  Ya no es autoritativo ni se siembra con copias de los packs.
+
+- Se inyecta como bloque estable del system prompt (`## Flujo de atención`) y define el conjunto de tools
+  del turno; las tools del core (`always_available`: memoria, perfil, escalamiento, correo, `sub_*`) se
+  ofrecen aunque el flujo no las nombre. Sin flujo, se cae al `SkillRouter` por keywords.
+- Las secciones **no** restringen en runtime qué tool puede llamarse: la compuerta de ejecución sigue
+  siendo `AgentSpec.tools` + packs (`_tool_denial`).
+- Operación: `agent-core flow show|validate|sync|migrate <slug>`; el panel solo lo muestra en lectura.
+
+### Presets de negocio (ADR-0110)
+
+Un **preset** arma un tipo de negocio (comercio, restaurante, cobranza, citas, suscripciones) en una llamada:
+`core/presets/<id>.json` es un manifiesto corto (packs, playbooks por nombre, persona, `AppSettings`,
+plan mínimo, conexiones y pasos de activación) y cada pack aporta su fragmento por vertical en
+`packages/pack-*/presets/<vertical>.json` (config sin secretos y datos de ejemplo para `seed_data`).
+`apply_preset` es idempotente: valida el plan, habilita los packs (los que exigen claves quedan
+**pendientes de configurar** sin romper el alta), completa la config sin pisar lo del negocio, siembra,
+registra `tenants.settings["preset"]` y el `audit_log`. Es **configuración**: no agrega código ni reemplaza
+a un pack o a un plugin del tenant.
 
 ---
 
@@ -213,7 +225,7 @@ graph TB
   Y --> B[Plan]
 
   S --> S1["persona: asistente · tono cercano · emojis sparse · máx 500"]
-  S --> S2["model: deepseek-chat · temperature 0.3"]
+  S --> S2["model: deepseek-flash · temperature 0.3"]
   S --> S3["memory: shortTermTurns 30 (+ rag/summarize en BD)"]
   S --> S4["policies: maxToolCallsPerTurn 10 · budget 0.5 USD"]
   S --> S5["packs: [pack_commerce]"]
@@ -243,8 +255,8 @@ graph TB
 ```mermaid
 flowchart LR
   MSG[Mensaje] --> ROUTER{Difficulty router<br/>umbrales por tenant}
-  ROUTER -->|simple| CHAT[chat model<br/>deepseek-chat]
-  ROUTER -->|complejo| REASON[reasoner<br/>deepseek-reasoner]
+  ROUTER -->|simple| CHAT[chat model<br/>deepseek-flash thinking off]
+  ROUTER -->|complejo| REASON[reasoning<br/>deepseek-flash thinking on]
   CHAT --> COST[usage_ledger<br/>tokens + costo]
   REASON --> COST
   COST --> CAP{¿supera budget<br/>de la conversación?}

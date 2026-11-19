@@ -3,6 +3,12 @@
 Una conexión vive en `channel_connections` con sus credenciales cifradas
 (Fernet). El webhook y el sender las resuelven desde aquí con fallback al
 .env (el caso "recién instalado, sin configurar en el panel").
+
+Las filas con `meta_connection_id` son la conexión canónica de un número de Meta
+(ADR-0115): no tienen credenciales propias y las administra el alta de Meta. Las de tipo
+`webchat` son el widget de chat web y las administra Configuración → Chat web
+(`chat_web_conexion`). Este módulo es el de las conexiones MANUALES, así que no lista, no
+resuelve y no edita ninguna de las dos (`ES_MANUAL`, `administrada_aparte`).
 """
 
 from __future__ import annotations
@@ -10,20 +16,39 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import get_settings
 from core.db.models import ChannelConnection, utcnow
 from core.db.session import get_session
 from core.gateway.connection_types import (
     CATEGORY_COMMUNICATION,
+    PLAYGROUND,
+    TELEGRAM,
+    WEBCHAT,
     WHATSAPP_META,
+    WHATSAPP_TWILIO,
     external_id_for,
     get_connection_type,
     normalize_credentials,
 )
 from core.shared.crypto import get_secret_box
 from core.shared.tenant import get_current_tenant_id
+
+# Conexión sin cuenta de Meta y que no es el chat web ni la interna del Centro de pruebas: manual,
+# `waweb`, correo, calendario (ADR-0115). `type_id` NULL (filas legacy) cuenta como manual.
+ES_MANUAL = and_(
+    ChannelConnection.meta_connection_id.is_(None),
+    or_(ChannelConnection.type_id.is_(None), ChannelConnection.type_id.not_in((WEBCHAT, PLAYGROUND))),
+)
+
+
+def administrada_aparte(connection: ChannelConnection) -> bool:
+    """La conexión no es manual: la canónica de un número de Meta (la administra su cuenta), el
+    chat web (Configuración → Chat web) o la interna del Centro de pruebas. La API y el panel de
+    conexiones manuales responden 404 para ellas."""
+    return connection.meta_connection_id is not None or connection.type_id in (WEBCHAT, PLAYGROUND)
 
 
 async def list_connections() -> list[ChannelConnection]:
@@ -36,6 +61,7 @@ async def list_connections() -> list[ChannelConnection]:
             .where(
                 ChannelConnection.deleted_at.is_(None),
                 ChannelConnection.tenant_id == get_current_tenant_id(),
+                ES_MANUAL,
             )
             .order_by(ChannelConnection.created_at)
         )
@@ -53,6 +79,7 @@ async def find_by_external_id(external_id: str) -> ChannelConnection | None:
             select(ChannelConnection).where(
                 ChannelConnection.external_id == external_id,
                 ChannelConnection.deleted_at.is_(None),
+                ES_MANUAL,
             )
         )
         return result.scalar_one_or_none()
@@ -76,6 +103,7 @@ async def primary_connection(tenant_id: uuid.UUID | None = None) -> ChannelConne
                 # profundidad, invariante nº1): `tid is None` no matchea nada
                 # (fail-closed), nunca "sin filtrar".
                 ChannelConnection.tenant_id == tid,
+                ES_MANUAL,
                 or_(
                     ChannelConnection.category == CATEGORY_COMMUNICATION,
                     ChannelConnection.category.is_(None),
@@ -115,6 +143,8 @@ async def active_connection_type_ids(tenant_id: uuid.UUID | None = None) -> set[
                 ChannelConnection.active.is_(True),
                 ChannelConnection.deleted_at.is_(None),
                 ChannelConnection.type_id.is_not(None),
+                # El gating mira las conexiones manuales, como antes de ADR-0115.
+                ES_MANUAL,
             )
         )
     return {str(t) for t in rows.scalars().all() if t}
@@ -133,6 +163,7 @@ async def get_active_connection(
                 ChannelConnection.tenant_id == tid,
                 ChannelConnection.active.is_(True),
                 ChannelConnection.deleted_at.is_(None),
+                ES_MANUAL,
             )
             .order_by(ChannelConnection.is_primary.desc(), ChannelConnection.created_at.desc())
             .limit(1)
@@ -193,7 +224,9 @@ async def effective_credentials(external_id: str = "") -> dict[str, str]:
 
 
 async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
-    """Token que el webhook del tenant acepta en el handshake GET.
+    """UN token que el handshake GET del webhook del tenant acepta (para el self-check del
+    preflight). El handshake acepta el de cada conexión (`webhook_secrets.
+    verify_tokens_aceptados`, HU-CONN-05); este devuelve uno de ellos.
 
     Orden: `ChannelConnection` (conexión manual) -> BYOK (`MetaConnection`,
     verify_token propio del wizard) -> `.env` (`WHATSAPP_VERIFY_TOKEN`).
@@ -204,12 +237,8 @@ async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
     BYOK (bug real: el self-check del wizard BYOK respondía 403 porque el
     handler validaba con el token global).
 
-    Lo usa `webhooks.py::verify_webhook_tenant`. Cualquier ruta que registre
-    una suscripción apuntando a la URL POR TENANT (`tenant_webhook_url(slug)`,
-    como el wizard BYOK) debe registrar este mismo token, o Meta queda
-    registrado con un token que el handshake rechaza. La ruta genérica
-    (`/admin/conexiones/webhooks/registrar`) es la excepción: apunta al
-    webhook genérico sin slug, que resuelve solo `effective_credentials()`.
+    Para registrar la suscripción de UNA conexión se usa su propio token
+    (`meta_health_service.verify_token_de_registro`), no este.
     El `tenant_id` va explícito a la resolución manual; el contexto
     (`tenant_scope`) sigue haciendo falta para RLS en la rama BYOK.
     """
@@ -220,20 +249,21 @@ async def resolve_effective_verify_token(tenant_id: uuid.UUID) -> str:
     return manual or byok or get_settings().whatsapp_verify_token or ""
 
 
-async def resolve_effective_app_secret(tenant_id: uuid.UUID) -> str:
-    """App Secret con el que se valida la firma HMAC de los webhooks del tenant.
-
-    Mismo orden que `resolve_effective_verify_token`: `ChannelConnection`
-    (conexión manual) -> BYOK (`MetaConnection`, app secret cargado en el
-    wizard) -> `.env`. No usar `effective_credentials()` a secas: su fallback a
-    `env_credentials()` enmascara el secreto de la app dedicada del tenant y
-    hace que toda firma de Meta se rechace con 401 (bug real)."""
-    from core.gateway.meta_byok import resolve_byok_app_secret
-
-    manual = (await resolve_primary_credentials(tenant_id) or {}).get("app_secret")
-    byok = await resolve_byok_app_secret(tenant_id)
+def platform_app_secret() -> str:
+    """App Secret de la app de la plataforma (`.env`): el único que puede autorizar
+    eventos de cualquier negocio en el webhook (ADR-0100), porque ningún negocio lo
+    conoce. Única fuente de este criterio. Los secretos propios se resuelven por
+    conexión, en `core/gateway/webhook_secrets.py` (HU-CONN-05, ADR-0126)."""
     settings = get_settings()
-    return manual or byok or settings.whatsapp_app_secret or settings.meta_app_secret or ""
+    return settings.whatsapp_app_secret or settings.meta_app_secret or ""
+
+
+def instagram_platform_secret() -> str:
+    """App Secret de la app de Instagram (Instagram Login, HU-CHAN-04): también es de la plataforma y ningún negocio lo
+    conoce, pero firma SOLO eventos de Instagram. Una firma hecha con él autoriza únicamente los grupos de objeto
+    `instagram` (`Firmantes.objetos`), nunca los de WhatsApp ni Messenger: si el secreto se filtra, no sirve para inyectar
+    mensajes en otros canales de ningún negocio."""
+    return getattr(get_settings(), "instagram_app_secret", "") or ""
 
 
 async def save_connection(
@@ -248,105 +278,190 @@ async def save_connection(
     (ADR-0069): se descartan claves no declaradas y se coercionan los tipos. La
     primera conexión de mensajería activa queda como primaria.
     """
+    async with get_session() as session:
+        return await save_connection_in(session, label, credentials, connection_id, type_id)
+
+
+async def save_connection_in(
+    session: AsyncSession,
+    label: str,
+    credentials: dict[str, Any],
+    connection_id: uuid.UUID | None = None,
+    type_id: str = WHATSAPP_META,
+    external_id_override: str | None = None,
+) -> tuple[ChannelConnection, bool]:
+    """`save_connection` dentro de la sesión de quien llama, para que el alta guarde también lo propio del
+    proveedor en la misma transacción (Twilio, ADR-0186). Mismas reglas; no hace commit.
+
+    `external_id_override` reemplaza el `external_id` que sale de las credenciales: el sandbox de Twilio usa un número
+    compartido por todas las cuentas y se identifica como `sandbox:<AccountSid>` (HU-CONN-20)."""
     ctype = get_connection_type(type_id)
     if ctype is None:
         raise ValueError(f"Tipo de conexión desconocido: {type_id}")
+    if type_id == PLAYGROUND:
+        raise ValueError("La conexión del Centro de pruebas la crea el propio Centro de pruebas.")
+    if type_id == WEBCHAT:
+        # El chat web no es una conexión manual: lo crea Configuración → Chat web con su clave
+        # generada por el servidor (`chat_web_conexion`, ADR-0115 §4).
+        raise ValueError("El chat web se configura en Configuración → Chat web.")
 
     box = get_secret_box()
     tid = get_current_tenant_id()
 
-    async with get_session() as session:
-        previous: dict[str, Any] = {}
-        connection: ChannelConnection | None = None
-        if connection_id is not None:
-            connection = await session.get(ChannelConnection, connection_id)
-            if connection is None:
-                raise ValueError("La conexión no existe")
-            if connection.tenant_id != tid:
-                raise ValueError("La conexión no pertenece a este tenant")
-            previous = _decrypt_raw(connection)
+    previous: dict[str, Any] = {}
+    connection: ChannelConnection | None = None
+    if connection_id is not None:
+        connection = await session.get(ChannelConnection, connection_id)
+        if connection is None or administrada_aparte(connection):
+            raise ValueError("La conexión no existe")
+        if connection.tenant_id != tid:
+            raise ValueError("La conexión no pertenece a este tenant")
+        if (connection.provider == "twilio") != (type_id == WHATSAPP_TWILIO) or (
+            connection.provider == "telegram"
+        ) != (type_id == TELEGRAM):
+            # Una conexión de Twilio o de Telegram tiene su fila propia y su webhook: no se convierte en otro tipo (ni
+            # otro tipo en una de ellas) desde el formulario manual (ADR-0186, ADR-0199).
+            raise ValueError("Esta conexión no se puede cambiar a otro tipo.")
+        previous = _decrypt_raw(connection)
 
-        clean = normalize_credentials(ctype, credentials, previous)
-        external_id = external_id_for(ctype, clean)
-        encrypted = box.encrypt_json(clean)
+    clean = normalize_credentials(ctype, credentials, previous)
+    if external_id_override is not None and (
+        type_id != WHATSAPP_TWILIO
+        or external_id_override != f"sandbox:{clean.get('account_sid', '')}"
+    ):
+        # Solo el sandbox de Twilio, y con la MISMA cuenta de las credenciales: un override libre permitiría ocupar
+        # en el índice global el `sandbox:` de la cuenta de otro negocio.
+        raise ValueError("external_id_override solo vale para el sandbox de Twilio de esa cuenta.")
+    external_id = external_id_override or external_id_for(ctype, clean)
+    if (
+        connection is not None
+        and external_id_override is None
+        and (connection.external_id or "").startswith("sandbox:")
+    ):
+        # Editar un sandbox sin el override no lo convierte en el número compartido (lo ocuparía para todos).
+        external_id = connection.external_id or ""
+    encrypted = box.encrypt_json(clean)
 
-        if connection is not None:
-            connection.label = label
-            connection.type_id = type_id
-            connection.category = ctype.category
-            connection.channel = ctype.channel
-            connection.provider = ctype.provider
-            connection.external_id = external_id or connection.external_id
-            connection.credentials_encrypted = encrypted
-            connection.active = True
-            created = False
-        else:
-            # Lookup alineado al índice único `(tenant_id, provider, external_id)`
-            # (defensa en profundidad + evita IntegrityError). Se prefiere la fila
-            # activa sobre una soft-deleted para no chocar con el índice parcial.
-            existing = (
-                await session.execute(
-                    select(ChannelConnection)
-                    .where(
-                        ChannelConnection.tenant_id == tid,
-                        ChannelConnection.provider == ctype.provider,
-                        ChannelConnection.external_id == external_id,
-                    )
-                    .order_by(
-                        case((ChannelConnection.deleted_at.is_(None), 0), else_=1),
-                        ChannelConnection.created_at.desc(),
-                    )
-                    .limit(1)
-                )
-            ).scalars().first()
-            if existing is not None:
-                existing.label = label
-                existing.type_id = type_id
-                existing.category = ctype.category
-                existing.channel = ctype.channel
-                existing.credentials_encrypted = encrypted
-                existing.active = True
-                existing.deleted_at = None  # re-agregar des-elimina (invariante #8)
-                return existing, False
-            connection = ChannelConnection(
-                tenant_id=tid,
-                channel=ctype.channel,
-                provider=ctype.provider,
-                type_id=type_id,
-                category=ctype.category,
-                label=label,
-                active=True,
-                is_primary=False,
-                external_id=external_id,
-                credentials_encrypted=encrypted,
+    if type_id == WHATSAPP_META and external_id:
+        # El webhook rutea por este número: no puede ser de otro negocio (ADR-0095).
+        from core.gateway.meta_asset_claims import MetaAssetError, claim_assets
+
+        try:
+            await claim_assets(session, tid, waba_id=None, phone_number_id=external_id)
+        except MetaAssetError as exc:
+            raise ValueError(exc.message) from exc
+
+    if external_id and (
+        await session.execute(
+            select(ChannelConnection.id).where(
+                ChannelConnection.tenant_id == tid,
+                ChannelConnection.provider == ctype.provider,
+                ChannelConnection.external_id == external_id,
+                ChannelConnection.deleted_at.is_(None),
+                ChannelConnection.meta_connection_id.is_not(None),
             )
-            session.add(connection)
-            await session.flush()
-            created = True
+        )
+    ).first():
+        # El número ya tiene su conexión canónica de Meta (ADR-0115): una fila manual del
+        # mismo número chocaría con ella (índice único y CHECK), al crear o al editar.
+        raise ValueError(
+            "Ese número ya está conectado con el asistente de WhatsApp: adminístralo desde esa conexión."
+        )
 
-        # La primera conexión de MENSAJERÍA activa queda como primaria (ADR-0069)
-        if created and ctype.category == CATEGORY_COMMUNICATION:
-            count_active = (
-                await session.execute(
-                    select(func.count(ChannelConnection.id)).where(
-                        ChannelConnection.active.is_(True),
-                        ChannelConnection.tenant_id == tid,
-                        or_(
-                            ChannelConnection.category == CATEGORY_COMMUNICATION,
-                            ChannelConnection.category.is_(None),
-                        ),
-                    )
+    if connection is not None:
+        connection.label = label
+        connection.type_id = type_id
+        connection.category = ctype.category
+        connection.channel = ctype.channel
+        connection.provider = ctype.provider
+        connection.external_id = external_id or connection.external_id
+        connection.credentials_encrypted = encrypted
+        connection.active = True
+        created = False
+    else:
+        # Lookup alineado al índice único `(tenant_id, provider, external_id)`
+        # (defensa en profundidad + evita IntegrityError). Se prefiere la fila
+        # activa sobre una soft-deleted para no chocar con el índice parcial.
+        existing = (
+            await session.execute(
+                select(ChannelConnection)
+                .where(
+                    ChannelConnection.tenant_id == tid,
+                    ChannelConnection.provider == ctype.provider,
+                    ChannelConnection.external_id == external_id,
                 )
-            ).scalar() or 0
-            if count_active <= 1:
-                connection.is_primary = True
-        return connection, created
+                .order_by(
+                    case((ChannelConnection.deleted_at.is_(None), 0), else_=1),
+                    ChannelConnection.created_at.desc(),
+                )
+                .limit(1)
+            )
+        ).scalars().first()
+        if existing is not None and administrada_aparte(existing):
+            existing = None  # una canónica borrada no se convierte en manual
+        if existing is not None:
+            revivida = existing.deleted_at is not None
+            existing.label = label
+            existing.type_id = type_id
+            existing.category = ctype.category
+            existing.channel = ctype.channel
+            existing.credentials_encrypted = encrypted
+            existing.active = True
+            existing.deleted_at = None  # re-agregar des-elimina (invariante #8)
+            if revivida and ctype.produces_conversations:
+                await session.flush()
+                await _instancias_de_la_nueva(session, tid, existing.id)
+            return existing, False
+        connection = ChannelConnection(
+            tenant_id=tid,
+            channel=ctype.channel,
+            provider=ctype.provider,
+            type_id=type_id,
+            category=ctype.category,
+            label=label,
+            active=True,
+            is_primary=False,
+            external_id=external_id,
+            credentials_encrypted=encrypted,
+        )
+        session.add(connection)
+        await session.flush()
+        created = True
+
+    # La primera conexión de MENSAJERÍA activa queda como primaria (ADR-0069)
+    if created and ctype.category == CATEGORY_COMMUNICATION:
+        count_active = (
+            await session.execute(
+                select(func.count(ChannelConnection.id)).where(
+                    ChannelConnection.active.is_(True),
+                    ChannelConnection.tenant_id == tid,
+                    ES_MANUAL,
+                    or_(
+                        ChannelConnection.category == CATEGORY_COMMUNICATION,
+                        ChannelConnection.category.is_(None),
+                    ),
+                )
+            )
+        ).scalar() or 0
+        if count_active <= 1:
+            connection.is_primary = True
+    if created and ctype.produces_conversations:
+        await _instancias_de_la_nueva(session, tid, connection.id)
+    return connection, created
+
+
+async def _instancias_de_la_nueva(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    """Coordinador y General de una conexión conversacional nueva o revivida, si el negocio ya
+    tiene sus agentes (HU-AOS-13; en un SAVEPOINT: un error no tumba el alta)."""
+    from core.agents.instancias import instancias_de_conexion_nueva
+
+    await instancias_de_conexion_nueva(session, tenant_id, connection_id)
 
 
 async def set_active(connection_id: uuid.UUID, active: bool) -> None:
     async with get_session() as session:
         connection = await session.get(ChannelConnection, connection_id)
-        if connection is None:
+        if connection is None or administrada_aparte(connection):
             return
         connection.active = active
         if not active:
@@ -356,7 +471,7 @@ async def set_active(connection_id: uuid.UUID, active: bool) -> None:
 async def set_primary(connection_id: uuid.UUID) -> None:
     async with get_session() as session:
         target = await session.get(ChannelConnection, connection_id)
-        if target is None:
+        if target is None or administrada_aparte(target):
             return
         # Solo se reasigna la primacía dentro de la misma categoría (ADR-0069) y
         # del mismo tenant; las filas legacy sin `category` cuentan como mensajería.
@@ -364,6 +479,7 @@ async def set_primary(connection_id: uuid.UUID) -> None:
             await session.execute(
                 select(ChannelConnection).where(
                     ChannelConnection.tenant_id == target.tenant_id,
+                    ES_MANUAL,
                     or_(
                         ChannelConnection.category == target.category,
                         ChannelConnection.category.is_(None),
@@ -380,9 +496,60 @@ async def delete_connection(connection_id: uuid.UUID) -> None:
     """Borra (soft-delete) una conexión — invariante #8: sin borrado físico."""
     async with get_session() as session:
         connection = await session.get(ChannelConnection, connection_id)
-        if connection is not None:
+        if connection is not None and not administrada_aparte(connection):
             connection.deleted_at = utcnow()
             connection.active = False
+            if connection.provider == "telegram":
+                # Su fila de Telegram se va con ella (ADR-0199): libera el bot y el ruteo del webhook.
+                from core.db.models import TelegramConnection
+
+                await session.execute(
+                    update(TelegramConnection)
+                    .where(
+                        TelegramConnection.tenant_id == connection.tenant_id,
+                        TelegramConnection.channel_connection_id == connection.id,
+                        TelegramConnection.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=connection.deleted_at)
+                )
+            if connection.provider == "twilio":
+                # Su fila de Twilio se va con ella (ADR-0186): libera el número y el ruteo del webhook.
+                from core.db.models import TwilioConnection
+
+                await session.execute(
+                    update(TwilioConnection)
+                    .where(
+                        TwilioConnection.tenant_id == connection.tenant_id,
+                        TwilioConnection.channel_connection_id == connection.id,
+                        TwilioConnection.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=connection.deleted_at)
+                )
+                # Y sus plantillas: al reconectar (la misma fila revive) no reaparecen las de la cuenta anterior, y
+                # el polling deja de consultarlas.
+                from core.db.models import TwilioContentTemplate
+
+                await session.execute(
+                    update(TwilioContentTemplate)
+                    .where(
+                        TwilioContentTemplate.tenant_id == connection.tenant_id,
+                        TwilioContentTemplate.channel_connection_id == connection.id,
+                        TwilioContentTemplate.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=connection.deleted_at, next_poll_at=None)
+                )
+                # Y la caché de botones y listas (PR-7i): sus Content son de la cuenta anterior.
+                from core.db.models import TwilioInteractiveContent
+
+                await session.execute(
+                    update(TwilioInteractiveContent)
+                    .where(
+                        TwilioInteractiveContent.tenant_id == connection.tenant_id,
+                        TwilioInteractiveContent.channel_connection_id == connection.id,
+                        TwilioInteractiveContent.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=connection.deleted_at)
+                )
 
 
 async def verify_meta_credentials(
@@ -408,7 +575,9 @@ async def verify_meta_credentials(
             f"/{phone_number_id}",
             token=access_token,
             app_secret=app_secret,
-            query={"fields": "id,verified_name,display_phone_number"},
+            # `platform_type` y `account_mode`: si el número ya está registrado en la Cloud
+            # API y si es de prueba de Meta o real (BYOK de producción, HU-CONN-06).
+            query={"fields": "id,verified_name,display_phone_number,platform_type,account_mode,status"},
         )
     except GraphError as exc:
         text = f"{exc.message} {exc.error_user_msg or ''}".lower()

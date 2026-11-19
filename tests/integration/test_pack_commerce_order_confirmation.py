@@ -40,13 +40,13 @@ pytestmark = [
 T1 = TEST_ALPHA_ID
 
 
-async def _make_quote(session, *, status: str, total: float = 60_000.0):
+async def _make_quote(session, *, status: str, customer_id, total: float = 60_000.0):
     from pack_commerce.models import Quote, QuoteItem
 
     quote = Quote(
         tenant_id=T1,
         conversation_id=uuid.uuid4(),
-        customer_id=uuid.uuid4(),
+        customer_id=customer_id,
         subtotal=total,
         discount=0,
         total=total,
@@ -86,7 +86,7 @@ async def test_crear_pedido_rechaza_sin_confirmar_cotizacion(fake_tool_context):
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _make_quote(session, status="draft")
+            quote = await _make_quote(session, customer_id=fake_tool_context.customer_id, status="draft")
             quote_id = str(quote.id)
 
         skill = OrderSkill()
@@ -111,7 +111,7 @@ async def test_crear_pedido_rechaza_sin_confirmar_cotizacion(fake_tool_context):
     assert "confirmar_cotizacion" in result.get("hint", ""), result
 
 
-async def test_confirmar_cotizacion_transiciona_a_aceptada():
+async def test_confirmar_cotizacion_transiciona_a_aceptada(fake_tool_context):
     from pack_commerce.skills import OrderSkill
 
     from core.db.session import get_session
@@ -119,11 +119,11 @@ async def test_confirmar_cotizacion_transiciona_a_aceptada():
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _make_quote(session, status="draft")
+            quote = await _make_quote(session, customer_id=fake_tool_context.customer_id, status="draft")
             quote_id = str(quote.id)
 
         skill = OrderSkill()
-        result = await skill.confirmar_cotizacion({"quote_id": quote_id}, None)
+        result = await skill.confirmar_cotizacion({"quote_id": quote_id}, fake_tool_context)
         assert result.get("status") == "aceptada", result
 
         from pack_commerce.models import Quote
@@ -141,7 +141,7 @@ async def test_crear_pedido_funciona_despues_de_confirmar_cotizacion(fake_tool_c
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _make_quote(session, status="draft", total=60_000.0)
+            quote = await _make_quote(session, customer_id=fake_tool_context.customer_id, status="draft", total=60_000.0)
             quote_id = str(quote.id)
 
         skill = OrderSkill()
@@ -183,7 +183,7 @@ async def test_confirmar_cotizacion_rechaza_si_ya_se_convirtio(fake_tool_context
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _make_quote(session, status="convertida")
+            quote = await _make_quote(session, customer_id=fake_tool_context.customer_id, status="convertida")
             quote_id = str(quote.id)
 
         skill = OrderSkill()
@@ -205,7 +205,7 @@ async def test_confirmar_cotizacion_no_ve_cotizacion_de_otro_tenant(fake_tool_co
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _make_quote(session, status="draft")
+            quote = await _make_quote(session, customer_id=fake_tool_context.customer_id, status="draft")
             quote_id = str(quote.id)
 
     skill = OrderSkill()
@@ -265,7 +265,7 @@ async def test_crear_pedido_rechaza_pago_en_linea_bajo_el_minimo(fake_tool_conte
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _make_quote(session, status="aceptada", total=54_000.0)
+            quote = await _make_quote(session, customer_id=fake_tool_context.customer_id, status="aceptada", total=54_000.0)
             quote_id = str(quote.id)
 
         skill = OrderSkill()
@@ -317,7 +317,7 @@ async def test_crear_pedido_acepta_pago_en_linea_sobre_el_minimo(fake_tool_conte
 
     async with tenant_scope(T1):
         async with get_session() as session:
-            quote = await _make_quote(session, status="aceptada", total=200_000.0)
+            quote = await _make_quote(session, customer_id=fake_tool_context.customer_id, status="aceptada", total=200_000.0)
             quote_id = str(quote.id)
 
         skill = OrderSkill()

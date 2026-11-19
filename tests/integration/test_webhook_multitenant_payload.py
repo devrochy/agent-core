@@ -16,6 +16,7 @@ from sqlalchemy import select
 from core.config import get_settings
 
 pytestmark = [
+    pytest.mark.aislamiento,  # subconjunto de las PRs a develop (ADR-0120)
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
@@ -29,7 +30,7 @@ def _uniq(prefix: str) -> str:
 
 
 async def _onboard_with_phone(slug: str, phone: str) -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Tenant multitenant-payload {slug}",

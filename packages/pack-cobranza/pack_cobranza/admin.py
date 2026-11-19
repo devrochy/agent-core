@@ -31,6 +31,7 @@ from core.db.models import Admin, Conversation, Escalation, TenantInvitation, Te
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from pack_cobranza.enlazar import enlazar_cliente, telefono_para_guardar
 from pack_cobranza.evidencias import ruta_evidencia
 from pack_cobranza.models import (
     Abono,
@@ -46,8 +47,6 @@ from pack_cobranza.models import (
     CarteraOptimizadaLog,
     Cliente,
     ClienteEvidencia,
-    CobroPropietario,
-    ConversacionPropietario,
     Cuota,
     Device,
     Gasto,
@@ -55,9 +54,7 @@ from pack_cobranza.models import (
     GestorPermiso,
     IntentoAcceso,
     Inyeccion,
-    LinkPago,
     Liquidacion,
-    MensajePropietario,
     Pago,
     PosicionGestor,
     Prestamo,
@@ -293,10 +290,13 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                 # perfil del pack (ADR-0066): aparece en Colaboradores y en Gestores.
                 correo = str(values.get("correo") or "").strip().lower()
                 password = str(values.get("password") or "")
-                if not correo or not password:
+                if not correo or not password or tid is None:
                     return
                 existente = (await session.execute(select(Admin).where(Admin.email == correo))).scalar_one_or_none()
                 if existente is not None:
+                    if existente.deleted_at is not None:
+                        # Baja lógica de equipo (ADR-0198): no se invita a una cuenta eliminada.
+                        return
                     # Identidad existente: se invita al negocio (ADR-0081), sin duplicar.
                     pendiente = (
                         await session.execute(
@@ -308,6 +308,10 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                         )
                     ).scalar_one_or_none()
                     if pendiente is None:
+                        # Tope de colaboradores del plan (ADR-0142): la invitación ocupa cupo.
+                        from core.billing.enforcement import enforce_growth
+
+                        await enforce_growth(tid, "colaboradores", session=session)
                         session.add(
                             TenantInvitation(
                                 tenant_id=tid,
@@ -318,6 +322,9 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                             )
                         )
                     return
+                from core.billing.enforcement import enforce_growth
+
+                await enforce_growth(tid, "colaboradores", session=session)
                 admin = Admin(email=correo, password_hash=hash_password(password), role="colaborador")
                 session.add(admin)
                 await session.flush()
@@ -365,7 +372,10 @@ async def _save(entity: str, record_id: str | None, values: dict[str, Any]) -> N
                 if f in values:
                     setattr(obj, col, values[f])
             if rid is None:
+                obj.telefono_whatsapp = telefono_para_guardar(obj.telefono_whatsapp)
                 session.add(obj)
+                await session.flush()
+                await enlazar_cliente(session, obj)
         else:  # gastos
             cartera_id = _uuid(str(values.get("cartera_id") or ""))
             if cartera_id is None or await get_owned(session, Cartera, cartera_id) is None:
@@ -495,170 +505,6 @@ async def monitoreo(request: Request) -> HTMLResponse:
             ],
         )
     return _render("cobranza/monitoreo.html", ctx)
-
-
-# --------------------------------------------------------------- cobros al propietario (Épica 9)
-@router.get("/cobros", response_class=HTMLResponse)
-async def cobros_page(request: Request) -> HTMLResponse:
-    ctx = await base_context(request, SECTION)
-    if ctx is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not await _authorized(request, write=False):
-        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        cobros = (await session.execute(select(CobroPropietario).where(CobroPropietario.tenant_id == tid, CobroPropietario.deleted_at.is_(None)).order_by(CobroPropietario.periodo.desc()))).scalars().all()
-        links = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tid).order_by(LinkPago.created_at.desc()).limit(20))).scalars().all()
-        ctx.update(
-            cobros=[{"id": str(c.id), "periodo": c.periodo, "monto": float(c.monto_calculado), "pagado": float(c.monto_pagado) if c.monto_pagado is not None else None, "vence": c.fecha_vencimiento.isoformat(), "estado": c.estado} for c in cobros],
-            links=[{"referencia": lk.referencia, "url": lk.url, "monto": float(lk.monto), "estado": lk.estado} for lk in links],
-        )
-    return _render("cobranza/cobros.html", ctx)
-
-
-@router.post("/cobros/generar")
-async def cobro_generar(request: Request) -> RedirectResponse:
-    if await current_admin(request) is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not await _authorized(request, write=True):
-        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    form = await request.form()
-    periodo = str(form.get("periodo") or "").strip()
-    try:
-        monto = Decimal(str(form.get("monto") or 0))
-        vence = date.fromisoformat(str(form.get("fecha_vencimiento") or ""))
-    except Exception:
-        return RedirectResponse("/cobranza/cobros?flash=Datos inválidos&flash_type=danger", status_code=303)
-    if not periodo:
-        return RedirectResponse("/cobranza/cobros?flash=Falta el periodo&flash_type=danger", status_code=303)
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        cobro = (await session.execute(select(CobroPropietario).where(CobroPropietario.tenant_id == tid, CobroPropietario.periodo == periodo))).scalar_one_or_none()
-        if cobro is None:
-            cobro = CobroPropietario(tenant_id=tid, periodo=periodo, monto_calculado=monto, fecha_vencimiento=vence)
-            session.add(cobro)
-            await session.flush()
-        else:
-            cobro.monto_calculado = monto
-            cobro.fecha_vencimiento = vence
-        await registrar_mensaje_propietario(session, tid, f"Notificación de cobro · periodo {periodo}: {monto:,.0f} · vence {vence.isoformat()}", tipo="notificacion", autor_rol="sistema", cobro_id=cobro.id)
-    return RedirectResponse("/cobranza/cobros?flash=Cobro generado&flash_type=success", status_code=303)
-
-
-@router.post("/cobros/{record_id}/pago")
-async def cobro_pago(request: Request, record_id: str) -> RedirectResponse:
-    if await current_admin(request) is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not await _authorized(request, write=True):
-        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    rid = _uuid(record_id)
-    form = await request.form()
-    try:
-        monto = Decimal(str(form.get("monto_pagado") or 0))
-    except Exception:
-        return RedirectResponse("/cobranza/cobros?flash=Monto inválido&flash_type=danger", status_code=303)
-    if rid is not None:
-        async with get_session() as session:
-            cobro = await get_owned(session, CobroPropietario, rid)
-            if cobro is not None:
-                cobro.monto_pagado = monto
-                cobro.fecha_pago = date.today()
-                cobro.estado = "pagado"
-                cobro.metodo_pago = str(form.get("metodo_pago") or "efectivo")
-                cobro.registrado_por = "propietario"
-    return RedirectResponse("/cobranza/cobros?flash=Pago registrado&flash_type=success", status_code=303)
-
-
-@router.post("/cobros/{record_id}/link")
-async def cobro_link(request: Request, record_id: str) -> RedirectResponse:
-    if await current_admin(request) is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not await _authorized(request, write=True):
-        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    rid = _uuid(record_id)
-    form = await request.form()
-    referencia = str(form.get("referencia") or "").strip()
-    url = str(form.get("url") or "").strip()
-    if rid is None or not referencia or not url:
-        return RedirectResponse("/cobranza/cobros?flash=Referencia y URL obligatorias&flash_type=danger", status_code=303)
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        cobro = await get_owned(session, CobroPropietario, rid)
-        if cobro is None:
-            return RedirectResponse("/cobranza/cobros?flash=Cobro no encontrado&flash_type=danger", status_code=303)
-        session.add(LinkPago(tenant_id=tid, cobro_id=cobro.id, referencia=referencia, url=url, monto=cobro.monto_calculado))
-    return RedirectResponse("/cobranza/cobros?flash=Link de pago creado&flash_type=success", status_code=303)
-
-
-# --------------------------------------------------------------- conversación con el propietario (HU-63)
-async def _conversacion_propietario(session, tid: uuid.UUID) -> ConversacionPropietario:
-    conv = (
-        await session.execute(select(ConversacionPropietario).where(ConversacionPropietario.tenant_id == tid, ConversacionPropietario.deleted_at.is_(None)))
-    ).scalar_one_or_none()
-    if conv is None:
-        conv = ConversacionPropietario(tenant_id=tid)
-        session.add(conv)
-        await session.flush()
-    return conv
-
-
-async def registrar_mensaje_propietario(session, tid: uuid.UUID, contenido: str, *, tipo: str = "manual", direccion: str = "saliente", autor_rol: str = "admin", cobro_id: uuid.UUID | None = None) -> MensajePropietario:
-    """Añade un mensaje al hilo con el propietario (lo usan el panel y las notificaciones)."""
-    conv = await _conversacion_propietario(session, tid)
-    mensaje = MensajePropietario(tenant_id=tid, conversacion_id=conv.id, direccion=direccion, tipo=tipo, autor_rol=autor_rol, contenido=contenido, cobro_id=cobro_id)
-    session.add(mensaje)
-    await session.flush()
-    return mensaje
-
-
-async def _propietario_whatsapp() -> str:
-    from core.plugin_manager import plugin_manager
-    from pack_cobranza.config import CobranzaConfig
-
-    try:
-        cfg = await plugin_manager.load_config(PLUGIN_ID)
-    except Exception:
-        return ""
-    return (cfg.propietario_whatsapp or "").strip() if isinstance(cfg, CobranzaConfig) else ""
-
-
-@router.get("/propietario", response_class=HTMLResponse)
-async def propietario_conversacion(request: Request) -> HTMLResponse:
-    ctx = await base_context(request, SECTION)
-    if ctx is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not await _authorized(request, write=False):
-        return RedirectResponse("/admin?flash=sin_pack&flash_type=danger", status_code=303)
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        conv = await _conversacion_propietario(session, tid)
-        mensajes = (await session.execute(select(MensajePropietario).where(MensajePropietario.tenant_id == tid, MensajePropietario.conversacion_id == conv.id, MensajePropietario.deleted_at.is_(None)).order_by(MensajePropietario.created_at))).scalars().all()
-    ctx.update(
-        record_id=str(conv.id),
-        whatsapp=await _propietario_whatsapp(),
-        mensajes=[{"id": str(m.id), "direccion": m.direccion, "tipo": m.tipo, "autor": m.autor_rol or "", "contenido": m.contenido, "fecha": m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else ""} for m in mensajes],
-    )
-    return _render("cobranza/propietario.html", ctx)
-
-
-@router.post("/propietario/mensaje")
-async def propietario_mensaje(request: Request) -> RedirectResponse:
-    if await current_admin(request) is None:
-        return RedirectResponse("/admin/login", status_code=303)
-    if not await _authorized(request, write=True):
-        return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    form = await request.form()
-    contenido = str(form.get("contenido") or "").strip()
-    direccion = str(form.get("direccion") or "saliente")
-    if direccion not in ("saliente", "entrante"):
-        direccion = "saliente"
-    if not contenido:
-        return RedirectResponse("/cobranza/propietario?flash=Escribe un mensaje&flash_type=danger", status_code=303)
-    tid = get_current_tenant_id()
-    async with get_session() as session:
-        mensaje = await registrar_mensaje_propietario(session, tid, contenido, direccion=direccion, autor_rol="admin" if direccion == "saliente" else "propietario")
-        _auditar(session, "mensaje_propietario", mensaje.id, "crear", despues={"direccion": direccion})
-    return RedirectResponse("/cobranza/propietario?flash=Mensaje registrado&flash_type=success", status_code=303)
 
 
 # --------------------------------------------------------------- dispositivos (ADR-0057)
@@ -1075,7 +921,18 @@ async def entity_save(request: Request, entity: str) -> RedirectResponse:
     form_data = {str(k): str(v) for k, v in form.items()}
     record_id = form.get("record_id") or None
     values = parse_json_schema_form(_SCHEMAS[entity], form_data)
-    await _save(entity, str(record_id) if record_id else None, values)
+    from core.billing.enforcement import QuotaExceeded
+
+    try:
+        await _save(entity, str(record_id) if record_id else None, values)
+    except QuotaExceeded as exc:
+        from urllib.parse import quote
+
+        from core.api.plan_limits import plan_limit_message
+
+        return RedirectResponse(
+            f"/cobranza/{entity}?flash={quote(plan_limit_message(exc))}&flash_type=danger", status_code=303
+        )
     return RedirectResponse(f"/cobranza/{entity}?flash=Guardado&flash_type=success", status_code=303)
 
 

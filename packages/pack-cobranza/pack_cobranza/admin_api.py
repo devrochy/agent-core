@@ -14,19 +14,39 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from math import asin, cos, radians, sin, sqrt
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Response
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
+from core.access import devices as accesos
+from core.access.devices import AccesoError
+from core.access.events import sufijo
 from core.admin.auth import hash_password
-from core.api.deps import Principal, require
+from core.admin.permissions import _filas_explicitas, effective_access
+from core.api.deps import Principal, es_owner_o_master, get_principal, require
 from core.api.errors import ApiError
-from core.db.models import Admin, Conversation, Escalation, TenantUser
+from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.billing.enforcement import QuotaExceeded, enforce_growth
+from core.db.models import (
+    AccessEvent,
+    AccountDevice,
+    Admin,
+    Conversation,
+    Escalation,
+    TenantUser,
+)
 from core.db.session import get_owned, get_session
+from core.shared.audit import record_audit
+from pack_cobranza.acceso import adoptar_legado
+from pack_cobranza.enlazar import enlazar_cliente, telefono_para_guardar
 from pack_cobranza.permisos import GESTOR_PERMISOS
 
+# Registra los providers de búsqueda global del pack (ADR-0096).
+from . import search as _search  # noqa: F401
+from . import sync as _sync  # noqa: F401
 from .models import (
     Abono,
     AuditoriaCartera,
@@ -40,18 +60,13 @@ from .models import (
     CarteraNota,
     CarteraOptimizadaLog,
     Cliente,
-    CobroPropietario,
-    ConversacionPropietario,
     Cuota,
     Device,
     Gasto,
     Gestor,
     GestorPermiso,
-    IntentoAcceso,
     Inyeccion,
-    LinkPago,
     Liquidacion,
-    MensajePropietario,
     Pago,
     PosicionGestor,
     Prestamo,
@@ -176,18 +191,31 @@ async def cobranza_summary(
 
 
 # ------------------------------------------------------------------ reglas
+AlcancePromesa = Literal["ambos", "vencido", "saldo_total"]
+
+
 class Rules(BaseModel):
     max_dias_prorroga: int
     min_abono_pct: float
     max_reprogramaciones: int
     umbral_saldo_autonomo: float
+    alcance_promesa: AlcancePromesa = Field(
+        default="ambos",
+        description="Alcances de la promesa de pago que acepta el asistente: lo vencido, el saldo total o ambos (HU-AOS-08).",
+    )
 
 
 class RulesUpdate(BaseModel):
-    max_dias_prorroga: int = 15
-    min_abono_pct: float = 10.0
-    max_reprogramaciones: int = 2
-    umbral_saldo_autonomo: float = 0.0
+    # Rangos explícitos: un negativo responde 422 con el campo marcado (antes se recortaba a 0
+    # y el panel decía «guardado»). P0 de pruebas 2026-10-17.
+    max_dias_prorroga: int = Field(default=15, ge=0, le=365)
+    min_abono_pct: float = Field(default=10.0, ge=0, le=100, allow_inf_nan=False)
+    max_reprogramaciones: int = Field(default=2, ge=0, le=100)
+    umbral_saldo_autonomo: float = Field(default=0.0, ge=0, le=999_999_999_999, allow_inf_nan=False)
+    alcance_promesa: AlcancePromesa | None = Field(
+        default=None,
+        description="Alcances de la promesa de pago (ambos, vencido o saldo_total). Si no se envía, se conserva el actual.",
+    )
 
 
 @router.get("/rules", response_model=Rules)
@@ -205,7 +233,15 @@ async def get_rules(
         min_abono_pct=float(row.min_abono_pct) if row else 10.0,
         max_reprogramaciones=row.max_reprogramaciones if row else 2,
         umbral_saldo_autonomo=float(row.umbral_saldo_autonomo) if row else 0.0,
+        alcance_promesa=_alcance_de_reglas(row),
     )
+
+
+def _alcance_de_reglas(row: ReglaNegociacion | None) -> AlcancePromesa:
+    valor = row.alcance_promesa if row is not None else None
+    if valor == "vencido" or valor == "saldo_total":
+        return valor
+    return "ambos"
 
 
 @router.put("/rules", response_model=Rules)
@@ -227,6 +263,8 @@ async def save_rules(
         row.min_abono_pct = Decimal(str(max(0.0, payload.min_abono_pct)))
         row.max_reprogramaciones = max(0, payload.max_reprogramaciones)
         row.umbral_saldo_autonomo = Decimal(str(max(0.0, payload.umbral_saldo_autonomo)))
+        if payload.alcance_promesa is not None:
+            row.alcance_promesa = payload.alcance_promesa
     return await get_rules(principal)
 
 
@@ -313,7 +351,7 @@ async def list_payments(
             .scalars()
             .all()
         )
-    name_by_id = {c.id: f"{c.nombres} {c.apellidos or ''}".strip() for c in clientes}
+    name_by_id = {c.id: f"{c.nombre} {c.apellido or ''}".strip() for c in clientes}
     return [
         Payment(
             id=p.id,
@@ -336,6 +374,10 @@ class Promise(BaseModel):
     estado: str
     tipo: str
     creado_por: str
+    alcance: str | None = Field(
+        default=None,
+        description="Por qué monto fue la promesa del asistente: vencido o saldo_total (null en las demás).",
+    )
 
 
 class PromiseStatusUpdate(BaseModel):
@@ -369,7 +411,7 @@ async def list_promises(
             .scalars()
             .all()
         )
-    name_by_id = {c.id: f"{c.nombres} {c.apellidos or ''}".strip() for c in clientes}
+    name_by_id = {c.id: f"{c.nombre} {c.apellido or ''}".strip() for c in clientes}
     return [
         Promise(
             id=p.id,
@@ -379,6 +421,7 @@ async def list_promises(
             estado=p.estado,
             tipo=p.tipo,
             creado_por=p.creado_por,
+            alcance=p.alcance,
         )
         for p in rows
     ]
@@ -456,7 +499,7 @@ class Monitoring(BaseModel):
 
 
 def _name_by_id(rows: list[Cliente]) -> dict[uuid.UUID, str]:
-    return {c.id: f"{c.nombres} {c.apellidos or ''}".strip() for c in rows}
+    return {c.id: f"{c.nombre} {c.apellido or ''}".strip() for c in rows}
 
 
 def _as_promise(row: Promesa, cliente: str) -> Promise:
@@ -468,6 +511,7 @@ def _as_promise(row: Promesa, cliente: str) -> Promise:
         estado=row.estado,
         tipo=row.tipo,
         creado_por=row.creado_por,
+        alcance=row.alcance,
     )
 
 
@@ -537,42 +581,118 @@ class Alerts(BaseModel):
     items: list[AccessAttempt]
 
 
-@router.get("/alerts", response_model=Alerts)
+# Los wrappers de dispositivos y alertas conviven una release con las pantallas viejas del panel; las
+# nuevas usan `/api/v1/access/*` (ADR-0174). Fecha orientativa del retiro.
+_SUNSET = "Thu, 31 Dec 2026 23:59:59 GMT"
+
+
+def _deprecar(response: Response, sucesor: str) -> None:
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = _SUNSET
+    response.headers["Link"] = f'<{sucesor}>; rel="successor-version"'
+
+
+async def _acceso_a(principal: Principal, nueva: str, vieja: str) -> str | None:
+    """Acceso a la sección nueva del core o a la vieja del pack. Si la nueva tiene una fila explícita
+    (aunque sea `none`) manda ella: negarla en la grilla de Colaboradores no se salta con la vieja."""
+    acceso = await effective_access(principal.admin, nueva, principal.tenant_id)
+    if acceso is not None:
+        return acceso
+    if await _filas_explicitas(principal.admin.id, principal.tenant_id, [nueva]):
+        return None
+    return await effective_access(principal.admin, vieja, principal.tenant_id)
+
+
+def _require_dispositivos(*, write: bool = False) -> Any:
+    """Acepta la sección nueva del core (`devices`) o, si no tiene fila explícita, la vieja del pack
+    (`pack_cobranza:dispositivos`): nadie gana ni pierde acceso por este cambio (ADR-0174)."""
+
+    async def dependency(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
+        if principal.admin.role == "master":
+            return principal
+        acceso = await _acceso_a(principal, "devices", "pack_cobranza:dispositivos")
+        if acceso is None or (write and acceso != "write"):
+            raise ApiError.forbidden("Sin permiso para la sección 'devices'.")
+        return principal
+
+    return dependency
+
+
+def _require_alertas() -> Any:
+    async def dependency(principal: Annotated[Principal, Depends(get_principal)]) -> Principal:
+        if principal.admin.role == "master":
+            return principal
+        if await _acceso_a(principal, "access_alerts", "pack_cobranza:alertas") is None:
+            raise ApiError.forbidden("Sin permiso para la sección 'access_alerts'.")
+        return principal
+
+    return dependency
+
+
+_MOTIVO_EVENTO: dict[str, str] = {
+    "login_fallido": "contraseña incorrecta",
+    "login_bloqueado": "cuenta bloqueada por intentos",
+    "dispositivo_nuevo": "equipo nuevo registrado",
+    "dispositivo_pendiente": "equipo pendiente de aprobación",
+    "dispositivo_aprobado": "equipo aprobado",
+    "dispositivo_bloqueado_usado": "dispositivo bloqueado",
+    "acceso_denegado_politica": "acceso denegado por la política",
+    "dispositivo_sin_id": "equipo sin identificador",
+    "dispositivo_compartido": "equipo compartido con otra cuenta",
+    "politica_cambiada": "política cambiada",
+    "acceso_master": "acceso del administrador de plataforma",
+    "legado_pack": "registro anterior",
+}
+
+
+def _fecha(valor: datetime | None) -> str:
+    return valor.isoformat() if valor else ""
+
+
+async def _nombres_de_gestores(session: Any, tid: uuid.UUID) -> dict[uuid.UUID, str]:
+    """`admin_id → nombre` de los perfiles de gestor del negocio."""
+    gestores = (
+        (await session.execute(select(Gestor).where(Gestor.tenant_id == tid, Gestor.admin_id.is_not(None), Gestor.deleted_at.is_(None))))
+        .scalars()
+        .all()
+    )
+    return {g.admin_id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
+
+
+@router.get("/alerts", response_model=Alerts, deprecated=True)
 async def list_alerts(
-    principal: Annotated[Principal, Depends(require("pack_cobranza:alertas"))],
+    response: Response,
+    principal: Annotated[Principal, Depends(_require_alertas())],
 ) -> Alerts:
+    """Wrapper de `GET /api/v1/access/events` con la forma anterior (ADR-0174)."""
+    _deprecar(response, "/api/v1/access/events")
     tid = principal.tenant_id
     async with get_session() as session:
+        nombres = await _nombres_de_gestores(session, tid)
         rows = (
             (
                 await session.execute(
-                    select(IntentoAcceso)
-                    .where(IntentoAcceso.tenant_id == tid)
-                    .order_by(IntentoAcceso.created_at.desc())
+                    select(AccessEvent)
+                    .where(
+                        AccessEvent.tenant_id == tid,
+                        AccessEvent.deleted_at.is_(None),
+                        AccessEvent.admin_id.in_(list(nombres)),
+                    )
+                    .order_by(AccessEvent.occurred_at.desc(), AccessEvent.id.desc())
                     .limit(100)
                 )
             )
             .scalars()
             .all()
         )
-        gestores = (
-            (
-                await session.execute(
-                    select(Gestor).where(Gestor.tenant_id == tid)
-                )
-            )
-            .scalars()
-            .all()
-        )
-    nombres = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
     items = [
         AccessAttempt(
-            fecha=r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
-            gestor=nombres.get(r.gestor_id, "—") if r.gestor_id else "—",
-            resultado=r.resultado,
-            motivo=r.motivo or "",
-            imei=r.imei or "",
-            critico=r.resultado != "ok",
+            fecha=_fecha(r.occurred_at),
+            gestor=nombres.get(r.admin_id, "—") if r.admin_id else "—",
+            resultado="ok" if r.severidad == "info" else "denegado",
+            motivo=_MOTIVO_EVENTO.get(r.tipo, r.tipo),
+            imei=sufijo(r.device_id) or "",
+            critico=r.severidad != "info",
         )
         for r in rows
     ]
@@ -663,7 +783,7 @@ async def audit_log(
         operaciones=operaciones,
         filas=[
             AuditRow(
-                fecha=r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "",
+                fecha=r.created_at.isoformat() if r.created_at else "",
                 entidad=r.entidad,
                 entidad_id=str(r.entidad_id)[:8],
                 operacion=r.operacion,
@@ -737,13 +857,47 @@ def _audit(
     )
 
 
-@router.get("/devices", response_model=Devices)
+@router.get("/devices", response_model=Devices, deprecated=True)
 async def list_devices(
-    principal: Annotated[Principal, Depends(require("pack_cobranza:dispositivos"))],
+    response: Response,
+    principal: Annotated[Principal, Depends(_require_dispositivos())],
 ) -> Devices:
+    """Wrapper de `GET /api/v1/access/devices` con la forma anterior (ADR-0174): los equipos de los
+    gestores salen del core (ids del core) y los dispositivos v1 (código + API key) siguen en el pack."""
+    _deprecar(response, "/api/v1/access/devices")
     tid = principal.tenant_id
     async with get_session() as session:
-        devices = (
+        gestores = (
+            (
+                await session.execute(
+                    select(Gestor).where(
+                        Gestor.tenant_id == tid, Gestor.admin_id.is_not(None), Gestor.deleted_at.is_(None)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        por_cuenta = {g.admin_id: g for g in gestores}
+        # Red de seguridad de `pack_cobranza_0018`: lo que la migración no haya copiado se adopta aquí.
+        for g in gestores:
+            await adoptar_legado(session, tid, g)
+        filas = (
+            (
+                await session.execute(
+                    select(AccountDevice)
+                    .where(
+                        AccountDevice.tenant_id == tid,
+                        AccountDevice.deleted_at.is_(None),
+                        AccountDevice.admin_id.in_(list(por_cuenta)),
+                    )
+                    .order_by(AccountDevice.created_at.desc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        devices_pack = (
             (
                 await session.execute(
                     select(Device)
@@ -754,15 +908,37 @@ async def list_devices(
             .scalars()
             .all()
         )
-        gestores = (
-            (await session.execute(select(Gestor).where(Gestor.tenant_id == tid))).scalars().all()
-        )
-        intentos = (
+        v1 = [d for d in devices_pack if d.gestor_id is None]
+        origen_pack = {d.id: d.whatsapp_number for d in devices_pack}
+        contactos = {
+            e.device_row_id: (e.detalle or {}).get("contacto")
+            for e in (
+                (
+                    await session.execute(
+                        select(AccessEvent)
+                        .where(
+                            AccessEvent.tenant_id == tid,
+                            AccessEvent.device_row_id.in_([f.id for f in filas]),
+                            AccessEvent.tipo.in_(("dispositivo_pendiente", "dispositivo_nuevo")),
+                        )
+                        .order_by(AccessEvent.occurred_at)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if e.detalle and e.detalle.get("contacto")
+        }
+        eventos_acceso = (
             (
                 await session.execute(
-                    select(IntentoAcceso)
-                    .where(IntentoAcceso.tenant_id == tid)
-                    .order_by(IntentoAcceso.created_at.desc())
+                    select(AccessEvent)
+                    .where(
+                        AccessEvent.tenant_id == tid,
+                        AccessEvent.deleted_at.is_(None),
+                        AccessEvent.admin_id.in_(list(por_cuenta)),
+                    )
+                    .order_by(AccessEvent.occurred_at.desc(), AccessEvent.id.desc())
                     .limit(20)
                 )
             )
@@ -781,35 +957,48 @@ async def list_devices(
             .scalars()
             .all()
         )
-    nombres = {g.id: f"{g.nombre} {g.apellido or ''}".strip() for g in gestores}
-    por_device = {d.id: nombres.get(d.gestor_id, "—") if d.gestor_id else "—" for d in devices}
+    nombres = {a: f"{g.nombre} {g.apellido or ''}".strip() for a, g in por_cuenta.items()}
+    por_gestor = {g.id: nombres[g.admin_id] for g in gestores}
+    por_device = {d.id: por_gestor.get(d.gestor_id, "—") if d.gestor_id else "—" for d in devices_pack}
+    filas_out = [
+        DeviceRow(
+            id=f.id,
+            codigo=str(f.id)[:8],
+            gestor=nombres.get(f.admin_id, "—"),
+            imei=sufijo(f.device_id) or "",  # el id completo permite suplantar el equipo (como en el core)
+            whatsapp=contactos.get(f.id) or origen_pack.get(f.legacy_pack_device_id) or "",
+            estado=f.estado,
+            vinculado=_fecha(f.aprobado_at),
+        )
+        for f in filas
+    ] + [
+        DeviceRow(
+            id=d.id,
+            codigo=d.codigo,
+            gestor="—",
+            imei=d.imei or "",
+            whatsapp=d.whatsapp_number or "",
+            estado=d.estado,
+            vinculado=_fecha(d.fecha_vinculacion),
+        )
+        for d in v1
+    ]
     return Devices(
-        pendientes=sum(1 for d in devices if d.estado == "pendiente"),
+        pendientes=sum(1 for d in filas_out if d.estado == "pendiente"),
         eventos_error=sum(1 for e in eventos if e.estado != "aplicado"),
-        dispositivos=[
-            DeviceRow(
-                id=d.id,
-                codigo=d.codigo,
-                gestor=nombres.get(d.gestor_id, "—") if d.gestor_id else "—",
-                imei=d.imei or "",
-                whatsapp=d.whatsapp_number or "",
-                estado=d.estado,
-                vinculado=d.fecha_vinculacion.strftime("%Y-%m-%d %H:%M") if d.fecha_vinculacion else "",
-            )
-            for d in devices
-        ],
+        dispositivos=filas_out,
         intentos=[
             AttemptRow(
-                resultado=i.resultado,
-                motivo=i.motivo or "",
-                imei=i.imei or "",
-                fecha=i.created_at.strftime("%Y-%m-%d %H:%M") if i.created_at else "",
+                resultado="ok" if i.severidad == "info" else "denegado",
+                motivo=_MOTIVO_EVENTO.get(i.tipo, i.tipo),
+                imei=sufijo(i.device_id) or "",
+                fecha=_fecha(i.occurred_at),
             )
-            for i in intentos
+            for i in eventos_acceso
         ],
         eventos=[
             SyncRow(
-                fecha=e.created_at.strftime("%Y-%m-%d %H:%M") if e.created_at else "",
+                fecha=_fecha(e.created_at),
                 tipo=e.tipo,
                 estado=e.estado,
                 gestor=por_device.get(e.device_id, "—") if e.device_id else "—",
@@ -828,192 +1017,99 @@ class DeviceStatusUpdate(BaseModel):
 DEVICE_STATUSES = ("activo", "pendiente", "bloqueado")
 
 
-@router.post("/devices/{device_id}/status", status_code=204)
+@router.post("/devices/{device_id}/status", status_code=204, deprecated=True)
 async def set_device_status(
     device_id: uuid.UUID,
     payload: DeviceStatusUpdate,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:dispositivos", write=True))],
+    principal: Annotated[Principal, Depends(_require_dispositivos(write=True))],
+    llamante: Annotated[str | None, Header(alias="X-Device-Id")] = None,
 ) -> Response:
+    """Wrapper de las acciones de `/api/v1/access/devices/{id}` (ADR-0174): `activo` aprueba o reactiva,
+    `bloqueado` bloquea la cuenta en ese equipo. El id es el de la fila del core (o el de un dispositivo v1)."""
     if payload.estado not in DEVICE_STATUSES:
         raise ApiError.bad_request(
             f"Estado inválido: {payload.estado}. Válidos: {', '.join(DEVICE_STATUSES)}",
             "invalid_status",
         )
-    async with get_session() as session:
-        device = await _get_active(session, Device, device_id, principal.tenant_id)
-        if device is None:
-            raise ApiError.not_found("Dispositivo no encontrado.")
-        device.estado = payload.estado
-        if payload.estado == "activo" and device.fecha_vinculacion is None:
-            device.fecha_vinculacion = datetime.now(UTC)
-        _audit(
-            session,
-            principal.tenant_id,
-            "dispositivo",
-            device.id,
-            "editar",
-            despues={"estado": payload.estado},
-            motivo="Aprobación de dispositivo",
-        )
-    return Response(status_code=204)
-
-
-# --------------------------------------------------------- cobros al propietario
-class OwnerCharge(BaseModel):
-    id: uuid.UUID
-    periodo: str
-    monto: float
-    pagado: float | None
-    vence: date
-    estado: str
-
-
-class PaymentLink(BaseModel):
-    referencia: str
-    url: str
-    monto: float
-    estado: str
-
-
-class OwnerCharges(BaseModel):
-    cobros: list[OwnerCharge]
-    links: list[PaymentLink]
-
-
-def _as_charge(row: CobroPropietario) -> OwnerCharge:
-    return OwnerCharge(
-        id=row.id,
-        periodo=row.periodo,
-        monto=float(row.monto_calculado or 0),
-        pagado=float(row.monto_pagado) if row.monto_pagado is not None else None,
-        vence=row.fecha_vencimiento,
-        estado=row.estado,
-    )
-
-
-@router.get("/owner-charges", response_model=OwnerCharges)
-async def list_owner_charges(
-    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros"))],
-) -> OwnerCharges:
     tid = principal.tenant_id
-    async with get_session() as session:
-        cobros = (
-            (
+    auditoria: tuple[str, uuid.UUID] | None = None
+    try:
+        async with get_session() as session:
+            cuentas_de_gestor = list(await _nombres_de_gestores(session, tid))
+            fila = (
                 await session.execute(
-                    select(CobroPropietario)
-                    .where(
-                        CobroPropietario.tenant_id == tid,
-                        CobroPropietario.deleted_at.is_(None),
+                    select(AccountDevice).where(
+                        AccountDevice.tenant_id == tid,
+                        AccountDevice.id == device_id,
+                        AccountDevice.admin_id.in_(cuentas_de_gestor),
+                        AccountDevice.deleted_at.is_(None),
                     )
-                    .order_by(CobroPropietario.periodo.desc())
                 )
-            )
-            .scalars()
-            .all()
+            ).scalar_one_or_none()
+            if fila is not None:
+                auditoria = await _transicion_core(
+                    session, principal, fila, payload.estado, (llamante or "").strip() or None
+                )
+            else:
+                device = await _get_active(session, Device, device_id, tid)
+                if device is None or device.gestor_id is not None:
+                    raise ApiError.not_found("Dispositivo no encontrado.")
+                # Dispositivo v1 (código + API key): sin cuenta, sigue en el pack.
+                device.estado = payload.estado
+                if payload.estado == "activo" and device.fecha_vinculacion is None:
+                    device.fecha_vinculacion = datetime.now(UTC)
+                _audit(
+                    session,
+                    tid,
+                    "dispositivo",
+                    device.id,
+                    "editar",
+                    despues={"estado": payload.estado},
+                    motivo="Aprobación de dispositivo",
+                )
+    except AccesoError as exc:
+        raise ApiError(exc.status, exc.code, exc.message, details=exc.details) from exc
+    if auditoria is not None:
+        await record_audit(
+            f"admin:{principal.admin.email}",
+            auditoria[0],
+            input_data={"device_row_id": str(auditoria[1]), "via": "pack_cobranza"},
         )
-        links = (
-            (
-                await session.execute(
-                    select(LinkPago)
-                    .where(LinkPago.tenant_id == tid)
-                    .order_by(LinkPago.created_at.desc())
-                    .limit(20)
-                )
-            )
-            .scalars()
-            .all()
-        )
-    return OwnerCharges(
-        cobros=[_as_charge(c) for c in cobros],
-        links=[
-            PaymentLink(
-                referencia=lk.referencia,
-                url=lk.url,
-                monto=float(lk.monto or 0),
-                estado=lk.estado,
-            )
-            for lk in links
-        ],
-    )
+    respuesta = Response(status_code=204)
+    _deprecar(respuesta, "/api/v1/access/devices")
+    return respuesta
 
 
-class OwnerChargeCreate(BaseModel):
-    periodo: str
-    monto: float
-    fecha_vencimiento: date
-
-
-@router.post("/owner-charges", response_model=OwnerCharge, status_code=201)
-async def create_owner_charge(
-    payload: OwnerChargeCreate,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
-) -> OwnerCharge:
-    from .admin import registrar_mensaje_propietario
-
-    periodo = payload.periodo.strip()
-    if not periodo:
-        raise ApiError.bad_request("Falta el periodo.", "missing_period")
-    if payload.monto <= 0:
-        raise ApiError.bad_request("El monto debe ser mayor a cero.", "invalid_amount")
-    tid = principal.tenant_id
-    async with get_session() as session:
-        cobro = (
-            await session.execute(
-                select(CobroPropietario).where(
-                    CobroPropietario.tenant_id == tid,
-                    CobroPropietario.periodo == periodo,
-                )
-            )
-        ).scalar_one_or_none()
-        if cobro is None:
-            cobro = CobroPropietario(
-                tenant_id=tid,
-                periodo=periodo,
-                monto_calculado=Decimal(str(payload.monto)),
-                fecha_vencimiento=payload.fecha_vencimiento,
-            )
-            session.add(cobro)
-            await session.flush()
-        else:
-            cobro.monto_calculado = Decimal(str(payload.monto))
-            cobro.fecha_vencimiento = payload.fecha_vencimiento
-        await registrar_mensaje_propietario(
+async def _transicion_core(
+    session: Any,
+    principal: Principal,
+    fila: AccountDevice,
+    destino: str,
+    llamante_device_id: str | None,
+) -> tuple[str, uuid.UUID] | None:
+    """Aplica `destino` con las reglas del core; devuelve (acción, id) a auditar, o None si no cambia."""
+    if destino == fila.estado:
+        return None
+    comunes = {
+        "tenant_id": principal.tenant_id,
+        "device_row_id": fila.id,
+        "actor_admin_id": principal.admin.id,
+        "actor_es_owner_o_master": es_owner_o_master(principal),
+    }
+    if destino == "activo":
+        await accesos.aprobar(session, esperado=fila.estado, canal="panel_apk", **comunes)
+        return "dispositivo_aprobado", fila.id
+    if destino == "bloqueado":
+        await accesos.bloquear(
             session,
-            tid,
-            f"Notificación de cobro · periodo {periodo}: {payload.monto:,.0f} · "
-            f"vence {payload.fecha_vencimiento.isoformat()}",
-            tipo="notificacion",
-            autor_rol="sistema",
-            cobro_id=cobro.id,
+            esperado=fila.estado,
+            motivo=None,
+            alcance="cuenta",
+            llamante_device_id=llamante_device_id,
+            **comunes,
         )
-        await session.refresh(cobro)
-        return _as_charge(cobro)
-
-
-class OwnerPayment(BaseModel):
-    monto_pagado: float
-    metodo_pago: str | None = None
-
-
-@router.post("/owner-charges/{charge_id}/payment", status_code=204)
-async def register_owner_payment(
-    charge_id: uuid.UUID,
-    payload: OwnerPayment,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
-) -> Response:
-    if payload.monto_pagado <= 0:
-        raise ApiError.bad_request("El monto debe ser mayor a cero.", "invalid_amount")
-    async with get_session() as session:
-        cobro = await _get_active(session, CobroPropietario, charge_id, principal.tenant_id)
-        if cobro is None:
-            raise ApiError.not_found("Cobro no encontrado.")
-        cobro.monto_pagado = Decimal(str(payload.monto_pagado))
-        cobro.fecha_pago = date.today()
-        cobro.estado = "pagado"
-        if payload.metodo_pago:
-            cobro.metodo_pago = payload.metodo_pago
-        cobro.registrado_por = principal.admin.email
-    return Response(status_code=204)
+        return "dispositivo_bloqueado", fila.id
+    raise AccesoError(400, "transicion_invalida", "Un equipo no vuelve a pendiente.")
 
 
 # ------------------------------------------------------------------ reportes
@@ -1164,113 +1260,6 @@ async def reports(
             for liq in liquidaciones
         ],
     )
-
-
-# ------------------------------------------------- hilo con el propietario
-class OwnerMessage(BaseModel):
-    id: uuid.UUID
-    direccion: str
-    tipo: str
-    autor: str
-    contenido: str
-    fecha: str
-
-
-class OwnerThread(BaseModel):
-    whatsapp: str
-    asunto: str
-    estado: str
-    abierto: bool
-    mensajes: list[OwnerMessage]
-
-
-@router.get("/owner-thread", response_model=OwnerThread)
-async def owner_thread(
-    principal: Annotated[Principal, Depends(require("pack_cobranza:propietario"))],
-) -> OwnerThread:
-    from .admin import _propietario_whatsapp
-
-    tid = principal.tenant_id
-    async with get_session() as session:
-        conv = (
-            await session.execute(
-                select(ConversacionPropietario).where(
-                    ConversacionPropietario.tenant_id == tid,
-                    ConversacionPropietario.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        mensajes = (
-            []
-            if conv is None
-            else (
-                (
-                    await session.execute(
-                        select(MensajePropietario)
-                        .where(
-                            MensajePropietario.tenant_id == tid,
-                            MensajePropietario.conversacion_id == conv.id,
-                            MensajePropietario.deleted_at.is_(None),
-                        )
-                        .order_by(MensajePropietario.created_at)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        )
-    return OwnerThread(
-        whatsapp=await _propietario_whatsapp(),
-        asunto=conv.asunto if conv else "Comunicación con el propietario",
-        estado=conv.estado if conv else "abierta",
-        abierto=conv is not None,
-        mensajes=[
-            OwnerMessage(
-                id=m.id,
-                direccion=m.direccion,
-                tipo=m.tipo,
-                autor=m.autor_rol or "",
-                contenido=m.contenido,
-                fecha=m.created_at.strftime("%Y-%m-%d %H:%M") if m.created_at else "",
-            )
-            for m in mensajes
-        ],
-    )
-
-
-class OwnerMessageCreate(BaseModel):
-    contenido: str
-    direccion: str = "saliente"
-
-
-@router.post("/owner-thread/messages", status_code=204)
-async def create_owner_message(
-    payload: OwnerMessageCreate,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:propietario", write=True))],
-) -> Response:
-    from .admin import registrar_mensaje_propietario
-
-    contenido = payload.contenido.strip()
-    if not contenido:
-        raise ApiError.bad_request("Escribe un mensaje.", "missing_content")
-    direccion = payload.direccion if payload.direccion in ("saliente", "entrante") else "saliente"
-    async with get_session() as session:
-        mensaje = await registrar_mensaje_propietario(
-            session,
-            principal.tenant_id,
-            contenido,
-            direccion=direccion,
-            autor_rol="admin" if direccion == "saliente" else "propietario",
-        )
-        _audit(
-            session,
-            principal.tenant_id,
-            "mensaje_propietario",
-            mensaje.id,
-            "crear",
-            despues={"direccion": direccion},
-        )
-    return Response(status_code=204)
 
 
 # ------------------------------------------------------- detalle de cartera
@@ -1523,7 +1512,7 @@ async def portfolio_detail(
         caja=PortfolioCaja(
             saldo_inicial=float(caja.saldo_inicial) if caja else 0.0,
             saldo_actual=float(caja.saldo_actual) if caja else 0.0,
-            actualizado=caja.updated_at.strftime("%Y-%m-%d %H:%M") if caja and caja.updated_at else "",
+            actualizado=caja.updated_at.isoformat() if caja and caja.updated_at else "",
         ),
         liquidaciones=[
             Liquidation(
@@ -1705,7 +1694,7 @@ def _collector_values(payload: CollectorIn) -> dict[str, str]:
     }
 
 
-@router.post("/collectors", status_code=201)
+@router.post("/collectors", status_code=201, responses=plan_limit_responses("colaboradores"))
 async def create_collector(
     payload: CollectorIn,
     principal: Annotated[Principal, Depends(require("pack_cobranza:gestores", write=True))],
@@ -1728,18 +1717,30 @@ async def create_collector(
         ).scalar_one_or_none()
         if existente is not None:
             from core.admin.invitations_service import crear_invitacion
+            from core.admin.roles import es_tester
 
-            error = await crear_invitacion(
-                tenant_id=tid,
-                admin_id=existente.id,
-                invited_by=principal.admin.id,
-                role="colaborador",
-                pack_roles=["pack_cobranza:gestor"],
-            )
+            if es_tester(principal.admin):
+                # Invitar una cuenta existente a un negocio es gestionar cuentas (ADR-0134).
+                raise ApiError(409, "conflict", "Ese correo ya tiene una cuenta. Un tester solo crea gestores con una cuenta nueva.")
+            try:
+                error = await crear_invitacion(
+                    tenant_id=tid,
+                    admin_id=existente.id,
+                    invited_by=principal.admin.id,
+                    role="colaborador",
+                    pack_roles=["pack_cobranza:gestor"],
+                )
+            except QuotaExceeded as exc:
+                raise plan_limit_error(exc) from None
             if error is not None:
                 raise ApiError.bad_request(error, "invitation_error")
             return {"resultado": "invitado"}
         values = _collector_values(payload)
+        try:
+            # Tope de colaboradores del plan (D-35, ADR-0142): un gestor es un colaborador.
+            await enforce_growth(tid, "colaboradores", session=session)
+        except QuotaExceeded as exc:
+            raise plan_limit_error(exc) from None
         admin = Admin(email=correo, password_hash=hash_password(password), role="colaborador")
         session.add(admin)
         await session.flush()
@@ -1907,9 +1908,11 @@ async def create_client(
     tid = principal.tenant_id
     async with get_session() as session:
         values = await _client_values(session, payload, tid=tid)
+        values["telefono_whatsapp"] = telefono_para_guardar(values["telefono_whatsapp"]) or ""
         cliente = Cliente(tenant_id=tid, **values)
         session.add(cliente)
         await session.flush()
+        await enlazar_cliente(session, cliente)
         _audit(session, tid, "cliente", cliente.id, "crear", despues={"nombre": values["nombre"]})
         return _as_client(cliente, await _cartera_nombre(session, cliente.cartera_id))
 
@@ -2101,7 +2104,7 @@ async def client_detail(
         ClientMovement(
             id=p.id,
             tipo="pago",
-            fecha=p.fecha_hora.strftime("%Y-%m-%d %H:%M") if p.fecha_hora else "",
+            fecha=p.fecha_hora.isoformat() if p.fecha_hora else "",
             valor=float(p.valor or 0),
             metodo=p.metodo_pago or "",
         )
@@ -2110,7 +2113,7 @@ async def client_detail(
         ClientMovement(
             id=a.id,
             tipo="abono",
-            fecha=a.fecha_hora.strftime("%Y-%m-%d %H:%M") if a.fecha_hora else "",
+            fecha=a.fecha_hora.isoformat() if a.fecha_hora else "",
             valor=float(a.valor or 0),
             metodo=a.metodo_pago or "",
         )
@@ -2448,7 +2451,7 @@ async def get_cash(
     return PortfolioCaja(
         saldo_inicial=float(caja.saldo_inicial) if caja else 0.0,
         saldo_actual=float(caja.saldo_actual) if caja else 0.0,
-        actualizado=caja.updated_at.strftime("%Y-%m-%d %H:%M") if caja and caja.updated_at else "",
+        actualizado=caja.updated_at.isoformat() if caja and caja.updated_at else "",
     )
 
 
@@ -2853,46 +2856,6 @@ async def approve_expense(
     return Response(status_code=204)
 
 
-class PaymentLinkIn(BaseModel):
-    referencia: str
-    url: str
-
-
-@router.post("/owner-charges/{charge_id}/links", response_model=PaymentLink, status_code=201)
-async def create_payment_link(
-    charge_id: uuid.UUID,
-    payload: PaymentLinkIn,
-    principal: Annotated[Principal, Depends(require("pack_cobranza:cobros", write=True))],
-) -> PaymentLink:
-    """Crea un link de pago para el cobro del propietario (monto = cobro calculado)."""
-    referencia = payload.referencia.strip()
-    url = payload.url.strip()
-    if not referencia or not url:
-        raise ApiError.bad_request("Referencia y URL son obligatorias.", "missing_fields")
-    if not url.startswith(("http://", "https://")):
-        raise ApiError.bad_request("La URL debe empezar por http:// o https://.", "invalid_url")
-    tid = principal.tenant_id
-    async with get_session() as session:
-        cobro = await _get_active(session, CobroPropietario, charge_id, tid)
-        if cobro is None:
-            raise ApiError.not_found("Cobro no encontrado.")
-        link = LinkPago(
-            tenant_id=tid,
-            cobro_id=cobro.id,
-            referencia=referencia,
-            url=url,
-            monto=cobro.monto_calculado,
-        )
-        session.add(link)
-        await session.flush()
-        return PaymentLink(
-            referencia=link.referencia,
-            url=link.url,
-            monto=float(link.monto or 0),
-            estado=link.estado,
-        )
-
-
 class ExpenseIn(BaseModel):
     descripcion: str
     valor: float
@@ -3110,7 +3073,7 @@ def _as_note(row: CarteraNota) -> NoteRow:
     return NoteRow(
         id=row.id,
         nota=row.nota,
-        fecha=row.created_at.strftime("%Y-%m-%d %H:%M") if row.created_at else "",
+        fecha=row.created_at.isoformat() if row.created_at else "",
         autor=row.creado_por_rol or "",
     )
 
@@ -3560,7 +3523,7 @@ def _as_change(row: CambioCliente) -> ClientChange:
         campos_propuestos=row.campos_propuestos or {},
         estado=row.estado,
         solicitado_por=row.solicitado_por_rol or "",
-        fecha=row.created_at.strftime("%Y-%m-%d %H:%M") if row.created_at else "",
+        fecha=row.created_at.isoformat() if row.created_at else "",
         motivo_rechazo=row.motivo_rechazo,
     )
 
@@ -3649,3 +3612,39 @@ async def decide_client_change(
             motivo=cambio.motivo_rechazo,
         )
         return _as_change(cambio)
+
+
+class GestorTokenRequest(BaseModel):
+    """Credenciales de dispositivo opcionales para el enforcement (ADR-0068)."""
+
+    imei: str | None = None
+    whatsapp: str | None = None
+
+
+@router.post("/gestor-token")
+async def gestor_token(
+    payload: GestorTokenRequest,
+    request: Request,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> JSONResponse:
+    """Sesión admin → par de tokens de campo del negocio activo (HU-APP-02, ADR-0098).
+
+    Reusa la lógica del login unificado de la API de campo (ADR-0081): resuelve
+    la membresía de campo del admin en el negocio activo (`X-Tenant-Id`) y emite
+    access/refresh con el enforcement de vinculación de dispositivo. El core no
+    conoce a los usuarios de campo; este endpoint vive en el pack.
+    """
+    from .api_gestor import _membresias_de_campo, _sesion_de_membresia
+
+    if principal.tenant_id is None:
+        raise ApiError(400, "sin_negocio", "Selecciona un negocio (X-Tenant-Id).")
+    membresias = await _membresias_de_campo(principal.admin, solo=principal.tenant_id)
+    if not membresias:
+        raise ApiError(403, "sin_acceso_campo", "Sin acceso de campo en este negocio.")
+    return await _sesion_de_membresia(
+        request,
+        principal.admin,
+        membresias[0],
+        payload.imei or "",
+        payload.whatsapp or "",
+    )

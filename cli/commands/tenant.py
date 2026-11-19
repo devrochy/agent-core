@@ -7,9 +7,12 @@ los datos del tenant (catalog.json) que viven en TENANTS_ROOT (gitignored).
 Uso:
   agent-core tenant create                # wizard interactivo paso a paso
   agent-core tenant create --non-interactive --name "Mi Bot" --packs pack_commerce
+  agent-core tenant create -y --name "Mi Restaurante" --preset restaurante --plan basic
+  agent-core tenant presets               # presets de negocio disponibles (ADR-0110)
   agent-core tenant seed <slug>           # importa TENANTS_ROOT/<slug>/catalog.json
   agent-core tenant list
   agent-core tenant docs <slug>
+  agent-core tenant embudo --dias 30       # embudo de activación de las altas (ADR-0124)
 """
 
 from __future__ import annotations
@@ -44,6 +47,11 @@ def create(
     language: str = typer.Option("es", "--language", help="Idioma principal (es/en/pt)"),
     tone: str = typer.Option("cercano", "--tone", help="formal | neutral | cercano | informal"),
     packs: str = typer.Option("", "--packs", help="Coma-separado, ej: pack_commerce"),
+    preset: str = typer.Option("", "--preset", help="Preset de negocio (ver `tenant presets`), ej: restaurante"),
+    plan: str = typer.Option("", "--plan", help="Plan inicial (free, basic, premium, empresarial)"),
+    sin_ejemplos: bool = typer.Option(
+        False, "--sin-ejemplos", help="No cargar los datos de ejemplo del preset (el negocio trae su catálogo)"
+    ),
     escalation_triggers: str = typer.Option("", "--escalation-triggers",
                                             help="Coma-separado (default: asesor, humano, persona real, reclamo, queja)"),
     admin_email: str = typer.Option("", "--admin-email", help="Email del admin del tenant (opcional)"),
@@ -72,6 +80,9 @@ def create(
             "language": language,
             "tone": tone,
             "packs": [p.strip() for p in packs.split(",") if p.strip()],
+            "preset": preset.strip() or None,
+            "plan": plan.strip() or None,
+            "sembrar_ejemplos": not sin_ejemplos,
             "escalation_triggers": [t.strip() for t in escalation_triggers.split(",") if t.strip()],
             "admin_email": admin_email,
             "admin_password": admin_password,
@@ -97,12 +108,28 @@ def create(
             console.print(f"[red]Credenciales WhatsApp rechazadas: {msg}[/red]")
             raise typer.Exit(1)
 
-    tid, steps = asyncio.run(_onboard(answers))
-    console.print("✓ [green]Onboarding completado[/green]")
-    for s in steps:
-        console.print(f"  · {s}")
+    from core.presets import PresetError
 
-    _maybe_seed(answers["slug"], tid)
+    # Alta y seed en un solo event loop: el engine async queda atado al loop en el
+    # que abre conexiones (dos `asyncio.run` seguidos rompen con "different loop").
+    async def _alta() -> uuid.UUID:
+        from core.db.session import get_engine
+
+        try:
+            tid, steps = await _onboard(answers)
+            console.print("✓ [green]Onboarding completado[/green]")
+            for s in steps:
+                console.print(f"  · {s}")
+            await _maybe_seed(answers["slug"], tid)
+            return tid
+        finally:
+            await get_engine().dispose()
+
+    try:
+        tid = asyncio.run(_alta())
+    except PresetError as exc:
+        console.print(f"[red]Preset: {exc}[/red]")
+        raise typer.Exit(1) from exc
 
     from core.tenants import tenant_webhook_url
 
@@ -185,7 +212,7 @@ async def _verify_whatsapp(whatsapp: dict) -> tuple[bool, str, dict]:
 async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
     import secrets
 
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     admin_email = answers.get("admin_email") or None
     admin_password = answers.get("admin_password") or None
@@ -205,6 +232,9 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
         admin_email=admin_email,
         admin_password=admin_password,
         whatsapp=answers["whatsapp"],
+        preset=answers.get("preset"),
+        plan=answers.get("plan"),
+        sembrar_ejemplos=answers.get("sembrar_ejemplos", True),
     )
     if generated:
         console.print(
@@ -213,148 +243,102 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
     return tid, steps
 
 
-def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
-    from core.onboarding import load_tenant_catalog
+async def _maybe_seed(slug: str, tenant_id: uuid.UUID) -> None:
+    from core.onboarding import ensure_brand_voice, load_tenant_catalog
 
     data = load_tenant_catalog(slug)
-    if not data:
-        return
-    if data.get("pack") != "pack_commerce":
-        console.print(f"[dim]catalog.json de {slug}: pack '{data.get('pack')}' sin seed conocido[/dim]")
-        return
-    asyncio.run(seed_catalog(tenant_id, data))
-    console.print(f"✓ [green]Catálogo importado desde {slug}/catalog.json[/green]")
+    if data:
+        if data.get("pack") != "pack_commerce":
+            console.print(f"[dim]catalog.json de {slug}: pack '{data.get('pack')}' sin seed conocido[/dim]")
+        else:
+            await seed_catalog(tenant_id, data)
+            console.print(f"✓ [green]Catálogo importado desde {slug}/catalog.json[/green]")
+    await seed_pack_plugins(slug, tenant_id)
+    console.print(f"✓ [green]Seed de packs completado para {slug}[/green]")
+    if await ensure_brand_voice(tenant_id, slug):
+        console.print(f"✓ [green]brand_voice sembrada desde {slug}/docs/voz-de-marca.md[/green]")
+
+
+async def seed_pack_plugins(slug: str, tenant_id: uuid.UUID) -> list[str]:
+    """Seed genérico por pack (ADR-0083, issue #154): `core.onboarding.sembrar_packs`."""
+    from core.onboarding import sembrar_packs
+
+    pasos = await sembrar_packs(tenant_id, slug)
+    for paso in pasos:
+        if paso.endswith(".json importado"):
+            console.print(f"✓ [green]{paso} desde {slug}/[/green]")
+    return pasos
 
 
 # ------------------------------------------------------------------ seed
 async def seed_catalog(tenant_id: uuid.UUID, data: dict) -> list[str]:
-    """Importa un catálogo pack_commerce a la BD del tenant. Idempotente.
+    """Importa un catálogo de pack_commerce a la BD del tenant (`core.onboarding.sembrar_catalogo`)."""
+    from core.onboarding import sembrar_catalogo
 
-    Los productos del tenant viven en `TENANTS_ROOT/<slug>/catalog.json` (dato,
-    no código). Formato: {"category_paths": [[...]], "products": [...],
-    "complement_pairs": [[...],[...]]}. Las filas se miran SIEMPRE acotadas al
-    tenant (defensa más allá de RLS, ADR-0018).
-    """
-    from pack_commerce.models import (
-        Category,
-        CategoryComplement,
-        Inventory,
-        Product,
-        ProductVariant,
-    )
-
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    steps: list[str] = []
-    category_ids: dict[tuple[str, ...], uuid.UUID] = {}
-    order = 0
-
-    async def category_id(path: tuple[str, ...]) -> uuid.UUID:
-        nonlocal order
-        if path in category_ids:
-            return category_ids[path]
-        parent = await category_id(path[:-1]) if len(path) > 1 else None
-        stmt = select(Category).where(
-            Category.tenant_id == tenant_id,
-            Category.name == path[-1],
-            Category.parent_id.is_(None) if parent is None else Category.parent_id == parent,
-        )
-        cat = (await session.execute(stmt)).scalars().first()
-        if cat is None:
-            cat = Category(parent_id=parent, name=path[-1], sort_order=order, active=True)
-            session.add(cat)
-            await session.flush()
-            order += 1
-        category_ids[path] = cat.id
-        return cat.id
-
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            for path in data.get("category_paths", []):
-                await category_id(tuple(path))
-            await session.flush()
-
-            for producto in data.get("products", []):
-                cat = await category_id(tuple(producto["category_path"]))
-                has_variants = len(producto.get("variants", [])) > 1
-                base_sku = producto["variants"][0]["sku"]
-                prod_stmt = (
-                    select(Product)
-                    .join(ProductVariant, ProductVariant.product_id == Product.id)
-                    .where(ProductVariant.sku == base_sku, Product.tenant_id == tenant_id)
-                )
-                product = (await session.execute(prod_stmt)).scalars().first()
-                if product is None:
-                    product = Product(
-                        name=producto["name"],
-                        description=producto.get("description", ""),
-                        image_url=producto.get("image_url", ""),
-                        category_id=cat,
-                        has_variants=has_variants,
-                    )
-                    session.add(product)
-                    await session.flush()
-
-                for variante in producto.get("variants", []):
-                    vstmt = select(ProductVariant).where(
-                        ProductVariant.sku == variante["sku"],
-                        ProductVariant.tenant_id == tenant_id,
-                        ProductVariant.product_id == product.id,
-                    )
-                    variant = (await session.execute(vstmt)).scalars().first()
-                    if variant is None:
-                        variant = ProductVariant(
-                            product_id=product.id,
-                            sku=variante["sku"],
-                            attributes=variante.get("attributes", {}),
-                            price=variante["price"],
-                            active=True,
-                        )
-                        session.add(variant)
-                        await session.flush()
-                    existing_stock = (
-                        await session.execute(
-                            select(Inventory).where(
-                                Inventory.variant_id == variant.id,
-                                Inventory.tenant_id == tenant_id,
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if existing_stock is None:
-                        session.add(
-                            Inventory(
-                                variant_id=variant.id,
-                                stock_quantity=variante.get("stock", 0),
-                                source="import",
-                            )
-                        )
-                await session.flush()
-
-            for path_a, path_b in data.get("complement_pairs", []):
-                id_a = category_ids.get(tuple(path_a))
-                id_b = category_ids.get(tuple(path_b))
-                if id_a is None or id_b is None:
-                    continue
-                for (a, b) in ((id_a, id_b), (id_b, id_a)):
-                    exists = (
-                        await session.execute(
-                            select(CategoryComplement).where(
-                                CategoryComplement.tenant_id == tenant_id,
-                                CategoryComplement.category_id == a,
-                                CategoryComplement.complementary_category_id == b,
-                            )
-                        )
-                    ).scalar_one_or_none()
-                    if exists is None:
-                        session.add(CategoryComplement(category_id=a, complementary_category_id=b))
-            await session.commit()
-    steps.append(f"catálogo sembrado ({len(data.get('products', []))} productos)")
-    return steps
+    return await sembrar_catalogo(tenant_id, data)
 
 
 @app.command()
-def seed(slug: str = typer.Argument(..., help="Slug del tenant (ej: formoto)")) -> None:
+def presets() -> None:
+    """Lista los presets de negocio disponibles (ADR-0110)."""
+    from core.presets import list_presets
+
+    table = Table(title="Presets de negocio")
+    for columna in ("id", "versión", "plan mínimo", "packs", "pasos de activación"):
+        table.add_column(columna)
+    for preset in list_presets():
+        table.add_row(
+            preset.id, str(preset.version), preset.plan_minimo,
+            ", ".join(preset.packs), ", ".join(preset.pasos_de_activacion),
+        )
+    console.print(table)
+
+
+@app.command("aplicar-preset")
+def aplicar_preset(
+    slug: str = typer.Argument(..., help="Slug del tenant"),
+    preset: str = typer.Argument(..., help="Id del preset (ver `tenant presets`)"),
+    con_ejemplos: bool = typer.Option(
+        False, "--con-ejemplos", help="Cargar también los datos de ejemplo del preset (por defecto no)"
+    ),
+) -> None:
+    """Aplica un preset a un negocio que ya existe (HU-SH-01). Idempotente: no pisa
+    la config ni la persona que el negocio ya cambió (ADR-0110). Por defecto NO carga
+    los datos de ejemplo: un negocio existente ya tiene su catálogo."""
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.presets import PresetError
+    from core.presets.apply import apply_preset
+
+    async def _run() -> None:
+        async with get_session() as session:
+            tenant = (
+                await session.execute(select(Tenant).where(Tenant.slug == slug, Tenant.deleted_at.is_(None)))
+            ).scalar_one_or_none()
+        if tenant is None:
+            raise typer.BadParameter(f"Tenant no existe: {slug}")
+        try:
+            resultado = await apply_preset(tenant.id, preset, sembrar_ejemplos=con_ejemplos)
+        except PresetError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+        for paso in resultado.pasos:
+            console.print(f"  · {paso}")
+        for pendiente in resultado.pendientes:
+            console.print(f"  [yellow]pendiente[/yellow] {pendiente['pack']}: {pendiente['detalle']}")
+
+    asyncio.run(_run())
+
+
+@app.command()
+def seed(
+    slug: str = typer.Argument(..., help="Slug del tenant (ej: formoto)"),
+    voz_de_marca: bool = typer.Option(
+        False,
+        "--voz-de-marca",
+        help="Reemplaza la voz de marca guardada por docs/voz-de-marca.md (HU-SH-01).",
+    ),
+) -> None:
     """Importa TENANTS_ROOT/<slug>/catalog.json a la BD del tenant."""
     from core.db.models import Tenant
     from core.db.session import get_session
@@ -377,6 +361,12 @@ def seed(slug: str = typer.Argument(..., help="Slug del tenant (ej: formoto)")) 
         steps = await seed_catalog(tenant.id, data)
         for s in steps:
             console.print(f"  · {s}")
+        for s in await seed_pack_plugins(slug, tenant.id):
+            console.print(f"  · {s}")
+        from core.onboarding import ensure_brand_voice
+
+        if await ensure_brand_voice(tenant.id, slug, sobrescribir=voz_de_marca):
+            console.print("  · brand_voice sembrada desde docs/voz-de-marca.md")
 
     asyncio.run(_run())
 
@@ -416,6 +406,64 @@ def list_() -> None:
         console.print(table)
 
     asyncio.run(_run())
+
+
+# ------------------------------------------------------------------ embudo de activación (ADR-0124)
+def _duracion(segundos: int | None) -> str:
+    if segundos is None:
+        return "—"
+    if segundos < 3600:
+        return f"{segundos // 60} min"
+    if segundos < 48 * 3600:
+        return f"{segundos / 3600:.1f} h"
+    return f"{segundos / 86400:.1f} días"
+
+
+@app.command("embudo")
+def embudo(
+    dias: int = typer.Option(30, "--dias", min=1, max=365, help="Altas de los últimos N días"),
+    solo_automaticas: bool = typer.Option(
+        False, "--solo-automaticas", help="Solo los negocios del alta automática (ADR-0121)"
+    ),
+    sin_barrer: bool = typer.Option(
+        False, "--sin-barrer", help="No evaluar los negocios antes (solo lo ya registrado)"
+    ),
+) -> None:
+    """Embudo de activación (HU-SH-06): de las altas de la ventana, cuántas llegaron a cada
+    primer paso, en cuánto tiempo (mediana desde el alta) y cuántas dentro de las 24 horas.
+    Antes evalúa cada negocio, así cuenta también lo que nadie vio en el Resumen."""
+    from datetime import UTC, datetime, timedelta
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.plugin_manager import plugin_manager
+        from core.primeros_pasos.hitos import embudo as _embudo
+
+        plugin_manager.scan()  # el paso «catálogo o servicios» pregunta a cada habilidad
+        hasta = datetime.now(UTC)
+        return await _embudo(
+            hasta - timedelta(days=dias), hasta, solo_automaticas=solo_automaticas, barrer=not sin_barrer
+        )
+
+    from core.primeros_pasos.hitos import etiqueta
+
+    resultado = asyncio.run(_run())
+    tabla = Table(
+        "Paso",
+        "Negocios",
+        "% de las altas",
+        "Mediana desde el alta",
+        "En 24 h",
+        title=f"Embudo de activación · {resultado.altas} altas en {dias} días",
+    )
+    for fila in resultado.filas:
+        tabla.add_row(
+            etiqueta(fila.paso),
+            str(fila.negocios),
+            f"{fila.porcentaje:.1f} %",
+            _duracion(fila.mediana_segundos),
+            str(fila.en_24_horas),
+        )
+    console.print(tabla)
 
 
 # ------------------------------------------------------------------ docs
@@ -514,32 +562,83 @@ def purge(
 ) -> None:
     """Elimina por completo un tenant: borrado físico IRREVERSIBLE.
 
-    Exige escribir exactamente: ELIMINAR <slug>. Borra todos los datos del tenant
-    (core + packs + Redis) y la fila tenants. No se puede deshacer.
+    Exige que el tenant esté suspendido (`tenant deactivate <slug>`) y escribir
+    exactamente: ELIMINAR <slug>. Borra todos los datos del tenant (core + packs) y
+    la fila tenants y, después, su estado Redis. No se puede deshacer. Si Redis no se
+    pudo limpiar, sale con código 2 y muestra el comando de reintento (`purge-redis`).
     """
-
-    phrase = confirm
-    if not phrase:
-        phrase = questionary.text(
-            f"[bold red]Irreversible[/bold red]. Escribe exactamente [bold]ELIMINAR {slug}[/bold] para confirmar:",
-        ).ask() or ""
-
-    async def _run() -> None:
+    # Un solo event loop para validar, pedir la frase y purgar: el engine async de
+    # SQLAlchemy (y el cliente Redis) quedan atados al loop en el que abren conexiones,
+    # así que dos `asyncio.run` seguidos fallaban con "attached to a different loop".
+    async def _run() -> tuple[str, bool]:
+        from core.db.session import get_engine
         from core.memory.working import get_redis
-        from core.tenants import purge_tenant
+        from core.tenants import ensure_purgeable, purge_tenant
 
-        await purge_tenant(slug, phrase)
         try:
-            await get_redis().aclose()
-        except Exception:
-            pass
+            # Antes de pedir la frase: no tiene sentido confirmar algo que se va a rechazar.
+            tenant_id = str((await ensure_purgeable(slug)).id)
+            phrase = confirm
+            if not phrase:
+                phrase = await questionary.text(
+                    f"[bold red]Irreversible[/bold red]. Escribe exactamente [bold]ELIMINAR {slug}[/bold] "
+                    "para confirmar:",
+                ).ask_async() or ""
+            return tenant_id, await purge_tenant(slug, phrase)
+        finally:
+            try:
+                await get_redis().aclose()
+            except Exception:
+                pass
+            await get_engine().dispose()
 
     try:
-        asyncio.run(_run())
+        tenant_id, redis_limpio = asyncio.run(_run())
     except ValueError as exc:
         console.print(f"[red]✗ {exc}[/red]")
         raise typer.Exit(1) from exc
+    if not redis_limpio:
+        console.print(
+            f"⚠ [yellow]{slug} eliminado de la base (irreversible), pero su estado Redis no se "
+            f"pudo limpiar.[/yellow] Reintenta con: agent-core tenant purge-redis {tenant_id}"
+        )
+        raise typer.Exit(2)
     console.print(f"✓ [red]{slug} eliminado por completo[/red] (irreversible)")
+
+
+@app.command("purge-redis")
+def purge_redis(
+    tenant_id: str = typer.Argument(..., help="UUID del tenant YA purgado (el slug ya no existe)"),
+) -> None:
+    """Reintento: limpia el estado Redis de un tenant ya purgado. Idempotente.
+
+    Úsalo cuando `tenant purge` borró la base pero avisó que Redis no se limpió
+    (log `tenant_purge_redis_cleanup_failed`). Se niega si el tenant todavía existe.
+    """
+    try:
+        tid = uuid.UUID(tenant_id)
+    except ValueError as exc:
+        console.print(f"[red]✗ No es un UUID válido: {tenant_id}[/red]")
+        raise typer.Exit(1) from exc
+
+    async def _run() -> int:
+        from core.memory.working import get_redis
+        from core.tenants import purge_tenant_redis
+
+        try:
+            return await purge_tenant_redis(tid)
+        finally:
+            try:
+                await get_redis().aclose()
+            except Exception:
+                pass
+
+    try:
+        borradas = asyncio.run(_run())
+    except ValueError as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"✓ Redis del tenant {tid} limpio ({borradas} claves borradas)")
 
 
 @app.command()
@@ -624,11 +723,14 @@ def memoria_purgar(
     slug: str = typer.Option(..., "--slug", help="Slug del tenant"),
     email: str = typer.Option("", "--email", help="Email del cliente a olvidar (opcional)"),
     conversation: str = typer.Option("", "--conversation", help="UUID de conversación (opcional)"),
+    customer: str = typer.Option("", "--customer-id", help="UUID del cliente (cualquier canal, p. ej. WhatsApp)"),
 ) -> None:
-    """Olvida la memoria semántica de un cliente/conversación (ADR-0053).
+    """Olvida la memoria de un cliente o de una conversación (ADR-0053, ADR-0114 §4).
 
-    Borrado LÓGICO de `memory_vectors` (invariante #8) del tenant indicado.
-    Exige `--email` (resuelve el customer) o `--conversation`.
+    Borrado LÓGICO (invariante #8) del tenant indicado. Con `--email` (solo): los recuerdos
+    de `memory_vectors`, los hechos de `memory_facts`, su perfil en `customers.attributes` y la
+    memoria de trabajo de todas sus conversaciones. Con `--conversation`: los recuerdos y la
+    memoria de trabajo de esa conversación. Sus mensajes y tareas quedan (registro del negocio).
     """
     import uuid as _uuid
 
@@ -650,22 +752,228 @@ def memoria_purgar(
             raise typer.Exit(1)
 
         async with tenant_scope(tenant_id):
-            customer_id = None
-            if email:
+            customer_id = _uuid.UUID(customer) if customer else None
+            if customer_id is not None:
                 async with get_session() as session:
-                    customer_id = (
+                    existe = (
                         await session.execute(
-                            select(Customer.id).where(Customer.tenant_id == tenant_id, Customer.external_id == email)
+                            select(Customer.id).where(Customer.tenant_id == tenant_id, Customer.id == customer_id)
                         )
                     ).scalar_one_or_none()
+                if existe is None:
+                    console.print(f"[red]Cliente no encontrado:[/red] {customer}")
+                    raise typer.Exit(1)
+            elif email:
+                async with get_session() as session:
+                    encontrados = (
+                        await session.execute(
+                            select(Customer.id).where(
+                                Customer.tenant_id == tenant_id,
+                                Customer.external_id == email,
+                                Customer.deleted_at.is_(None),
+                            )
+                        )
+                    ).scalars().all()
+                if len(encontrados) > 1:
+                    console.print("[red]Hay varios clientes con ese email (uno por canal): usá --customer-id[/red]")
+                    raise typer.Exit(1)
+                customer_id = encontrados[0] if encontrados else None
                 if customer_id is None:
                     console.print(f"[red]Cliente no encontrado:[/red] {email}")
                     raise typer.Exit(1)
             conv_id = _uuid.UUID(conversation) if conversation else None
             return await purge_memory(customer_id=customer_id, conversation_id=conv_id)
 
-    if not (email or conversation):
-        console.print("[red]Indicá --email o --conversation[/red]")
+    if not (email or conversation or customer):
+        console.print("[red]Indicá --customer-id, --email o --conversation[/red]")
         raise typer.Exit(1)
     n = asyncio.run(_run())
-    console.print(f"✓ [green]{n} recuerdos olvidados[/green] para {slug}")
+    console.print(f"✓ [green]{n} registros de memoria olvidados[/green] (recuerdos y hechos) para {slug}")
+
+
+@app.command()
+def memoria_importar_perfil() -> None:
+    """Copia como hechos `perfil` las claves de `customers.attributes` sin hecho (HU-AOS-36).
+
+    Para correr una vez después del deploy de la migración 0080: completa lo que el código
+    anterior escribió en `attributes` mientras corría el deploy. Idempotente, todos los negocios.
+    """
+    from sqlalchemy import select
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async def _run() -> int:
+        from core.memory import facts
+        from core.shared.tenant import tenant_scope
+
+        async with get_session() as session:
+            tenant_ids = (await session.execute(select(Tenant.id).where(Tenant.deleted_at.is_(None)))).scalars().all()
+        total = 0
+        for tid in tenant_ids:
+            async with tenant_scope(tid):
+                while True:
+                    async with get_session() as session:
+                        n = await facts.importar_perfil(session, tenant_id=tid)
+                    if not n:
+                        break
+                    total += n
+        return total
+
+    n = asyncio.run(_run())
+    console.print(f"✓ [green]{n} claves del perfil copiadas como hechos[/green]")
+
+
+# ------------------------------------------------------------------ altas automáticas (ADR-0121)
+def _uuid_del_vendedor(valor: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(valor)
+    except ValueError as exc:
+        console.print("[red]✗ El vendedor va por UUID (igual que PROVISIONING_SELLER_TENANTS).[/red]")
+        raise typer.Exit(1) from exc
+
+
+@app.command("altas")
+def altas(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    estado: str = typer.Option("revision", "--estado", help="en_curso | completado | revision | omitido | todas"),
+) -> None:
+    """Altas automáticas de negocios de un vendedor (por defecto, las que están en revisión)."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+
+    async def _run() -> list:
+        from core.db.models import ProvisioningRequest
+        from core.db.session import get_session
+        from core.shared.tenant import tenant_scope
+
+        async with tenant_scope(vendedor_id):
+            async with get_session() as session:
+                consulta = select(ProvisioningRequest).where(
+                    ProvisioningRequest.tenant_id == vendedor_id,
+                    ProvisioningRequest.deleted_at.is_(None),
+                )
+                if estado != "todas":
+                    consulta = consulta.where(ProvisioningRequest.estado == estado)
+                return list(
+                    (await session.execute(consulta.order_by(ProvisioningRequest.created_at.desc()).limit(200)))
+                    .scalars()
+                    .all()
+                )
+
+    filas = asyncio.run(_run())
+    tabla = Table("Referencia", "Estado", "Intentos", "Negocio", "Motivo", "Creada")
+    for fila in filas:
+        tabla.add_row(
+            fila.referencia,
+            fila.estado,
+            str(fila.intentos),
+            fila.negocio_slug or "—",
+            (fila.motivo or "")[:80],
+            fila.created_at.strftime("%Y-%m-%d %H:%M"),
+        )
+    console.print(tabla)
+
+
+@app.command("reintentar-alta")
+def reintentar_alta(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    referencia: str = typer.Argument(..., help="Referencia del alta (número del pedido)"),
+) -> None:
+    """Vuelve a correr un alta en revisión, después de corregir lo que faltaba. Retoma el
+    mismo negocio (id y slug deterministas). Runbook: docs/runbooks/altas-en-revision.md."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.plugin_manager import plugin_manager
+        from core.provisioning.consumer import reintentar_alta as _reintentar
+
+        # La fuente de los datos del pedido la registra commerce al activarse.
+        await plugin_manager.ensure_process_activation()
+        return await _reintentar(vendedor_id, referencia)
+
+    try:
+        fila = asyncio.run(_run())
+    except Exception as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"✓ Alta {referencia}: [bold]{fila.estado}[/bold] {fila.motivo or ''}")
+
+
+@app.command("aprobar-alta")
+def aprobar_alta(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    referencia: str = typer.Argument(..., help="Referencia del alta (número del pedido)"),
+) -> None:
+    """Aprueba un alta en revisión después de revisarla: corre sin los controles de riesgo
+    que la frenaron (HU-SH-07). Runbook: docs/runbooks/altas-en-revision.md."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.plugin_manager import plugin_manager
+        from core.provisioning.consumer import aprobar_y_procesar
+
+        await plugin_manager.ensure_process_activation()
+        return await aprobar_y_procesar(vendedor_id, referencia, por="cli")
+
+    try:
+        fila = asyncio.run(_run())
+    except Exception as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"✓ Alta {referencia} aprobada: [bold]{fila.estado}[/bold] {fila.motivo or ''}")
+
+
+@app.command("interruptor-altas")
+def interruptor_altas(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    pausar: bool | None = typer.Option(None, "--pausar/--reanudar", help="Pausa o reanuda el alta automática"),
+    motivo: str = typer.Option("", "--motivo", help="Por qué (obligatorio al pausar)"),
+) -> None:
+    """Interruptor del alta automática (HU-SH-07). Pausada, cada alta nueva queda en revisión.
+    Sin --pausar ni --reanudar, muestra el estado."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+    from core.provisioning.vendedores import vendedores_configurados
+
+    if vendedor_id not in vendedores_configurados():
+        console.print("[red]✗ Ese negocio no está en PROVISIONING_SELLER_TENANTS.[/red]")
+        raise typer.Exit(1)
+    if pausar and not motivo.strip():
+        console.print("[red]✗ Indica --motivo al pausar.[/red]")
+        raise typer.Exit(1)
+
+    async def _run() -> dict:
+        from core.provisioning import interruptor
+
+        if pausar is None:
+            return await interruptor.estado(vendedor_id)
+        return await interruptor.fijar(vendedor_id, pausar=pausar, motivo=motivo, por="cli")
+
+    try:
+        estado = asyncio.run(_run())
+    except LookupError as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    texto = "[red]pausada[/red]" if estado["pausado"] else "[green]activa[/green]"
+    console.print(f"Alta automática {texto} {estado.get('motivo') or ''}")
+
+
+@app.command("descartar-alta")
+def descartar_alta(
+    vendedor: str = typer.Argument(..., help="UUID del negocio vendedor"),
+    referencia: str = typer.Argument(..., help="Referencia del alta (número del pedido)"),
+    motivo: str = typer.Option(..., "--motivo", help="Por qué se descarta (queda en el alta y en audit_log)"),
+) -> None:
+    """Cierra un alta en revisión sin crear el negocio (queda `omitido` con el motivo)."""
+    vendedor_id = _uuid_del_vendedor(vendedor)
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.provisioning.consumer import descartar_alta as _descartar
+
+        return await _descartar(vendedor_id, referencia, motivo)
+
+    try:
+        fila = asyncio.run(_run())
+    except ValueError as exc:
+        console.print(f"[red]✗ {exc}[/red]")
+        raise typer.Exit(1) from exc
+    console.print(f"✓ Alta {referencia} descartada: {fila.motivo}")

@@ -26,8 +26,8 @@ pytestmark = [
 async def _tenant_con_catalogo() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     from pack_commerce.models import Category, Product
 
+    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("promos-api")

@@ -31,5 +31,18 @@ async def claim_message_once(tenant_id: uuid.UUID, provider: str, external_messa
     mensaje en silencio para el segundo tenant.
     """
     r = get_redis()
-    result = await r.set(f"inbound:{tenant_id}:{provider}:{external_message_id}", "1", px=TTL_MS, nx=True)
+    result = await r.set(_clave(tenant_id, provider, external_message_id), "1", px=TTL_MS, nx=True)
     return result is True
+
+
+async def release_message_claim(tenant_id: uuid.UUID, provider: str, external_message_id: str) -> None:
+    """Deshace el claim cuando el mensaje no llegó a encolarse: el reintento del proveedor lo vuelve a procesar
+    en vez de descartarlo como duplicado. Best-effort."""
+    try:
+        await get_redis().delete(_clave(tenant_id, provider, external_message_id))
+    except Exception:
+        pass
+
+
+def _clave(tenant_id: uuid.UUID, provider: str, external_message_id: str) -> str:
+    return f"inbound:{tenant_id}:{provider}:{external_message_id}"

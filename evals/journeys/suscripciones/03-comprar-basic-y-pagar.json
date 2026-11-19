@@ -1,0 +1,97 @@
+{
+  "nombre": "comprar-basic-y-pagar",
+  "descripcion": "Compra del Basic con pago en línea por contratar_plan: la inscripción queda pendiente de pago con su link por el total del primer cargo, la pasarela confirma el pago y la suscripción queda activa sin prueba.",
+  "pasos": [
+    {
+      "nota": "pide el Basic con pago en línea; confirma el resumen y sale el link",
+      "usuario": "Quiero el Plan Basic y pagarlo en línea. Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana+{cliente.id}@example.com.",
+      "hasta_herramienta": "sub_inscribir",
+      "insistir": "Sí, confirmo. Pasame el link de pago.",
+      "max_turnos": 4,
+      "espera": {
+        "texto_contiene": [
+          "https://pagos.simulados/"
+        ]
+      }
+    },
+    {
+      "nota": "inscripción pendiente de pago por el valor del Basic",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "pendiente_pago",
+          "valor_periodo": 200000
+        },
+        "guardar_como": "suscripcion"
+      }
+    },
+    {
+      "nota": "el primer cargo, con su referencia",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "pendiente",
+          "monto": 200000,
+          "referencia": {
+            "$no_nulo": true
+          }
+        },
+        "guardar_como": "cargo"
+      }
+    },
+    {
+      "nota": "el link cobra el total del cargo, no un monto inventado",
+      "verifica": {
+        "tabla": "pack_payments_transactions",
+        "donde": {
+          "reference": "{cargo.referencia}"
+        },
+        "filas": 1,
+        "espera": {
+          "amount": 200000,
+          "provider": "simulado"
+        }
+      }
+    },
+    {
+      "nota": "la pasarela confirma el pago",
+      "evento": "payment.confirmed",
+      "datos": {
+        "reference": "{cargo.referencia}",
+        "provider": "simulado",
+        "provider_reference": "sim-{cargo.referencia}",
+        "amount": 200000
+      }
+    },
+    {
+      "nota": "el worker entrega los eventos",
+      "outbox": "despachar"
+    },
+    {
+      "nota": "el pago activó la suscripción sin prueba",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "activa",
+          "valor_periodo": 200000,
+          "trial_termina": null,
+          "proximo_cargo": {
+            "$no_nulo": true
+          }
+        }
+      }
+    }
+  ]
+}

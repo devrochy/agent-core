@@ -2,50 +2,165 @@
 
 Migrado del panel clásico (`/admin/asistente/probar`). Reutiliza
 `core.admin.playground`, que corre el MISMO loop del runtime sobre una
-conversación sintética (canal `test`): no toca Meta/waweb, no persiste mensajes
-ni consume métricas.
+conversación sintética (canal `test`): no toca Meta/waweb, las tools con efectos se
+simulan (HU-ARCH-14) y la prueba se purga al cerrarla. No consume métricas.
+
+Opciones directas (SPEC-40, ADR-0172): `POST /options` envía una plantilla con opciones a la conversación de
+prueba y `POST /tap` simula el toque de un botón, sin Meta. El payload firmado se valida igual que en
+producción (firma por negocio y conversación, `option_sends`, vigencia, una sola ejecución): ningún camino se
+salta el resolver. **En el canal `test` la tool se simula**: no crea pedidos, citas, cobros ni links reales.
+Al cerrar la prueba (`POST /close`) se purga todo lo que dejó.
+
+Borrador (HU-AOS-72): con `agent_id`, `GET`, `POST /message`, `/reset` y `/close` prueban el BORRADOR de ese
+agente, sin publicarlo: el turno corre con una release efímera armada en memoria (sin release, versión ni
+instancia), directo a ese agente (sin el Coordinador), siempre simulado y sin cupo de agentes. Exige además
+escritura en `settings` (la sección del editor de agentes). Un agente que no es un especialista activo del
+negocio con borrador es 404 `agente_no_encontrado`. Permisos como el editor de plantillas con opciones (dueño o master, escritura en
+`connections`) y con la bandera `opciones_directas.habilitada` encendida (si no, 404).
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+import uuid
+from datetime import datetime
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, Response
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Query, Response
+from pydantic import BaseModel, Field
 
+from core.admin.permissions import effective_access
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.api.routers.plantillas_opciones import OpcionesErrorOut
+from core.api.routers.plantillas_opciones import escritura as _escritura_opciones
+from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+
+log = get_logger(__name__)
 
 router = APIRouter(prefix="/admin/playground", tags=["admin · playground"])
 
 
 class TurnIn(BaseModel):
     text: str
+    connection_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Conexión del negocio por cuya release se prueba (HU-AOS-57): el turno corre por el agente "
+            "publicado ahí. Sin ella, la prueba de siempre (sin release). Sigue siendo del canal `test`."
+        ),
+    )
+    agent_id: uuid.UUID | None = Field(
+        default=None,
+        description=(
+            "Agente cuyo BORRADOR se prueba sin publicarlo (HU-AOS-72): el turno va directo a ese agente, "
+            "simulado y sin release, versión ni instancia. Gana sobre `connection_id`. 404 `agente_no_encontrado` "
+            "si no es un especialista activo del negocio con borrador."
+        ),
+    )
 
 
 class TurnOut(BaseModel):
     text: str
     image_url: str | None = None
     escalated: bool = False
+    simulado: bool = Field(
+        default=False,
+        description="El turno ejecutó tools en modo simulado (HU-ARCH-14): no se creó data real.",
+    )
 
 
 class HistoryOut(BaseModel):
     turns: list[dict[str, Any]]
 
 
+class PlaygroundOpcionesIn(BaseModel):
+    clave: str = Field(description="Clave de la plantilla con opciones (versión vigente publicada).")
+    connection_id: uuid.UUID | None = Field(
+        default=None, description="Conexión por cuya release se prueba, como en `/message`. Sin ella, la de siempre."
+    )
+
+
+class PlaygroundToqueIn(BaseModel):
+    payload: str = Field(
+        max_length=256,
+        description="`id` de un botón del mensaje (`opt:…`, `optc:…` o `optn:…`), tal cual lo devolvió `/options` o `/tap`.",
+    )
+    connection_id: uuid.UUID | None = Field(default=None, description="La misma conexión con la que se envió.")
+
+
+class PlaygroundMensajeOut(BaseModel):
+    id: uuid.UUID
+    direction: str = Field(description="`outbound` (lo que el sistema le dijo al cliente de prueba) o `inbound`.")
+    content: str
+    interactive: dict[str, Any] | None = Field(
+        default=None, description="Botones o lista del mensaje (payload de WhatsApp) con los ids firmados que `/tap` recibe."
+    )
+    created_at: datetime
+
+
+class PlaygroundOpcionesOut(BaseModel):
+    enviado: bool
+    ya_enviado: bool = False
+    via: Literal["interactivo", "texto"] | None = Field(default=None, description="`interactivo` (botones) o `texto`.")
+    ejecucion_directa: bool
+    degradado: bool
+    send_id: uuid.UUID | None = None
+    mensajes: list[PlaygroundMensajeOut] = Field(description="Los mensajes del envío, listos para pintar.")
+
+
+class PlaygroundToqueOut(BaseModel):
+    outcome: str = Field(
+        description=(
+            "Resultado del resolver (`ok`, `tool_error`, `denied`, `confirm_requested`, `cancelled`, `expired`, "
+            "`duplicate`, `bad_signature`, `unknown_send`, `foreign_conversation`, …). Un payload manipulado, de otro "
+            "negocio o de otra conversación se descarta sin mensajes: `mensajes` vacío."
+        )
+    )
+    mensajes: list[PlaygroundMensajeOut] = Field(description="Lo que el toque produjo: respuesta fija o botones de confirmación.")
+
+
+def _conexion_no_valida(exc: Exception) -> ApiError:
+    return ApiError(422, "invalid_connection", str(exc), fields={"connection_id": str(exc)})
+
+
+def _agente_no_encontrado() -> ApiError:
+    return ApiError(404, "agente_no_encontrado", "No existe ese agente en el negocio.")
+
+_AGENT_ID = Query(description="Agente cuyo borrador se prueba (HU-AOS-72). Gana sobre `connection_id`.")
+
+
+async def _exigir_editor_de_agentes(principal: Principal, agent_id: uuid.UUID | None) -> None:
+    """Probar un borrador exige además escritura en `settings`, la sección del editor de agentes."""
+    if agent_id is None or principal.admin.role == "master":
+        return
+    if await effective_access(principal.admin, "settings", principal.tenant_id) != "write":
+        raise ApiError.forbidden("Sin permiso para la sección 'settings'.")
+
+
 @router.get("", response_model=HistoryOut)
 async def playground_history(
     principal: Annotated[Principal, Depends(require("connections"))],
+    connection_id: Annotated[uuid.UUID | None, Query(description="Historial de la prueba por esa conexión.")] = None,
+    agent_id: Annotated[uuid.UUID | None, _AGENT_ID] = None,
 ) -> HistoryOut:
     """Historial de la prueba (working memory del canal `test`)."""
     from core.admin import playground
+    from core.gateway.conexion_pruebas import ConexionNoValida
+    from core.releases.efimera import BorradorNoEncontrado
 
+    await _exigir_editor_de_agentes(principal, agent_id)
     turns: list[dict[str, Any]] = []
     async with tenant_scope(principal.tenant_id):
         try:
-            conversation = await playground.get_or_create_test_conversation(principal.tenant_id)
+            conversation = await playground.get_or_create_test_conversation(
+                principal.tenant_id, connection_id, agent_id
+            )
             turns = await playground.list_test_turns(conversation.id)
+        except ConexionNoValida as exc:
+            raise _conexion_no_valida(exc) from exc
+        except BorradorNoEncontrado as exc:
+            raise _agente_no_encontrado() from exc
         except Exception:
             # Redis caído o spec ausente: el panel muestra el historial vacío.
             turns = []
@@ -62,22 +177,143 @@ async def playground_message(
     if not text:
         raise ApiError.bad_request("Escribe un mensaje.", "missing_text")
     from core.admin import playground
+    from core.gateway.conexion_pruebas import ConexionNoValida
+    from core.releases.efimera import BorradorNoEncontrado
 
+    await _exigir_editor_de_agentes(principal, payload.agent_id)
     async with tenant_scope(principal.tenant_id):
         try:
-            turn = await playground.run_test_turn(principal.tenant_id, text)
+            turn = await playground.run_test_turn(
+                principal.tenant_id, text, payload.connection_id, payload.agent_id
+            )
+        except ConexionNoValida as exc:
+            raise _conexion_no_valida(exc) from exc
+        except BorradorNoEncontrado as exc:
+            raise _agente_no_encontrado() from exc
         except playground.PlaygroundError as exc:
             raise ApiError.bad_request(str(exc), "playground_error") from exc
-    return TurnOut(text=turn.text, image_url=turn.image_url, escalated=turn.escalated)
+        # Solo cuenta si el agente contestó: un turno que escaló por falla del modelo no prueba nada.
+        # La prueba de un borrador no es la del onboarding (esa va por la conexión publicada).
+        if payload.agent_id is None and payload.connection_id is not None and not turn.escalated:
+            await _marcar_prueba_del_onboarding(principal.tenant_id, payload.connection_id)
+    return TurnOut(
+        text=turn.text,
+        image_url=turn.image_url,
+        escalated=turn.escalated,
+        simulado=turn.simulado,
+    )
+
+
+@router.post("/close", status_code=204)
+async def playground_close(
+    principal: Annotated[Principal, Depends(require("connections", write=True))],
+    connection_id: Annotated[uuid.UUID | None, Query(description="Cierra la prueba de esa conexión.")] = None,
+    agent_id: Annotated[uuid.UUID | None, _AGENT_ID] = None,
+) -> Response:
+    """Cierra la prueba y purga su data (conversación `test`, cliente sintético, mensajes,
+    tareas, memoria, ledger y decisiones). Sin `connection_id` ni `agent_id`, cierra todas las del
+    negocio; con `agent_id`, solo la del borrador de ese agente (un agente ajeno no cierra nada)."""
+    from core.admin import playground
+
+    await _exigir_editor_de_agentes(principal, agent_id)
+    async with tenant_scope(principal.tenant_id):
+        await playground.close_test_conversation(principal.tenant_id, connection_id, agent_id)
+    return Response(status_code=204)
 
 
 @router.post("/reset", status_code=204)
 async def playground_reset(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
+    connection_id: Annotated[uuid.UUID | None, Query(description="Reinicia la prueba de esa conexión.")] = None,
+    agent_id: Annotated[uuid.UUID | None, _AGENT_ID] = None,
 ) -> Response:
-    """Cierra la prueba actual y arranca una nueva desde cero."""
+    """Purga la prueba actual y arranca una nueva desde cero."""
     from core.admin import playground
+    from core.gateway.conexion_pruebas import ConexionNoValida
+    from core.releases.efimera import BorradorNoEncontrado
+
+    await _exigir_editor_de_agentes(principal, agent_id)
+    async with tenant_scope(principal.tenant_id):
+        try:
+            await playground.reset_test_conversation(principal.tenant_id, connection_id, agent_id)
+        except ConexionNoValida as exc:
+            raise _conexion_no_valida(exc) from exc
+        except BorradorNoEncontrado as exc:
+            raise _agente_no_encontrado() from exc
+    return Response(status_code=204)
+
+
+def _mensaje_out(m: Any) -> PlaygroundMensajeOut:
+    return PlaygroundMensajeOut(
+        id=m.id, direction=m.direction, content=m.content or "", interactive=m.interactive, created_at=m.created_at
+    )
+
+
+# Errores del sobre `{error: {code, message}}`: 404 (bandera apagada o clave inexistente), 409 (no publicada, sin
+# plantilla, pausada) y 422 (contexto incompleto o `payload_invalido`).
+_ERRORES_OPCIONES: dict[int | str, dict[str, Any]] = {
+    404: {"model": OpcionesErrorOut},
+    409: {"model": OpcionesErrorOut},
+    422: {"model": OpcionesErrorOut},
+}
+
+
+@router.post("/options", response_model=PlaygroundOpcionesOut, responses=_ERRORES_OPCIONES)
+async def playground_options(
+    payload: PlaygroundOpcionesIn,
+    principal: Annotated[Principal, Depends(_escritura_opciones)],
+) -> PlaygroundOpcionesOut:
+    """Envía la plantilla con opciones `clave` a la conversación de prueba, con `send_options_to_conversation`: crea el
+    `option_sends` con sus payloads firmados y guarda el mensaje con los botones, sin Meta ni cola. Los errores son
+    los de `POST /plantillas-opciones/{clave}/enviar-prueba` (404 si la bandera está apagada o la clave no existe,
+    409 si no está publicada, 422 si falta contexto)."""
+    from core.admin import plantillas_opciones_service as svc
+    from core.admin import playground
+    from core.gateway.conexion_pruebas import ConexionNoValida
 
     async with tenant_scope(principal.tenant_id):
-        await playground.reset_test_conversation(principal.tenant_id)
-    return Response(status_code=204)
+        try:
+            r, mensajes = await playground.enviar_opciones(
+                principal.tenant_id, f"admin:{principal.admin.id}", payload.clave, payload.connection_id
+            )
+        except ConexionNoValida as exc:
+            raise _conexion_no_valida(exc) from exc
+        except svc.ErrorPlantillaOpciones as exc:
+            raise ApiError(exc.status, exc.code, exc.message, details=exc.details) from exc
+    return PlaygroundOpcionesOut(**r, mensajes=[_mensaje_out(m) for m in mensajes])
+
+
+@router.post("/tap", response_model=PlaygroundToqueOut, responses=_ERRORES_OPCIONES)
+async def playground_tap(
+    payload: PlaygroundToqueIn,
+    principal: Annotated[Principal, Depends(_escritura_opciones)],
+) -> PlaygroundToqueOut:
+    """Simula el toque de un botón de la conversación de prueba con el MISMO resolver que atiende WhatsApp: firma
+    por negocio y conversación, vigencia, una sola ejecución y autorización de la tool, sin LLM. Devuelve el
+    `outcome` y los mensajes que produjo. **Ejecuta la tool de verdad.** Un payload que no es de opciones es 422."""
+    from core.admin import playground
+    from core.gateway.conexion_pruebas import ConexionNoValida
+    from core.kernel.opciones.payload import es_de_opciones
+
+    ficha = payload.payload.strip()
+    if not es_de_opciones(ficha):
+        raise ApiError(422, "payload_invalido", "No es el botón de una plantilla con opciones.")
+    async with tenant_scope(principal.tenant_id):
+        try:
+            outcome, nuevos = await playground.tocar_opcion(principal.tenant_id, ficha, payload.connection_id)
+        except ConexionNoValida as exc:
+            raise _conexion_no_valida(exc) from exc
+        except playground.PlaygroundError as exc:
+            raise ApiError(404, "conversacion_no_encontrada", str(exc)) from exc
+    return PlaygroundToqueOut(outcome=outcome, mensajes=[_mensaje_out(m) for m in nuevos])
+
+
+async def _marcar_prueba_del_onboarding(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    """Si la prueba fue por la conexión donde el onboarding dejó listo el agente, queda anotada la
+    primera vez (`finalizar` la exige). Mejor esfuerzo: una falla aquí no estropea la respuesta."""
+    from core.primeros_pasos import recorrido
+
+    try:
+        await recorrido.marcar_prueba(tenant_id, connection_id)
+    except Exception:
+        log.warning("onboarding_marcar_prueba_fallo", tenant_id=str(tenant_id), exc_info=True)

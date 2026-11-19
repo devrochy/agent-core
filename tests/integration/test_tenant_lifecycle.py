@@ -12,12 +12,14 @@ import json
 import os
 import uuid
 from pathlib import Path
+from urllib.parse import unquote
 
 import pytest
 from conftest import _meta_request
 from sqlalchemy import func, select, text
 
 pytestmark = [
+    pytest.mark.aislamiento,  # subconjunto de las PRs a develop (ADR-0120)
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
@@ -36,7 +38,7 @@ def _uniq(prefix: str) -> str:
 
 
 async def _onboard(slug: str, whatsapp_phone: str = "") -> tuple[uuid.UUID, str]:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Tenant desechable {slug}",
@@ -224,13 +226,16 @@ async def test_suspendido_no_responde_por_debounce(recorded) -> None:
 async def test_purge_frase_incorrecta_no_borra() -> None:
     from core.db.models import Tenant
     from core.db.session import get_session
-    from core.tenants import purge_tenant
+    from core.tenants import TenantNotSuspendedError, deactivate_tenant, purge_tenant
 
     tid, _slug = await _onboard(_uniq("purge-nofrase"))
     await _seed_catalog(tid)
+    await deactivate_tenant(str(tid))
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError) as exc:
         await purge_tenant(str(tid), "ELIMINAR OTRACOSA")
+    assert not isinstance(exc.value, TenantNotSuspendedError)
+    assert "Frase de confirmación" in str(exc.value)
 
     async with get_session() as session:
         still = await session.get(Tenant, tid)
@@ -270,6 +275,9 @@ async def test_purge_borra_core_packs_redis_y_tenant() -> None:
     assert tables, "debe haber tablas con tenant_id"
     assert sum([await _count_rows(t, tid) for t in tables]) > 0, "el tenant debe tener datos"
 
+    from core.tenants import deactivate_tenant
+
+    await deactivate_tenant(slug)
     await purge_tenant(str(tid), f"ELIMINAR {slug}")
 
     # cero filas en TODAS las tablas (core + packs)
@@ -291,6 +299,268 @@ async def test_purge_borra_core_packs_redis_y_tenant() -> None:
     if admin is not None:
         ids = {str(t[0]) for t in await admin_tenants(admin.id)}
         assert str(tid) not in ids, "tras el purge, el admin no puede ver el tenant"
+
+
+async def test_purge_de_un_negocio_activo_falla_y_no_borra_nada() -> None:
+    """Solo se purga un negocio suspendido: en Python (con un mensaje que dice cómo
+    suspenderlo) y, por defensa en profundidad, en la función SQL."""
+    import sqlalchemy.exc
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.memory.working import append_turn, get_redis
+    from core.shared.tenant import tenant_scope
+    from core.tenants import TenantNotSuspendedError, purge_tenant
+
+    tid, slug = await _onboard(_uniq("purge-activo"))
+    await _seed_catalog(tid)
+    await _sembrar_conversacion(tid)
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            conv_id = (
+                await session.execute(text("select id from conversations where tenant_id = :t"),
+                                      {"t": str(tid)})
+            ).scalar_one()
+    await append_turn(conv_id, "user", "hola")
+
+    tables = await _tenant_tables()
+    antes = {t: await _count_rows(t, tid) for t in tables}
+    assert sum(antes.values()) > 0
+
+    with pytest.raises(TenantNotSuspendedError, match=f"tenant deactivate {slug}"):
+        await purge_tenant(str(tid), f"ELIMINAR {slug}")
+
+    # La función SQL, llamada directo por el runtime, también se niega.
+    async with get_session() as session:
+        with pytest.raises(sqlalchemy.exc.DBAPIError, match="no está suspendido"):
+            await session.execute(text("select purge_tenant(:tid)"), {"tid": str(tid)})
+        await session.rollback()
+
+    assert {t: await _count_rows(t, tid) for t in tables} == antes, "no se borró nada"
+    async with get_session() as session:
+        assert (await session.get(Tenant, tid)).status == "active"
+    assert await get_redis().exists(f"wm:{conv_id}") == 1, "Redis intacto"
+
+
+# ------------------------------------------------------------------ purga sin superusuario
+_DUENO_SIN_SUPER = "purge_dueno_sin_superusuario"
+
+
+def _url_dueno() -> str:
+    url = os.environ.get("MIGRATIONS_DATABASE_URL", "")
+    if not url:
+        pytest.skip("requiere MIGRATIONS_DATABASE_URL (el rol dueño de las tablas)")
+    return url.replace("+asyncpg", "", 1)
+
+
+async def _limpiar_dueno_de_prueba(conn) -> None:
+    """Devuelve la función al rol que migra y borra el rol de prueba, si quedó de una corrida
+    anterior que murió a medias."""
+    if not await conn.fetchval("select 1 from pg_roles where rolname = $1", _DUENO_SIN_SUPER):
+        return
+    dueno = await conn.fetchval(
+        "select proowner::regrole::text from pg_proc "
+        "where oid = 'public.purge_tenant(uuid)'::regprocedure"
+    )
+    if dueno == _DUENO_SIN_SUPER:
+        await conn.execute("alter function public.purge_tenant(uuid) owner to current_user")
+    # DROP OWNED revoca también el permiso sobre el parámetro (es un objeto compartido).
+    await conn.execute(f"drop owned by {_DUENO_SIN_SUPER}")
+    await conn.execute(f"drop role {_DUENO_SIN_SUPER}")
+
+
+@pytest.fixture
+async def purge_con_dueno_sin_superusuario():
+    """`purge_tenant` en manos de un dueño NOSUPERUSER BYPASSRLS, como en producción.
+
+    En producción el dueño es `agent_core_migrations` (runbook de producción, 4.3); en el CI y
+    en local las migraciones corren como superusuario y el bug de la `0011` no se veía. Con el
+    superusuario de `MIGRATIONS_DATABASE_URL` se crea un rol sin superusuario con lo que tiene el
+    dueño en producción (BYPASSRLS, borrar en las tablas, `SET` sobre `session_replication_role`)
+    y se le pasa la función; al final se devuelve al dueño original. Si la base ya se migró con
+    un dueño sin superusuario, se usa tal cual.
+
+    Devuelve una función para quitar y reponer el permiso sobre el parámetro, o `None` si la
+    base ya venía migrada así (el dueño real no se toca).
+    """
+    import asyncpg
+
+    conn = await asyncpg.connect(_url_dueno())
+    try:
+        if await conn.fetchval("select rolsuper from pg_roles where rolname = current_user"):
+            await _limpiar_dueno_de_prueba(conn)
+        dueno, dueno_es_super = await conn.fetchrow(
+            "select quote_ident(r.rolname), r.rolsuper from pg_proc p "
+            "join pg_roles r on r.oid = p.proowner "
+            "where p.oid = 'public.purge_tenant(uuid)'::regprocedure"
+        )
+        if not dueno_es_super:
+            yield None
+            return
+        if not await conn.fetchval("select rolsuper from pg_roles where rolname = current_user"):
+            pytest.skip("el rol de MIGRATIONS_DATABASE_URL no es superusuario: no puede crear roles")
+
+        rol = _DUENO_SIN_SUPER
+        try:
+            await conn.execute(
+                f"create role {rol} nologin nosuperuser bypassrls nocreatedb nocreaterole"
+            )
+            await conn.execute(f"grant usage on schema public, meta_private to {rol}")
+            await conn.execute(
+                f"grant select, update, delete on all tables in schema public, meta_private to {rol}"
+            )
+            await conn.execute(f"grant set on parameter session_replication_role to {rol}")
+            await conn.execute(f"alter function public.purge_tenant(uuid) owner to {rol}")
+
+            async def permiso(conceder: bool) -> None:
+                accion, prep = ("grant", "to") if conceder else ("revoke", "from")
+                await conn.execute(
+                    f"{accion} set on parameter session_replication_role {prep} {rol}"
+                )
+
+            yield permiso
+        finally:
+            await conn.execute(f"alter function public.purge_tenant(uuid) owner to {dueno}")
+            await _limpiar_dueno_de_prueba(conn)
+    finally:
+        await conn.close()
+
+
+async def _sembrar_conversacion(tid: uuid.UUID) -> None:
+    """Cadena de FKs dentro del tenant: customer ← conversation ← message."""
+    from core.db.models import Conversation, Customer, Message
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            customer = Customer(tenant_id=tid, channel="whatsapp", external_id=f"wa-{tid.hex[:6]}")
+            session.add(customer)
+            await session.flush()
+            conv = Conversation(tenant_id=tid, customer_id=customer.id, channel="whatsapp")
+            session.add(conv)
+            await session.flush()
+            session.add(
+                Message(
+                    tenant_id=tid, conversation_id=conv.id, direction="inbound",
+                    sender_type="customer", content="hola",
+                )
+            )
+            await session.commit()
+
+
+async def _todas_las_tablas_con_tenant(conn) -> list[str]:
+    """Como `_tenant_tables`, pero en todos los esquemas propios (incluye `meta_private`)."""
+    return [
+        r[0]
+        for r in await conn.fetch(
+            "select format('%I.%I', n.nspname, c.relname) from pg_class c "
+            "join pg_namespace n on n.oid = c.relnamespace "
+            "join pg_attribute a on a.attrelid = c.oid "
+            "where a.attname = 'tenant_id' and not a.attisdropped and c.relkind in ('r', 'p') "
+            "and not c.relispartition and n.nspname not in ('pg_catalog', 'information_schema') "
+            "and n.nspname not like 'pg\\_%' order by 1"
+        )
+    ]
+
+
+async def _conteos(conn, tablas: list[str], tid: uuid.UUID) -> dict[str, int]:
+    # El dueño (BYPASSRLS) o el superusuario cuentan sin `tenant_scope`.
+    return {
+        t: await conn.fetchval(f"select count(*) from {t} where tenant_id = $1", tid)
+        for t in tablas
+    }
+
+
+async def test_purge_funciona_con_dueno_sin_superusuario(purge_con_dueno_sin_superusuario) -> None:
+    """Con la `0011`, un dueño sin superusuario no podía apagar los triggers de las FKs.
+
+    Además: borra `meta_private` (tokens de Meta), deja intacto a otro negocio, aplica el
+    `ON DELETE SET NULL` de `provisioning_requests.negocio_tenant_id` del vendedor, hace rollback
+    completo si falla y no filtra `session_replication_role` al llamador.
+    """
+    import asyncpg
+    import sqlalchemy.exc
+
+    from core.db.session import get_session
+    from core.tenants import purge_tenant
+
+    tid, slug = await _onboard(_uniq("purge-nosuper"))
+    await _seed_catalog(tid)
+    await _sembrar_conversacion(tid)
+    otro, _ = await _onboard(_uniq("purge-otro"))
+    await _seed_catalog(otro)
+    await _sembrar_conversacion(otro)
+
+    conn = await asyncpg.connect(_url_dueno())
+    try:
+        # Un token de Meta del negocio (meta_private) y una solicitud de alta del otro negocio
+        # (el vendedor) que apunta al que se purga.
+        conexion = uuid.uuid4()
+        await conn.execute(
+            "insert into public.meta_connections (id, tenant_id, channel, meta_app_id, origin) "
+            "values ($1, $2, 'whatsapp', 'app-prueba', 'manual')",
+            conexion, tid,
+        )
+        await conn.execute(
+            "insert into meta_private.meta_tokens (id, tenant_id, connection_id, kind, subject_id, "
+            "ciphertext, iv, auth_tag, key_id, token_hash) "
+            "values ($1, $2, $3, 'system_user', 's', '\\x00', '\\x00', '\\x00', 'k1', 'h')",
+            uuid.uuid4(), tid, conexion,
+        )
+        solicitud = uuid.uuid4()
+        await conn.execute(
+            "insert into public.provisioning_requests (id, tenant_id, referencia, "
+            "negocio_tenant_id) values ($1, $2, $3, $4)",
+            solicitud, otro, f"ref-{solicitud.hex[:8]}", tid,
+        )
+
+        tablas = await _todas_las_tablas_con_tenant(conn)
+        assert "meta_private.meta_tokens" in tablas
+        antes = await _conteos(conn, tablas, tid)
+        assert antes["meta_private.meta_tokens"] == 1
+        otro_antes = await _conteos(conn, tablas, otro)
+        assert sum(otro_antes.values()) > 0, "el otro negocio debe tener datos"
+
+        from core.tenants import deactivate_tenant
+
+        await deactivate_tenant(str(tid))
+        permiso = purge_con_dueno_sin_superusuario
+        if permiso is not None:
+            # Sin el permiso sobre el parámetro la purga falla entera: rollback, nada borrado.
+            await permiso(False)
+            try:
+                with pytest.raises(sqlalchemy.exc.DBAPIError, match="session_replication_role"):
+                    await purge_tenant(str(tid), f"ELIMINAR {slug}")
+            finally:
+                await permiso(True)
+            assert await _conteos(conn, tablas, tid) == antes
+            assert await conn.fetchval("select count(*) from public.tenants where id = $1", tid)
+
+        await purge_tenant(str(tid), f"ELIMINAR {slug}")
+
+        despues = await _conteos(conn, tablas, tid)
+        assert {t: n for t, n in despues.items() if n} == {}, "quedaron filas del negocio"
+        assert not await conn.fetchval("select count(*) from public.tenants where id = $1", tid)
+        assert await _conteos(conn, tablas, otro) == otro_antes, "el otro negocio no se toca"
+        assert await conn.fetchval(
+            "select negocio_tenant_id from public.provisioning_requests where id = $1", solicitud
+        ) is None, "ON DELETE SET NULL de la solicitud del vendedor"
+        # La cláusula SET de la función no se filtra a la transacción del llamador. Basta una
+        # fila `tenants` suspendida y sin datos.
+        vacio = uuid.uuid4()
+        await conn.execute(
+            "insert into public.tenants (id, name, slug, status) values ($1, 'x', $2, 'suspended')",
+            vacio, f"purge-vacio-{vacio.hex[:6]}",
+        )
+        async with get_session() as session:
+            await session.execute(text("select purge_tenant(:tid)"), {"tid": str(vacio)})
+            rol = (await session.execute(text("show session_replication_role"))).scalar()
+            await session.rollback()
+        assert rol == "origin"
+        await conn.execute("delete from public.tenants where id = $1", vacio)
+    finally:
+        await conn.close()
 
 
 # ------------------------------------------------------------------ panel
@@ -318,6 +588,18 @@ async def test_panel_desactivar_reactivar_y_purge(app_client) -> None:
     async with get_session() as session:
         assert (await session.get(Tenant, tid)).status == "active"
 
+    # activo → no se purga aunque la frase sea correcta, y el aviso dice cómo suspenderlo
+    r = await app_client.post(
+        f"/admin/tenants/{tid}/purge", headers=headers, data={"confirm_phrase": f"ELIMINAR {slug}"}
+    )
+    assert r.status_code == 303 and "danger" in r.headers["location"]
+    assert "deactivate" in unquote(r.headers["location"])
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is not None
+
+    r = await app_client.post(f"/admin/tenants/{tid}/deactivate", headers=headers)
+    assert r.status_code == 303
+
     # frase incorrecta → no borra
     r = await app_client.post(
         f"/admin/tenants/{tid}/purge", headers=headers, data={"confirm_phrase": "ELIMINAR OTRACOSA"}
@@ -335,3 +617,228 @@ async def test_panel_desactivar_reactivar_y_purge(app_client) -> None:
     assert r.status_code == 303 and "success" in r.headers["location"]
     async with get_session() as session:
         assert await session.get(Tenant, tid) is None
+
+async def test_api_purge_exige_negocio_suspendido(app_client) -> None:
+    """`POST /api/v1/admin/platform/tenants/{id}/purge`: 409 si el negocio está activo."""
+    from _api_helpers import api_headers
+
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    tid, slug = await _onboard(_uniq("api-purge"))
+    # El negocio activo del panel es otro (un suspendido no se puede abrir).
+    async with get_session() as session:
+        otro = (
+            await session.execute(text("select id from tenants where slug = 'tenant-1'"))
+        ).scalar_one()
+    headers = await api_headers(app_client, otro)
+    url = f"/api/v1/admin/platform/tenants/{tid}/purge"
+
+    r = await app_client.post(url, headers=headers, json={"confirm_phrase": f"ELIMINAR {slug}"})
+    assert r.status_code == 409, r.text
+    assert "tenant_not_suspended" in r.text and "deactivate" in r.text
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is not None
+
+    r = await app_client.post(f"/api/v1/admin/platform/tenants/{tid}/deactivate", headers=headers)
+    assert r.status_code == 204, r.text
+    r = await app_client.post(url, headers=headers, json={"confirm_phrase": f"ELIMINAR {slug}"})
+    assert r.status_code == 204, r.text
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is None
+
+
+# ------------------------------------------------------------------ purga: Redis después del commit
+async def _estado_redis(tid: uuid.UUID) -> tuple[uuid.UUID, dict[str, str]]:
+    """Siembra conversación + una clave de cada familia de estado Redis del tenant.
+
+    Devuelve (conv_id, {nombre: clave}). `debounce:pending` se verifica aparte (ZSET).
+    """
+    from core.memory.working import append_turn, get_redis
+    from core.shared.tenant import tenant_scope
+
+    await _sembrar_conversacion(tid)
+    async with tenant_scope(tid):
+        from core.db.session import get_session
+
+        async with get_session() as session:
+            conv_id = (
+                await session.execute(
+                    text("select id from conversations where tenant_id = :t"), {"t": str(tid)}
+                )
+            ).scalar_one()
+        await append_turn(conv_id, "user", "hola")  # wm:{tid}:{conv}
+    await append_turn(conv_id, "user", "hola")  # wm:{conv} (legado, sin tenant en contexto)
+
+    r = get_redis()
+    claves = {
+        "wm_tenant": f"wm:{tid}:{conv_id}",
+        "wm_legado": f"wm:{conv_id}",
+        "turns": f"turns:{tid}",
+        "inbound": f"inbound:{tid}:meta:wamid-{tid.hex[:6]}",
+        "debounce_payload": f"debounce:payload:{conv_id}",
+        "debounce_messages": f"debounce:messages:{conv_id}",
+        "debounce_inbound": f"debounce:inbound:{tid}:{conv_id}",
+        "terminos": f"alta:terminos:{tid}:{conv_id}:v1",
+        "waweb_outbox": f"waweb:outbox:{tid}",
+    }
+    await r.set(claves["turns"], "3")
+    await r.set(claves["inbound"], "1")
+    await r.set(claves["debounce_payload"], json.dumps({"tenant_id": str(tid)}))
+    await r.rpush(claves["debounce_messages"], "hola")
+    await r.rpush(claves["debounce_inbound"], str(uuid.uuid4()))
+    await r.set(claves["terminos"], "2026-10-10T00:00:00+00:00")
+    await r.rpush(claves["waweb_outbox"], json.dumps({"to": "57300", "text": "hola"}))
+    await r.zadd("debounce:pending", {str(conv_id): 9_999_999_999_999})
+    for nombre, clave in claves.items():
+        assert await r.exists(clave) == 1, f"falta sembrar {nombre}"
+    return conv_id, claves
+
+
+async def _borrar_estado(conv_id: uuid.UUID, claves: dict[str, str]) -> None:
+    """Higiene: varias claves sembradas no tienen TTL."""
+    from core.memory.working import get_redis
+
+    r = get_redis()
+    await r.unlink(*claves.values())
+    await r.zrem("debounce:pending", str(conv_id))
+
+
+async def test_purge_sql_fallida_deja_redis_intacto(monkeypatch) -> None:
+    """Si la función SQL falla (rollback), el negocio sigue y conserva su estado Redis.
+
+    Se anula el guard de Python para que la función SQL se niegue (negocio activo):
+    falla real de la purga SQL, con rollback.
+    """
+    import sqlalchemy.exc
+
+    import core.tenants as tenants
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.memory.working import get_redis
+
+    tid, slug = await _onboard(_uniq("purge-sqlfalla"))
+    conv_id, claves = await _estado_redis(tid)
+
+    monkeypatch.setattr(tenants, "require_suspended_for_purge", lambda _t: None)
+    with pytest.raises(sqlalchemy.exc.DBAPIError, match="no está suspendido"):
+        await tenants.purge_tenant(str(tid), f"ELIMINAR {slug}")
+
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is not None, "el negocio sigue"
+    r = get_redis()
+    for nombre, clave in claves.items():
+        assert await r.exists(clave) == 1, f"{nombre} ({clave}) se borró con la purga fallida"
+    assert await r.zscore("debounce:pending", str(conv_id)) is not None
+    await _borrar_estado(conv_id, claves)
+
+
+async def test_purge_limpia_redis_del_tenant_y_no_el_de_otro() -> None:
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.memory.working import get_redis
+    from core.tenants import deactivate_tenant, purge_tenant
+
+    tid, slug = await _onboard(_uniq("purge-redis"))
+    otro, _ = await _onboard(_uniq("purge-redis-otro"))
+    conv_id, claves = await _estado_redis(tid)
+    otro_conv, otras = await _estado_redis(otro)
+    # Clave de varios negocios con el purgado en segunda posición: no es suya.
+    compartida = f"webhook_firma_ajena:{otro}:{tid}"
+    otras["compartida"] = compartida
+    await get_redis().set(compartida, "1", ex=600)
+
+    await deactivate_tenant(slug)
+    assert await purge_tenant(str(tid), f"ELIMINAR {slug}") is True
+
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is None
+    r = get_redis()
+    for nombre, clave in claves.items():
+        assert await r.exists(clave) == 0, f"{nombre} ({clave}) quedó tras la purga"
+    assert await r.zscore("debounce:pending", str(conv_id)) is None
+    for nombre, clave in otras.items():
+        assert await r.exists(clave) == 1, f"{nombre} del OTRO negocio se borró"
+    assert await r.zscore("debounce:pending", str(otro_conv)) is not None
+    await _borrar_estado(otro_conv, otras)
+
+
+class _LogQueAnota:
+    """Sustituto del logger de `core.tenants` (structlog cachea el logger: `capture_logs`
+    no ve los eventos de un logger ya usado)."""
+
+    def __init__(self, eventos: list[dict]) -> None:
+        self._eventos = eventos
+
+    def __getattr__(self, nivel: str):
+        def anotar(event: str, **kw) -> None:
+            self._eventos.append({"event": event, "log_level": nivel, **kw})
+
+        return anotar
+
+
+class _RedisCaido:
+    """Cliente Redis que falla en todo lo que usa la limpieza."""
+
+    async def unlink(self, *_a, **_k):
+        raise ConnectionError("redis caído (test)")
+
+    async def zrem(self, *_a, **_k):
+        raise ConnectionError("redis caído (test)")
+
+    def scan_iter(self, *_a, **_k):
+        raise ConnectionError("redis caído (test)")
+
+
+async def test_purge_con_redis_caido_tras_commit_registra_y_se_reintenta(monkeypatch) -> None:
+    """Redis falla DESPUÉS del commit: el negocio queda purgado, se registra el error con
+    el tenant y `purge_tenant_redis` (reintento idempotente) termina la limpieza."""
+    import core.memory.working as working
+    import core.tenants as tenants
+    from core.db.models import Tenant
+    from core.db.session import get_session
+    from core.tenants import deactivate_tenant, purge_tenant, purge_tenant_redis
+
+    tid, slug = await _onboard(_uniq("purge-redisfalla"))
+    _conv_id, claves = await _estado_redis(tid)
+    vivo, _ = await _onboard(_uniq("purge-redis-vivo"))
+    _vivo_conv, claves_vivo = await _estado_redis(vivo)
+    await deactivate_tenant(slug)
+
+    logs: list[dict] = []
+    monkeypatch.setattr(tenants, "log", _LogQueAnota(logs))
+    real = working.get_redis
+    monkeypatch.setattr(working, "get_redis", lambda: _RedisCaido())
+    assert await purge_tenant(str(tid), f"ELIMINAR {slug}") is False
+    monkeypatch.setattr(working, "get_redis", real)
+
+    async with get_session() as session:
+        assert await session.get(Tenant, tid) is None, "la purga SQL no se revierte"
+    fallos = [e for e in logs if e.get("event") == "tenant_purge_redis_cleanup_failed"]
+    assert len(fallos) == 1, logs
+    assert fallos[0]["tenant_id"] == str(tid)
+    assert fallos[0]["log_level"] == "error"
+    assert fallos[0]["exc_info"] is True
+    assert f"tenant purge-redis {tid}" in fallos[0]["retry"]
+
+    r = real()
+    assert await r.exists(claves["wm_tenant"]) == 1, "Redis quedó sin limpiar (el fallo es real)"
+
+    # Reintento: con mayúsculas también (se normaliza el UUID).
+    borradas = await purge_tenant_redis(str(tid).upper())
+    assert borradas >= 1
+    for nombre in ("wm_tenant", "turns", "inbound", "debounce_inbound", "terminos", "waweb_outbox"):
+        assert await r.exists(claves[nombre]) == 0, f"{nombre} quedó tras el reintento"
+    assert await purge_tenant_redis(tid) == 0, "idempotente"
+
+    # Sobre un negocio vivo se niega y no borra nada.
+    with pytest.raises(ValueError, match="todavía existe"):
+        await purge_tenant_redis(vivo)
+    # Con el id de una conversación del negocio vivo (error de copiar y pegar) también.
+    with pytest.raises(ValueError, match="posición que no es la de un negocio"):
+        await purge_tenant_redis(_vivo_conv)
+    for nombre, clave in claves_vivo.items():
+        assert await r.exists(clave) == 1, f"{nombre} del negocio vivo se borró"
+    await _borrar_estado(_vivo_conv, claves_vivo)
+    # Lo que va solo por conversación vence solo; aquí se limpia a mano.
+    await _borrar_estado(_conv_id, claves)

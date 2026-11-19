@@ -13,6 +13,7 @@ from typing import Any
 from agentcore_contracts import AgentSpec
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.db.models import AgentSpecRecord
 from core.db.session import get_session
@@ -41,6 +42,19 @@ def enabled_business_packs(spec: AgentSpec) -> set[str]:
     return set(spec.packs)
 
 
+def con_tenant_de_la_fila(spec: AgentSpec, tenant_id: uuid.UUID) -> AgentSpec:
+    """`spec` con `tenantId` = el negocio dueño de la fila (se aplica al guardar).
+
+    El `tenantId` del JSON v2 no es fuente de verdad: lo trae el cuerpo de la
+    petición (editor crudo, presets). Los lectores tampoco lo usan para resolver
+    `TENANTS_ROOT/<slug>/` (salen del `tenant_scope`): filas viejas con uno ajeno
+    no cargan artefactos de otro negocio.
+    """
+    if spec.tenantId == str(tenant_id):
+        return spec
+    return spec.model_copy(update={"tenantId": str(tenant_id)})
+
+
 def count_tenant_packs(spec: AgentSpec) -> int:
     """Cuántos packs de negocio tiene habilitados el tenant (sin el core)."""
     return len(enabled_business_packs(spec))
@@ -64,7 +78,7 @@ DEFAULT_SPEC: dict[str, Any] = {
         "maxLength": 500,
         "forbiddenPhrases": [],
     },
-    "model": {"primary": "deepseek-chat", "temperature": 0.3},
+    "model": {"primary": "deepseek-flash", "temperature": 0.3},
     "memory": {"shortTermTurns": 30},
     "playbooks": [
         {"name": "identidad", "description": "Identidad del asistente"},
@@ -151,12 +165,11 @@ async def _migrate_legacy_escalation(tenant_id: uuid.UUID, raw: dict[str, Any]) 
         settings_row.escalation_config = config
 
 
-async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> AgentSpec:
-    """Fusiona los playbooks default en el índice si faltan (data migration perezosa).
-
-    Los specs sembrados antes de añadir `respuestas` no la tienen; el merge es
-    idempotente y solo escribe si faltan referencias.
-    """
+def con_playbooks_por_defecto(spec: AgentSpec) -> AgentSpec | None:
+    """`spec` con los playbooks default y los de sus packs habilitados que le faltan en el
+    índice, o None si no le falta ninguno. Puro: es la parte de `_ensure_default_playbooks`
+    que no escribe, para leer el spec como lo ve el loop sin tocar la fila (backfill de
+    HU-AOS-13)."""
     existing = {p.name for p in spec.playbooks}
     missing = [ref for ref in DEFAULT_PLAYBOOK_REFS if ref["name"] not in existing]
     # Playbooks de packs habilitados del tenant (ADR-0019): un playbook nuevo en
@@ -172,8 +185,25 @@ async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> Ag
     except Exception:
         pass
     if not missing:
+        return None
+    # `model_validate`, no `model_copy(update=...)`: model_copy no valida y los `missing`
+    # (dicts) quedaban como dicts en el spec devuelto; el primer turno tras sumarse un
+    # playbook de pack se caía en `load_playbook` (`'dict' object has no attribute
+    # 'name'`). Visto con los journeys de HU-SUB-12.
+    return AgentSpec.model_validate(
+        {**spec.model_dump(mode="json"), "playbooks": [*spec.model_dump(mode="json")["playbooks"], *missing]}
+    )
+
+
+async def _ensure_default_playbooks(tenant_id: uuid.UUID, spec: AgentSpec) -> AgentSpec:
+    """Fusiona los playbooks default en el índice si faltan (data migration perezosa).
+
+    Los specs sembrados antes de añadir `respuestas` no la tienen; el merge es
+    idempotente y solo escribe si faltan referencias.
+    """
+    merged = con_playbooks_por_defecto(spec)
+    if merged is None:
         return spec
-    merged = spec.model_copy(update={"playbooks": [*spec.playbooks, *missing]})
     async with get_session() as session:
         row = (
             await session.execute(
@@ -241,6 +271,30 @@ async def load_active_spec(tenant_id: uuid.UUID | None = None) -> AgentSpec:
     await _migrate_legacy_escalation(tenant_id, row.spec)
     spec = AgentSpec.model_validate(_drop_legacy_fields(row.spec))
     return await _ensure_default_playbooks(tenant_id, spec)
+
+
+async def leer_spec_activo(tenant_id: uuid.UUID) -> tuple[uuid.UUID, AgentSpec] | None:
+    """`(id de la fila, AgentSpec)` del spec activo del negocio, como lo ve el loop, SIN
+    escribir: no siembra el default, no persiste el merge de playbooks ni el rescate del
+    escalamiento v1 (los hace el loop en su turno). None si el negocio no tiene spec activo.
+    Lo usa el backfill de HU-AOS-13, que no toca `agent_specs`."""
+    async with get_session() as session:
+        row = (
+            await session.execute(
+                select(AgentSpecRecord)
+                .where(
+                    AgentSpecRecord.tenant_id == tenant_id,
+                    AgentSpecRecord.is_active.is_(True),
+                    AgentSpecRecord.deleted_at.is_(None),
+                )
+                .order_by(AgentSpecRecord.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if row is None:
+        return None
+    spec = AgentSpec.model_validate(_drop_legacy_fields(row.spec))
+    return row.id, con_playbooks_por_defecto(spec) or spec
 
 
 async def activate_spec_version(
@@ -316,7 +370,11 @@ async def next_spec_version(tenant_id: uuid.UUID) -> str:
 
 
 async def save_spec_version(
-    new_spec: AgentSpec, tenant_id: uuid.UUID | None = None
+    new_spec: AgentSpec,
+    tenant_id: uuid.UUID | None = None,
+    *,
+    base_id: uuid.UUID | None = None,
+    session: AsyncSession | None = None,
 ) -> str | None:
     """Persiste `new_spec` como nueva versión ACTIVA del tenant.
 
@@ -324,35 +382,57 @@ async def save_spec_version(
     Fuente única para el panel SSR (`_save_spec_version`) y la API `/api/v1`
     (ADR-0076/0077). Devuelve la versión nueva, o `None` si hubo una edición
     concurrente (los índices parciales protegen la integridad).
+    El `tenantId` del spec se fuerza al negocio que guarda, nunca el del JSON.
+
+    Con `base_id` (el id de la fila activa de la que partió `new_spec`, de `leer_spec_activo`) guarda
+    solo si esa fila SIGUE activa: si otra edición ya confirmó una versión nueva devuelve `None` y no
+    pisa nada. Sin él, leer-modificar-guardar pierde la edición del que confirmó en medio (los índices
+    parciales solo atajan a dos que confirman a la vez, no a uno que lee después de que el otro confirmó).
+
+    Con `session` la versión se escribe en la transacción de quien llama (para guardar el spec y otra
+    cosa de forma atómica): aquí no se confirma, y si devuelve `None` quien llama debe abortar (la
+    sesión puede quedar con un flush fallido).
     """
     tid = tenant_id or get_current_tenant_id()
     if tid is None:
         return None
+    new_spec = con_tenant_de_la_fila(new_spec, tid)
     version = await next_spec_version(tid)
-    try:
-        async with get_session() as session:
-            current_row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tid,
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if current_row is not None:
-                current_row.is_active = False
-            session.add(
-                AgentSpecRecord(
-                    tenant_id=tid,
-                    version=version,
-                    is_active=True,
-                    spec=new_spec.model_dump(mode="json"),
+
+    async def _guardar(sesion: AsyncSession) -> str | None:
+        current_row = (
+            await sesion.execute(
+                select(AgentSpecRecord).where(
+                    AgentSpecRecord.tenant_id == tid,
+                    AgentSpecRecord.is_active.is_(True),
+                    AgentSpecRecord.deleted_at.is_(None),
                 )
             )
+        ).scalar_one_or_none()
+        if base_id is not None and (current_row is None or current_row.id != base_id):
+            return None
+        if current_row is not None:
+            current_row.is_active = False
+        sesion.add(
+            AgentSpecRecord(
+                tenant_id=tid,
+                version=version,
+                is_active=True,
+                spec=new_spec.model_dump(mode="json"),
+            )
+        )
+        if session is not None:
+            await sesion.flush()
+        return version
+
+    try:
+        if session is not None:
+            return await _guardar(session)
+        async with get_session() as propia:
+            resultado = await _guardar(propia)
+        return resultado
     except IntegrityError:
         return None
-    return version
 
 
 async def save_spec_if_changed(
@@ -362,12 +442,16 @@ async def save_spec_if_changed(
 
     Evita crear una versión en cada guardado cuando lo único que cambió fue
     `AppSettings` (nombre, tono, debounce, etc.). Fuente única para el panel SSR
-    y la API.
+    y la API. El `tenantId` de `data` se reemplaza por el del negocio que guarda
+    antes de comparar: un JSON que solo cambia el `tenantId` no crea versión.
     """
+    tid = tenant_id or get_current_tenant_id()
+    if tid is None:
+        return None
     try:
-        new_spec = AgentSpec.model_validate(data)
+        new_spec = AgentSpec.model_validate({**data, "tenantId": str(tid)})
     except Exception:
         return None
     if new_spec.model_dump(mode="json") == current.model_dump(mode="json"):
         return None
-    return await save_spec_version(new_spec, tenant_id)
+    return await save_spec_version(new_spec, tid)

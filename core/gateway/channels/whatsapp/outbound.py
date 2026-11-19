@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 
 from core.gateway.channels.base import OutboundAdapter
@@ -36,6 +38,74 @@ class WhatsAppMetaOutbound(OutboundAdapter):
             "image": {"link": image_url, "caption": caption},
         }
         return await self._post(credentials, payload)
+
+    async def send_template(
+        self,
+        credentials: dict[str, str],
+        to_external_id: str,
+        name: str,
+        language: str,
+        components: list[dict[str, Any]],
+    ) -> str:
+        """Plantilla aprobada fuera de la ventana de 24 h (HU-ARCH-13, ADR-0108).
+        `components` llega ya resuelto (parámetros del evento o de la BD)."""
+        to = to_external_id.removeprefix("whatsapp:").lstrip("+")
+        template: dict[str, Any] = {"name": name, "language": {"code": language}}
+        if components:
+            template["components"] = components
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "template",
+            "template": template,
+        }
+        return await self._post(credentials, payload)
+
+    async def send_interactive(
+        self, credentials: dict[str, str], to_external_id: str, interactive: dict[str, Any]
+    ) -> str:
+        """Botones de respuesta o lista dentro de la ventana de 24 h (HU-AOS-09, HU-INMO-03). El id
+        de cada botón es el payload que vuelve en `interactive.button_reply.id` (p. ej. el
+        `confirmar:` firmado); el de cada fila de lista, en `interactive.list_reply.id`."""
+        to = to_external_id.removeprefix("whatsapp:").lstrip("+")
+        if interactive.get("type") == "list":
+            return await self._post(credentials, self._payload_lista(to, interactive))
+        botones = [
+            {"type": "reply", "reply": {"id": str(b["id"]), "title": str(b["title"])}}
+            for b in interactive.get("buttons") or []
+        ]
+        if interactive.get("type") != "button" or not botones or not interactive.get("body"):
+            raise ChannelError("Mensaje interactivo inválido (se esperan cuerpo y botones)")
+        cuerpo: dict[str, Any] = {"type": "button", "body": {"text": str(interactive["body"])}, "action": {"buttons": botones}}
+        self._con_pie(cuerpo, interactive)
+        return await self._post(credentials, {"messaging_product": "whatsapp", "to": to, "type": "interactive", "interactive": cuerpo})
+
+    @staticmethod
+    def _con_pie(destino: dict[str, Any], interactive: dict[str, Any]) -> None:
+        """El pie (`footer.text`, opcional) de un interactivo; se omite si viene vacío o en blanco."""
+        pie = str(interactive.get("footer") or "").strip()
+        if pie:
+            destino["footer"] = {"text": pie}
+
+    @staticmethod
+    def _payload_lista(to: str, interactive: dict[str, Any]) -> dict[str, Any]:
+        """Lista con una sola sección: `action.sections[0].rows[]`. La descripción de fila es
+        opcional y se omite si viene vacía o en blanco (Meta rechaza cadenas vacías)."""
+        filas: list[dict[str, str]] = []
+        for f in interactive.get("rows") or []:
+            fila = {"id": str(f["id"]), "title": str(f["title"])}
+            if str(f.get("description") or "").strip():
+                fila["description"] = str(f["description"])
+            filas.append(fila)
+        if not filas or not interactive.get("body") or not interactive.get("button"):
+            raise ChannelError("Mensaje interactivo inválido (se esperan cuerpo, botón y filas)")
+        cuerpo: dict[str, Any] = {
+            "type": "list",
+            "body": {"text": str(interactive["body"])},
+            "action": {"button": str(interactive["button"]), "sections": [{"rows": filas}]},
+        }
+        WhatsAppMetaOutbound._con_pie(cuerpo, interactive)
+        return {"messaging_product": "whatsapp", "to": to, "type": "interactive", "interactive": cuerpo}
 
     @staticmethod
     async def _post(credentials: dict[str, str], payload: dict[str, object]) -> str:

@@ -13,21 +13,57 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Response, UploadFile
-from pydantic import BaseModel
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import func, or_, select, update
 
-from core.api.deps import Principal, require
+from core import almacenamiento
+from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
+from core.db.models import Customer
 from core.db.session import get_owned, get_session
+from core.shared.tenant import tenant_slug
+from core.shared.test_mode import TEST_CHANNEL
 
-from .models import Category, Inventory, Order, OrderItem, Product, ProductVariant, Promotion
+from . import aliados
+
+# Registra los providers de búsqueda global del pack (ADR-0096).
+from . import search as _search  # noqa: F401
+from . import sync as _sync  # noqa: F401
+from .fotos import key_foto_valida, url_foto
+from .models import (
+    Ally,
+    Category,
+    Inventory,
+    Order,
+    OrderItem,
+    Product,
+    ProductVariant,
+    Promotion,
+)
 
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
 
 ORDER_STATUSES = ("abierto", "despachado", "entregado", "cancelado", "expirado")
+PAYMENT_STATUSES = ("pendiente", "en_revision", "pagado", "rechazado")
+
+# HU-CRM-01: la foto del producto es un link público. Solo https (WhatsApp la descarga
+# por el link) y con tope de largo.
+IMAGE_URL_MAX = 2048
+
+
+def _image_url_valida(valor: str | None) -> str | None:
+    """`None` si no viene; `""` para quitarla; si no, una URL https sin espacios."""
+    if valor is None:
+        return None
+    valor = valor.strip()
+    if not valor:
+        return ""
+    if not valor.lower().startswith("https://") or len(valor) <= len("https://") or any(c.isspace() for c in valor):
+        raise ValueError("La foto tiene que ser un link https://")
+    return valor
 
 
 # ------------------------------------------------------------------ dashboard
@@ -55,7 +91,6 @@ class CommerceDashboard(BaseModel):
 async def commerce_dashboard(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],
 ) -> CommerceDashboard:
-    from core.db.models import Customer
 
     tenant_id = principal.tenant_id
     async with get_session() as session:
@@ -67,7 +102,9 @@ async def commerce_dashboard(
             )
         ).scalars().all()
         products = (
-            await session.execute(select(Product).where(Product.tenant_id == tenant_id))
+            await session.execute(
+                select(Product).where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+            )
         ).scalars().all()
         promotions = (
             await session.execute(select(Promotion).where(Promotion.tenant_id == tenant_id))
@@ -117,7 +154,11 @@ class ProductOut(BaseModel):
     description: str
     category_id: uuid.UUID | None
     category: str
+    ally_id: uuid.UUID | None = None  # HU-CRM-03
     price: float
+    image_url: str | None = None  # resuelta: firmada si hay subida, si no el link (para mostrar)
+    image_url_externa: str | None = None  # link externo crudo (HU-CRM-01), para el formulario
+    image_key: str | None = None  # HU-CRM-05 (clave de la foto subida)
     variants: list[VariantOut]
 
 
@@ -126,23 +167,54 @@ class ProductSave(BaseModel):
     name: str
     description: str = ""
     category_id: uuid.UUID | None = None
+    # HU-CRM-03: si no viene, el aliado no cambia; `null` lo quita. Así un cliente que no
+    # conoce los aliados (la APK) no los borra al editar.
+    ally_id: uuid.UUID | None = None
     sku: str = ""
-    price: float = 0
-    stock: int = 0
+    # Precio y stock nunca negativos (422 con el campo marcado). Topes: lo que
+    # cabe en la columna (`Numeric(12, 2)`, `Integer`) para no terminar en un 500 de la base.
+    price: float = Field(default=0, ge=0, le=9_999_999_999, allow_inf_nan=False)
+    stock: int = Field(default=0, ge=0, le=1_000_000_000)
+    # HU-CRM-01: None = no cambia; "" = quita la foto.
+    image_url: str | None = Field(default=None, max_length=IMAGE_URL_MAX)
+    # HU-CRM-05: clave de la foto subida (controlador único). None = no cambia; "" = quita.
+    image_key: str | None = None
+
+    @field_validator("image_url")
+    @classmethod
+    def _solo_https(cls, valor: str | None) -> str | None:
+        return _image_url_valida(valor)
+
+
+def _key_producto_valida(key: str, slug: str | None) -> bool:
+    """La clave de una foto subida tiene que ser de este negocio, sin `..` ni rutas raras, y
+    existir en disco dentro de `TENANTS_ROOT/<slug>/productos/` (no basta el prefijo del texto)."""
+    if not slug or not key_foto_valida(key, slug):
+        return False
+    return almacenamiento.abrir(key, dentro_de=almacenamiento.carpeta_de("producto", slug)) is not None
 
 
 @router.get("/products", response_model=list[ProductOut])
 async def list_products(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],
+    ally_id: Annotated[
+        str | None,
+        Query(description="HU-CRM-03: id del aliado, o `none` para los productos sin aliado."),
+    ] = None,
 ) -> list[ProductOut]:
     tenant_id = principal.tenant_id
+    filtro = select(Product).where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+    if ally_id is not None:
+        if ally_id == "none":
+            filtro = filtro.where(Product.ally_id.is_(None))
+        else:
+            try:
+                filtro = filtro.where(Product.ally_id == uuid.UUID(ally_id))
+            except ValueError:
+                raise ApiError.bad_request("ally_id inválido.", "invalid_ally_id") from None
     async with get_session() as session:
         products = (
-            (
-                await session.execute(
-                    select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
-                )
-            )
+            (await session.execute(filtro.order_by(Product.name)))
             .scalars()
             .all()
         )
@@ -192,7 +264,11 @@ async def list_products(
                 description=p.description or "",
                 category_id=p.category_id,
                 category=cat_by_id.get(p.category_id, "Sin categoría"),
+                ally_id=p.ally_id,
                 price=float(product_variants[0].price or 0) if product_variants else 0.0,
+                image_url=url_foto(p),
+                image_url_externa=p.image_url,
+                image_key=p.image_key,
                 variants=[
                     VariantOut(
                         id=v.id,
@@ -216,6 +292,8 @@ async def save_product(
 ) -> Response:
     """Alta/edición del producto con su variante por defecto e inventario."""
     tenant_id = principal.tenant_id
+    slug = await tenant_slug(tenant_id) if tenant_id is not None else None
+    viejo_key: str | None = None
     async with get_session() as session:
         # Defensa en profundidad: no dejar la categoría colgando a otro tenant.
         resolved_category_id: uuid.UUID | None = None
@@ -223,6 +301,8 @@ async def save_product(
             category = await get_owned(session, Category, payload.category_id, tenant_id)
             if category is not None:
                 resolved_category_id = category.id
+        cambia_aliado = "ally_id" in payload.model_fields_set
+        resolved_ally_id = await _resolver_aliado(session, tenant_id, payload.ally_id) if cambia_aliado else None
 
         if payload.product_id is not None:
             product = await get_owned(session, Product, payload.product_id, tenant_id)
@@ -231,6 +311,17 @@ async def save_product(
             product.name = payload.name
             product.description = payload.description
             product.category_id = resolved_category_id
+            if payload.image_url is not None:
+                product.image_url = payload.image_url or None
+            if payload.image_key is not None:
+                nueva_key = payload.image_key or None
+                if nueva_key is not None and not _key_producto_valida(nueva_key, slug):
+                    raise ApiError.bad_request("La foto subida no es válida.", "image_key_invalida")
+                if product.image_key and product.image_key != nueva_key:
+                    viejo_key = product.image_key
+                product.image_key = nueva_key
+            if cambia_aliado:
+                product.ally_id = resolved_ally_id
             variant = (
                 (
                     await session.execute(
@@ -261,10 +352,16 @@ async def save_product(
                 else:
                     inventory.stock_quantity = payload.stock
         else:
+            nueva_key = payload.image_key or None
+            if nueva_key is not None and not _key_producto_valida(nueva_key, slug):
+                raise ApiError.bad_request("La foto subida no es válida.", "image_key_invalida")
             product = Product(
                 name=payload.name,
                 description=payload.description or "",
                 category_id=resolved_category_id,
+                image_url=payload.image_url or None,
+                image_key=nueva_key,
+                ally_id=resolved_ally_id,
             )
             session.add(product)
             await session.flush()
@@ -277,7 +374,35 @@ async def save_product(
             await session.flush()
             session.add(Inventory(variant_id=variant.id, stock_quantity=payload.stock))
             product.has_variants = False
+    if viejo_key:
+        # La foto anterior se reemplazó: se borra después de confirmar el cambio de clave.
+        # Solo dentro de la carpeta de fotos del propio negocio: una key vieja sospechosa no borra nada.
+        if slug:
+            almacenamiento.borrar(viejo_key, dentro_de=almacenamiento.carpeta_de("producto", slug))
     return Response(status_code=204)
+
+
+@router.post("/products/image", status_code=201)
+async def upload_product_image(
+    archivo: Annotated[UploadFile, File()],
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> dict[str, str]:
+    """Sube la foto de un producto al controlador único (HU-CRM-05) y devuelve su clave y URL.
+
+    El panel/APK la suben antes de guardar el producto; luego mandan `image_key` en el alta."""
+    tenant_id = principal.tenant_id
+    slug = await tenant_slug(tenant_id) if tenant_id is not None else None
+    if slug is None:
+        raise ApiError.bad_request("No hay negocio activo.", "no_tenant")
+    limite = almacenamiento.PERFILES["producto"].max_bytes
+    contenido = await archivo.read(limite + 1)
+    try:
+        ref = almacenamiento.guardar(
+            "producto", contenido, mimetype=archivo.content_type, tenant_slug=slug
+        )
+    except almacenamiento.StorageInvalido as exc:
+        raise ApiError.bad_request(str(exc), exc.codigo) from exc
+    return {"image_key": ref.key, "image_url": ref.url}
 
 
 # ------------------------------------------------------------------ categorías
@@ -293,7 +418,7 @@ class CategorySave(BaseModel):
     category_id: uuid.UUID | None = None
     name: str
     parent_id: uuid.UUID | None = None
-    sort_order: int = 0
+    sort_order: int = Field(default=0, ge=0, le=100_000)
 
 
 @router.get("/categories", response_model=list[CategoryOut])
@@ -374,6 +499,311 @@ async def delete_category(
     return Response(status_code=204)
 
 
+# ------------------------------------------------------------------ aliados (HU-CRM-03)
+class ModulosOut(BaseModel):
+    """Módulos opcionales del pack encendidos en el negocio (el panel decide qué mostrar)."""
+
+    aliados: bool
+
+
+class AllyContact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contacto: str | None = Field(default=None, max_length=120)
+    telefono: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=254)
+    notas: str | None = Field(default=None, max_length=500)
+
+
+class AllyOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    contact_info: AllyContact
+    active: bool
+    products: int
+    created_at: datetime | None = None
+
+
+class AllySave(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    contact_info: AllyContact = Field(default_factory=AllyContact)
+    active: bool = True
+
+
+class AllyPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    contact_info: AllyContact | None = None
+    active: bool | None = None
+
+
+class AliadosEstado(BaseModel):
+    habilitado: bool
+    por: str | None = None
+    en: datetime | None = None
+
+
+class AliadosCambio(BaseModel):
+    habilitado: bool
+
+
+async def _exigir_aliados(tenant_id: uuid.UUID | None) -> None:
+    # Con el módulo apagado los aliados no existen para el negocio: 404, no 403.
+    if not await aliados.habilitados(tenant_id):
+        raise ApiError(404, "aliados_deshabilitados", "Los aliados no están habilitados en este negocio.")
+
+
+async def _resolver_aliado(session: Any, tenant_id: uuid.UUID | None, ally_id: uuid.UUID | None) -> uuid.UUID | None:
+    """El aliado a guardar en un producto o una promoción. `None` lo quita (siempre se puede,
+    aun con el módulo apagado); asignar uno exige el módulo encendido y un aliado vivo del
+    mismo negocio (si es de otro negocio, 404 como si no existiera)."""
+    if ally_id is None:
+        return None
+    await _exigir_aliados(tenant_id)
+    ally = await get_owned(session, Ally, ally_id, tenant_id)
+    if ally is None or ally.deleted_at is not None:
+        raise ApiError.not_found("Aliado no encontrado.")
+    return ally.id
+
+
+def _contacto(raw: Any) -> AllyContact:
+    datos = raw if isinstance(raw, dict) else {}
+    return AllyContact(**{k: datos.get(k) for k in AllyContact.model_fields if datos.get(k)})
+
+
+def _contacto_guardado(contacto: AllyContact) -> dict[str, str]:
+    return {k: v.strip() for k, v in contacto.model_dump().items() if isinstance(v, str) and v.strip()}
+
+
+async def _nombre_libre(session: Any, tenant_id: uuid.UUID | None, nombre: str, excepto: uuid.UUID | None = None) -> None:
+    q = select(Ally.id).where(
+        Ally.tenant_id == tenant_id,
+        Ally.deleted_at.is_(None),
+        func.lower(Ally.name) == nombre.lower(),
+    )
+    if excepto is not None:
+        q = q.where(Ally.id != excepto)
+    if (await session.execute(q)).first() is not None:
+        raise ApiError(409, "aliado_duplicado", f"Ya existe un aliado llamado «{nombre}».")
+
+
+async def _ally_out(session: Any, tenant_id: uuid.UUID | None, ally: Ally) -> AllyOut:
+    productos = (
+        await session.execute(
+            select(func.count())
+            .select_from(Product)
+            .where(
+                Product.tenant_id == tenant_id,
+                Product.ally_id == ally.id,
+                Product.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one()
+    return AllyOut(
+        id=ally.id,
+        name=ally.name,
+        contact_info=_contacto(ally.contact_info),
+        active=bool(ally.active),
+        products=int(productos or 0),
+        created_at=ally.created_at,
+    )
+
+
+@router.get("/modulos", response_model=ModulosOut)
+async def commerce_modulos(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> ModulosOut:
+    return ModulosOut(aliados=await aliados.habilitados(principal.tenant_id))
+
+
+class MinimoPagoEnLineaOut(BaseModel):
+    """Mínimo por cobro para pagar en línea (HU-SUB-25). El panel lo usa para avisar al guardar un plan."""
+
+    minimo: float | None = Field(
+        description="Monto mínimo por cobro en la moneda del negocio; `null` si no hay pasarela que lo declare.",
+    )
+    fuente: Literal["negocio", "pasarela", "ninguna"] = Field(
+        description="`negocio`: lo fijó el negocio; `pasarela`: lo declara la pasarela para su ambiente.",
+    )
+    moneda: str = "COP"
+    cuentas_de_transferencia: int = Field(
+        description="Cuentas de transferencia configuradas (0 = el cobro bajo el mínimo no tendría cómo pagarse).",
+    )
+
+
+@router.get("/pago-en-linea/minimo", response_model=MinimoPagoEnLineaOut)
+async def minimo_pago_en_linea(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> MinimoPagoEnLineaOut:
+    from .minimo import cuentas_de_transferencia_configuradas, minimo_efectivo
+    from .skills import _plugin_config
+
+    minimo, fuente = await minimo_efectivo(await _plugin_config())
+    return MinimoPagoEnLineaOut(
+        minimo=minimo, fuente=fuente, cuentas_de_transferencia=await cuentas_de_transferencia_configuradas()
+    )
+
+
+@router.get("/allies", response_model=list[AllyOut])
+async def list_allies(
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> list[AllyOut]:
+    tenant_id = principal.tenant_id
+    await _exigir_aliados(tenant_id)
+    async with get_session() as session:
+        rows = (
+            await session.execute(
+                select(Ally)
+                .where(Ally.tenant_id == tenant_id, Ally.deleted_at.is_(None))
+                .order_by(func.lower(Ally.name))
+                .limit(500)
+            )
+        ).scalars().all()
+        conteo = dict(
+            (
+                await session.execute(
+                    select(Product.ally_id, func.count())
+                    .where(
+                        Product.tenant_id == tenant_id,
+                        Product.ally_id.is_not(None),
+                        Product.deleted_at.is_(None),
+                    )
+                    .group_by(Product.ally_id)
+                )
+            ).all()
+        )
+    return [
+        AllyOut(
+            id=a.id,
+            name=a.name,
+            contact_info=_contacto(a.contact_info),
+            active=bool(a.active),
+            products=int(conteo.get(a.id, 0)),
+            created_at=a.created_at,
+        )
+        for a in rows
+    ]
+
+
+@router.post("/allies", response_model=AllyOut, status_code=201)
+async def create_ally(
+    payload: AllySave,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> AllyOut:
+    tenant_id = principal.tenant_id
+    await _exigir_aliados(tenant_id)
+    nombre = payload.name.strip()
+    if not nombre:
+        raise ApiError.bad_request("El aliado necesita un nombre.", "invalid_name")
+    async with get_session() as session:
+        await _nombre_libre(session, tenant_id, nombre)
+        ally = Ally(name=nombre, contact_info=_contacto_guardado(payload.contact_info), active=payload.active)
+        session.add(ally)
+        await session.flush()
+        return await _ally_out(session, tenant_id, ally)
+
+
+@router.patch("/allies/{ally_id}", response_model=AllyOut)
+async def update_ally(
+    ally_id: uuid.UUID,
+    payload: AllyPatch,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> AllyOut:
+    tenant_id = principal.tenant_id
+    await _exigir_aliados(tenant_id)
+    async with get_session() as session:
+        ally = await get_owned(session, Ally, ally_id, tenant_id)
+        if ally is None or ally.deleted_at is not None:
+            raise ApiError.not_found("Aliado no encontrado.")
+        if payload.name is not None:
+            nombre = payload.name.strip()
+            if not nombre:
+                raise ApiError.bad_request("El aliado necesita un nombre.", "invalid_name")
+            await _nombre_libre(session, tenant_id, nombre, excepto=ally.id)
+            ally.name = nombre
+        if payload.contact_info is not None:
+            ally.contact_info = _contacto_guardado(payload.contact_info)
+        if payload.active is not None:
+            ally.active = payload.active
+        await session.flush()
+        return await _ally_out(session, tenant_id, ally)
+
+
+@router.delete("/allies/{ally_id}", status_code=204)
+async def delete_ally(
+    ally_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> Response:
+    """Borrado lógico. Sus productos quedan «sin aliado» y sus promociones se desactivan
+    (conservan el aliado): quitarles el aliado las abriría a todo el catálogo."""
+    tenant_id = principal.tenant_id
+    await _exigir_aliados(tenant_id)
+    from datetime import UTC
+
+    async with get_session() as session:
+        ally = await get_owned(session, Ally, ally_id, tenant_id)
+        if ally is None or ally.deleted_at is not None:
+            raise ApiError.not_found("Aliado no encontrado.")
+        ally.deleted_at = datetime.now(UTC)
+        ally.active = False
+        await session.execute(
+            update(Product)
+            .where(Product.tenant_id == tenant_id, Product.ally_id == ally.id)
+            .values(ally_id=None)
+        )
+        await session.execute(
+            update(Promotion)
+            .where(Promotion.tenant_id == tenant_id, Promotion.ally_id == ally.id)
+            .values(active=False)
+        )
+    return Response(status_code=204)
+
+
+# Plataforma: solo el master enciende o apaga los aliados de un negocio (D-SPEC-33-2,
+# Negocios › Acciones). Vive en el pack para que el core no conozca el dominio.
+def _require_master(principal: Principal) -> None:
+    from core.admin.roles import es_master
+
+    if not es_master(principal.admin):
+        raise ApiError.forbidden("Solo el admin master enciende los aliados de un negocio.")
+
+
+def _estado_out(valor: dict[str, Any]) -> AliadosEstado:
+    en = valor.get("en")
+    return AliadosEstado(
+        habilitado=bool(valor.get("habilitado")),
+        por=valor.get("por"),
+        en=datetime.fromisoformat(en) if isinstance(en, str) else None,
+    )
+
+
+@router.get("/platform/tenants/{tenant_id}/aliados", response_model=AliadosEstado)
+async def get_aliados_del_negocio(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AliadosEstado:
+    _require_master(principal)
+    valor = await aliados.estado(tenant_id)
+    if valor is None:
+        raise ApiError.not_found("Negocio no encontrado.")
+    return _estado_out(valor)
+
+
+@router.put("/platform/tenants/{tenant_id}/aliados", response_model=AliadosEstado)
+async def put_aliados_del_negocio(
+    tenant_id: uuid.UUID,
+    payload: AliadosCambio,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AliadosEstado:
+    """Enciende o apaga los aliados. Apagar no borra nada: aliados y asignaciones se
+    conservan para cuando se vuelva a encender."""
+    _require_master(principal)
+    try:
+        valor = await aliados.fijar(tenant_id, habilitar=payload.habilitado, por=f"admin:{principal.admin.email}")
+    except LookupError:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return _estado_out(valor)
+
+
 # ------------------------------------------------------------------ promociones
 PROMOTION_TYPES = ("temporada", "volumen", "campaña")
 # Mismos segmentos que `skills.classify_customer` (ADR-036).
@@ -390,6 +820,7 @@ class PromotionOut(BaseModel):
     category_id: uuid.UUID | None
     product_id: uuid.UUID | None
     variant_id: uuid.UUID | None = None
+    ally_id: uuid.UUID | None = None  # HU-CRM-03
     include_child_categories: bool = True
     eligible_segments: list[str] | None
     created_at: datetime | None = None
@@ -404,6 +835,9 @@ class PromotionSave(BaseModel):
     category_id: uuid.UUID | None = None
     product_id: uuid.UUID | None = None
     variant_id: uuid.UUID | None = None
+    # HU-CRM-03: si no viene, no cambia; `null` lo quita. Con aliado, la promoción aplica
+    # solo si todos los productos del carrito son de ese aliado.
+    ally_id: uuid.UUID | None = None
     include_child_categories: bool = True
     eligible_segments: list[str] | None = None
     active: bool | None = None
@@ -500,6 +934,7 @@ def _promotion_out(p: Promotion) -> PromotionOut:
         category_id=p.category_id,
         product_id=p.product_id,
         variant_id=p.variant_id,
+        ally_id=p.ally_id,
         include_child_categories=bool(getattr(p, "include_child_categories", True)),
         eligible_segments=list(p.eligible_segments) if p.eligible_segments else None,
         created_at=p.created_at,
@@ -543,6 +978,8 @@ async def save_promotion(
             product = await get_owned(session, Product, payload.product_id, tenant_id)
             if product is not None:
                 resolved_product = product.id
+        cambia_aliado = "ally_id" in payload.model_fields_set
+        resolved_ally = await _resolver_aliado(session, tenant_id, payload.ally_id) if cambia_aliado else None
 
         if payload.promotion_id is not None:
             promotion = await get_owned(session, Promotion, payload.promotion_id, tenant_id)
@@ -555,6 +992,8 @@ async def save_promotion(
             promotion.category_id = resolved_category
             promotion.product_id = resolved_product
             promotion.variant_id = payload.variant_id
+            if cambia_aliado:
+                promotion.ally_id = resolved_ally
             promotion.include_child_categories = payload.include_child_categories
             promotion.eligible_segments = payload.eligible_segments
             if payload.active is not None:
@@ -569,6 +1008,7 @@ async def save_promotion(
                     category_id=resolved_category,
                     product_id=resolved_product,
                     variant_id=payload.variant_id,
+                    ally_id=resolved_ally,
                     include_child_categories=payload.include_child_categories,
                     eligible_segments=payload.eligible_segments,
                     active=True if payload.active is None else payload.active,
@@ -600,6 +1040,9 @@ class OrderLine(BaseModel):
 class OrderOut(BaseModel):
     id: uuid.UUID
     public_order_number: str
+    # HU-CRM-20: a quién pertenece el pedido (enlace a su ficha) y su nombre actual.
+    customer_id: uuid.UUID
+    customer_name: str | None = None
     total: float
     status: str
     payment_status: str
@@ -615,43 +1058,145 @@ class OrderStatusUpdate(BaseModel):
     status: str
 
 
-@router.get("/orders", response_model=list[OrderOut])
+ORDERS_DEFAULT_LIMIT = 200
+ORDERS_MAX_LIMIT = 200
+
+
+def _like_literal(texto: str) -> str:
+    """Patrón `%texto%` que trata `%`, `_` y `\\` del usuario como texto literal."""
+    escapado = texto.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escapado}%"
+
+
+@router.get(
+    "/orders",
+    response_model=list[OrderOut],
+    responses={
+        200: {
+            "headers": {
+                "X-Total-Count": {
+                    "description": "Total de pedidos que coinciden con los filtros (sin paginar).",
+                    "schema": {"type": "integer"},
+                }
+            }
+        }
+    },
+)
 async def list_orders(
     principal: Annotated[Principal, Depends(require("pack_commerce"))],
+    response: Response,
+    estado: Annotated[str | None, Query(description="Estado del pedido.")] = None,
+    pago: Annotated[str | None, Query(description="Estado del pago: pendiente, en_revision, pagado o rechazado.")] = None,
+    q: Annotated[
+        str | None,
+        Query(max_length=120, description="Número de pedido o nombre del cliente."),
+    ] = None,
+    customer_id: Annotated[uuid.UUID | None, Query(description="Solo los pedidos de este cliente.")] = None,
+    limit: Annotated[int, Query(ge=1, le=ORDERS_MAX_LIMIT)] = ORDERS_DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[OrderOut]:
+    """Pedidos del negocio, del más reciente al más antiguo (HU-CRM-20).
+
+    Conserva la forma de lista (la consumen el panel y la APK); el total de los que coinciden
+    con los filtros viaja en la cabecera `X-Total-Count`.
+    """
+
+    if estado is not None and estado not in ORDER_STATUSES:
+        raise ApiError.bad_request(
+            f"Estado inválido: {estado}. Válidos: {', '.join(ORDER_STATUSES)}",
+            "invalid_status",
+        )
+    if pago is not None and pago not in PAYMENT_STATUSES:
+        raise ApiError.bad_request(
+            f"Estado de pago inválido: {pago}. Válidos: {', '.join(PAYMENT_STATUSES)}",
+            "invalid_payment_status",
+        )
     tenant_id = principal.tenant_id
+    texto = (q or "").strip()
     async with get_session() as session:
+        filtros = [Order.tenant_id == tenant_id]
+        if estado is not None:
+            filtros.append(Order.status == estado)
+        if pago is not None:
+            filtros.append(Order.payment_status == pago)
+        if customer_id is not None:
+            filtros.append(Order.customer_id == customer_id)
+        if texto:
+            patron = _like_literal(texto)
+            filtros.append(
+                or_(
+                    Order.public_order_number.ilike(patron, escape="\\"),
+                    Order.delivery_full_name.ilike(patron, escape="\\"),
+                    Order.customer_id.in_(
+                        select(Customer.id).where(
+                            Customer.tenant_id == tenant_id,
+                            Customer.name.ilike(patron, escape="\\"),
+                        )
+                    ),
+                )
+            )
+        total = (
+            await session.execute(select(func.count()).select_from(Order).where(*filtros))
+        ).scalar_one()
         orders = (
             (
                 await session.execute(
                     select(Order)
-                    .where(Order.tenant_id == tenant_id)
-                    .order_by(Order.created_at.desc())
-                    .limit(200)
+                    .where(*filtros)
+                    .order_by(Order.created_at.desc(), Order.id.desc())
+                    .limit(limit)
+                    .offset(offset)
                 )
             )
             .scalars()
             .all()
         )
+        order_ids = [o.id for o in orders]
         items = (
             (
                 await session.execute(
-                    select(OrderItem).where(OrderItem.tenant_id == tenant_id)
+                    select(OrderItem).where(
+                        OrderItem.tenant_id == tenant_id, OrderItem.order_id.in_(order_ids)
+                    )
                 )
             )
             .scalars()
             .all()
+            if order_ids
+            else []
         )
         variants = (
-            await session.execute(
-                select(ProductVariant, Product)
-                .join(Product, Product.id == ProductVariant.product_id)
-                .where(
-                    ProductVariant.tenant_id == tenant_id, Product.tenant_id == tenant_id
+            (
+                await session.execute(
+                    select(ProductVariant, Product)
+                    .join(Product, Product.id == ProductVariant.product_id)
+                    .where(
+                        ProductVariant.tenant_id == tenant_id,
+                        Product.tenant_id == tenant_id,
+                        Product.deleted_at.is_(None),
+                        ProductVariant.id.in_(list({i.variant_id for i in items})),
+                    )
                 )
+            ).all()
+            if items
+            else []
+        )
+        customer_ids = {o.customer_id for o in orders}
+        nombres = (
+            dict(
+                (
+                    await session.execute(
+                        select(Customer.id, Customer.name).where(
+                            Customer.tenant_id == tenant_id, Customer.id.in_(customer_ids)
+                        )
+                    )
+                ).all()
             )
-        ).all()
+            if customer_ids
+            else {}
+        )
 
+    response.headers["X-Total-Count"] = str(total)
     name_by_variant = {v.id: p.name for v, p in variants}
     items_by_order: dict[str, list[OrderLine]] = {}
     for i in items:
@@ -667,6 +1212,8 @@ async def list_orders(
         OrderOut(
             id=o.id,
             public_order_number=o.public_order_number,
+            customer_id=o.customer_id,
+            customer_name=nombres.get(o.customer_id),
             total=float(o.total or 0),
             status=o.status,
             payment_status=o.payment_status,
@@ -703,16 +1250,55 @@ async def update_order_status(
     return Response(status_code=204)
 
 
+# El cuerpo es el del core (ADR-0193): un solo schema `SeguimientoHechoIn` para la ruta nueva y este alias.
+from core.api.routers.leads import SeguimientoHechoIn  # noqa: E402
+
+
+@router.post("/leads/{customer_id}/seguimiento/hecho", status_code=204)
+async def seguimiento_hecho(
+    customer_id: uuid.UUID,
+    payload: SeguimientoHechoIn,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> Response:
+    """Alias de `POST /api/v1/admin/leads/{customer_id}/seguimiento/hecho` (el lead es del core desde ADR-0193): lo
+    siguen usando el panel y la APK instalados."""
+    from core.leads import servicio as leads_core
+
+    async with get_session() as session:
+        try:
+            await leads_core.marcar_seguimiento_hecho(
+                session,
+                principal.tenant_id,
+                customer_id,
+                siguiente_en=payload.siguiente_en,
+                siguiente_nota=payload.siguiente_nota,
+                excluir_canal=TEST_CHANNEL,
+            )
+        except leads_core.ClienteSinLead as exc:
+            raise ApiError.not_found(str(exc)) from exc
+        except ValueError as exc:
+            raise ApiError.bad_request(str(exc), code="datos_invalidos") from exc
+    return Response(status_code=204)
+
+
 class ImportResult(BaseModel):
     created: int
+    # HU-CRM-03: nombres de la columna `aliado` que no corresponden a ningún aliado (la fila
+    # se crea sin aliado). Vacío si los aliados están apagados.
+    unknown_allies: list[str] = []
 
 
 @router.post("/products/import", response_model=ImportResult, status_code=201)
 async def import_products_csv(
     file: Annotated[UploadFile, File()],
     principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+    # HU-CRM-03: aliado de las filas sin columna `aliado` (o con ella vacía).
+    ally_id: Annotated[uuid.UUID | None, Form()] = None,
 ) -> ImportResult:
-    """Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico)."""
+    """Importa productos desde un CSV (columnas `name` y `price`, paridad con el clásico).
+
+    Opcionales: `description`, `sku`, `stock` e `image_url` (HU-CRM-01; una URL que no sea
+    https se ignora y el producto se crea sin foto)."""
     import csv
     import io
 
@@ -722,7 +1308,20 @@ async def import_products_csv(
         raise ApiError.bad_request("CSV inválido: requiere columnas name y price", "invalid_csv")
 
     creados = 0
+    desconocidos: list[str] = []
     async with get_session() as session:
+        aliado_por_defecto = await _resolver_aliado(session, principal.tenant_id, ally_id)
+        aliado_por_nombre: dict[str, uuid.UUID] = {}
+        con_aliados = "aliado" in filas[0] and await aliados.habilitados(principal.tenant_id)
+        if con_aliados:
+            aliado_por_nombre = {
+                a.name.strip().lower(): a.id
+                for a in (
+                    await session.execute(
+                        select(Ally).where(Ally.tenant_id == principal.tenant_id, Ally.deleted_at.is_(None))
+                    )
+                ).scalars()
+            }
         for fila in filas:
             nombre = str(fila.get("name") or "").strip()
             if not nombre:
@@ -731,10 +1330,24 @@ async def import_products_csv(
                 precio = Decimal(str(fila.get("price") or "0").replace(",", "").strip())
             except Exception:
                 continue
+            try:
+                foto = _image_url_valida(str(fila.get("image_url") or "")[:IMAGE_URL_MAX + 1])
+            except ValueError:
+                foto = None
+            if foto and len(foto) > IMAGE_URL_MAX:
+                foto = None
+            aliado_fila = aliado_por_defecto
+            nombre_aliado = str(fila.get("aliado") or "").strip()
+            if con_aliados and nombre_aliado:
+                aliado_fila = aliado_por_nombre.get(nombre_aliado.lower())
+                if aliado_fila is None and nombre_aliado not in desconocidos:
+                    desconocidos.append(nombre_aliado)
             producto = Product(
                 name=nombre,
                 description=str(fila.get("description") or "").strip(),
                 category_id=None,
+                image_url=foto or None,
+                ally_id=aliado_fila,
             )
             session.add(producto)
             await session.flush()
@@ -752,4 +1365,280 @@ async def import_products_csv(
             session.add(Inventory(variant_id=variante.id, stock_quantity=stock))
             producto.has_variants = False
             creados += 1
-    return ImportResult(created=creados)
+    return ImportResult(created=creados, unknown_allies=desconocidos[:50])
+
+
+# ------------------------------------------------------------------ formas de pago (SPEC-48, HU-COM-21)
+class FormaDePagoOut(BaseModel):
+    method: Literal["efectivo_contraentrega", "transferencia", "pago_en_linea"]
+    label: str
+    enabled: bool
+    estado: Literal["activa", "falta_configurar", "apagada"] = Field(
+        description="`falta_configurar`: encendida pero sin lo que necesita (cuenta o proveedor); el agente no la ofrece.",
+    )
+    falta: str = Field(description="Qué falta, en palabras del dueño; vacío si nada.")
+    instructions: str
+    superpoder: str | None = Field(description="Superpoder del dominio «Formas de pago» que la acompaña; contra entrega no tiene.")
+
+
+class CuentaDeTransferencia(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    entity: str = Field(max_length=80, description="Entidad (Bancolombia, Nequi…).")
+    accountType: str = Field(default="", max_length=80)
+    accountNumber: str = Field(max_length=80)
+    holderName: str = Field(default="", max_length=80)
+    holderDocument: str = Field(default="", max_length=80)
+
+
+class FormasDePagoOut(BaseModel):
+    agent_id: uuid.UUID
+    configurada: bool = Field(description="`false`: el agente aún no guardó sus formas y se deducen como antes.")
+    forms: list[FormaDePagoOut]
+    transfer_accounts: list[CuentaDeTransferencia]
+    transfer_proof_required: bool
+    transfer_ocr_enabled: bool
+    pago_en_linea_disponible: bool = Field(description="El negocio tiene una cuenta de pagos en línea conectada.")
+
+
+class FormaDePagoIn(BaseModel):
+    method: Literal["efectivo_contraentrega", "transferencia", "pago_en_linea"]
+    enabled: bool
+    instructions: str = Field(default="", max_length=500)
+
+
+class FormasDePagoIn(BaseModel):
+    forms: list[FormaDePagoIn] = Field(min_length=1, max_length=3)
+    transfer_accounts: list[CuentaDeTransferencia] = Field(default_factory=list, max_length=10)
+    transfer_proof_required: bool = True
+    transfer_ocr_enabled: bool = True
+
+
+async def _formas_out(agent_id: uuid.UUID) -> FormasDePagoOut:
+    from .formas_de_pago import config_del_agente, estados, pago_en_linea_disponible
+
+    config = await config_del_agente(agent_id)
+    online = await pago_en_linea_disponible()
+    guardadas = getattr(config, "payment_forms", None)
+    cuentas = list(getattr(config, "transfer_accounts", None) or [])
+    return FormasDePagoOut(
+        agent_id=agent_id,
+        configurada=guardadas is not None,
+        forms=[FormaDePagoOut(**e.__dict__) for e in estados(guardadas, cuentas, online)],
+        transfer_accounts=[CuentaDeTransferencia.model_validate(c) for c in cuentas],
+        transfer_proof_required=bool(getattr(config, "transfer_proof_required", True)),
+        transfer_ocr_enabled=bool(getattr(config, "transfer_ocr_enabled", True)),
+        pago_en_linea_disponible=online,
+    )
+
+
+async def _agente_de_ventas(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> None:
+    """El agente es de ESTE negocio y tiene Comercio instalado; si no, 404 (nunca se confirma que existe)."""
+    from core.agents.instalaciones_agente import instaladas_en_agente
+
+    if "pack_commerce" not in await instaladas_en_agente(tenant_id, agent_id, solo_activas=False):
+        raise ApiError.not_found("Agente no encontrado.")
+
+
+@router.get("/agents/{agent_id}/payment-forms", response_model=FormasDePagoOut)
+async def formas_de_pago_del_agente(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> FormasDePagoOut:
+    """Formas de pago del agente con su estado, sus cuentas de transferencia y el proveedor en línea."""
+    await _agente_de_ventas(principal.tenant_id, agent_id)
+    return await _formas_out(agent_id)
+
+
+@router.put("/agents/{agent_id}/payment-forms", response_model=FormasDePagoOut)
+async def guardar_formas_de_pago(
+    agent_id: uuid.UUID,
+    payload: FormasDePagoIn,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> FormasDePagoOut:
+    """Guarda las formas y las cuentas del agente. Transferencia encendida sin cuenta se guarda y queda
+    «Falta configurar» (el agente no la ofrece); tiene que quedar al menos una forma encendida."""
+    from core.agents.instalaciones_agente import config_del_agente as propia_del_agente
+    from core.agents.instalaciones_agente import guardar_config_del_agente
+    from core.plugin_manager import plugin_manager
+
+    from .formas_de_pago import normalizar_cuentas, normalizar_formas
+
+    await _agente_de_ventas(principal.tenant_id, agent_id)
+    try:
+        formas = normalizar_formas([f.model_dump() for f in payload.forms])
+        cuentas = normalizar_cuentas([c.model_dump() for c in payload.transfer_accounts])
+    except ValueError as exc:
+        raise ApiError.bad_request(str(exc), "invalid_payment_forms") from None
+    if payload.transfer_ocr_enabled and not payload.transfer_proof_required:
+        raise ApiError.bad_request("Leer el comprobante exige pedirlo: activa «Pedir comprobante».", "invalid_payment_forms")
+    modulo = plugin_manager.get("pack_commerce")
+    esquema = getattr(modulo, "config_agente", None)
+    if esquema is None:  # pragma: no cover - el pack siempre declara su config de agente
+        raise ApiError.not_found("Agente no encontrado.")
+    actual = await propia_del_agente(principal.tenant_id, agent_id, "pack_commerce") or {}
+    valores = esquema.model_validate(
+        {
+            **actual,
+            "payment_forms": formas,
+            "transfer_accounts": cuentas,
+            "transfer_proof_required": payload.transfer_proof_required,
+            "transfer_ocr_enabled": payload.transfer_ocr_enabled,
+        }
+    ).model_dump(mode="json", exclude_unset=True)
+    await guardar_config_del_agente(principal.tenant_id, agent_id, "pack_commerce", valores)
+    return await _formas_out(agent_id)
+
+
+# ------------------------------------------------------------------ comprobantes (SPEC-48, HU-COM-22)
+class ComprobanteOut(BaseModel):
+    id: uuid.UUID
+    status: Literal["pagado", "en_revision", "rechazado"]
+    image_url: str | None = Field(description="URL firmada de vida corta; `null` si la imagen no está.")
+    extracted: dict[str, Any] = Field(description="Lo que leyó la visión: monto, fecha, estado, banco, cuenta (últimos 4)…")
+    match: dict[str, Any] = Field(description="Resultado de la comparación con el pedido y sus motivos.")
+    reviewed_at: datetime | None
+    review_note: str | None
+    created_at: datetime
+
+
+class ComprobantesOut(BaseModel):
+    order_id: uuid.UUID
+    payment_status: str
+    payment_method: str
+    payment_status_changed_at: datetime | None
+    payment_status_reason: str | None
+    items: list[ComprobanteOut]
+
+
+class EstadoDePagoIn(BaseModel):
+    accion: Literal["confirmar", "rechazar", "marcar_pagado"] = Field(
+        description="`confirmar`: el comprobante en revisión es válido. `rechazar`: no lo es. "
+        "`marcar_pagado`: el pago se verificó por fuera (sin comprobante).",
+    )
+    proof_id: uuid.UUID | None = Field(default=None, description="Comprobante que se confirma o rechaza.")
+    nota: str = Field(default="", max_length=300)
+
+
+def _comprobante_out(p: Any, carpeta: str | None) -> ComprobanteOut:
+    # Solo se firma un archivo de la carpeta de medios de ESTE negocio (auditor multitenant): una
+    # key ajena en la fila no daría una URL válida a un archivo de otro negocio.
+    dentro = carpeta is not None and almacenamiento.abrir(p.image_key, dentro_de=carpeta) is not None
+    url_imagen = almacenamiento.url(p.image_key) if dentro else None
+    return ComprobanteOut(
+        id=p.id,
+        status=p.status,
+        image_url=url_imagen,
+        extracted=dict(p.extracted or {}),
+        match=dict(p.match or {}),
+        reviewed_at=p.reviewed_at,
+        review_note=p.review_note,
+        created_at=p.created_at,
+    )
+
+
+async def _comprobantes_out(session: Any, order: Any) -> ComprobantesOut:
+    from .models import PaymentProof
+
+    slug = await tenant_slug(order.tenant_id)
+    carpeta = almacenamiento.carpeta_de("media", slug) if slug else None
+
+    filas = (
+        await session.execute(
+            select(PaymentProof)
+            .where(
+                PaymentProof.tenant_id == order.tenant_id,
+                PaymentProof.order_id == order.id,
+                PaymentProof.deleted_at.is_(None),
+            )
+            .order_by(PaymentProof.created_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+    return ComprobantesOut(
+        order_id=order.id,
+        payment_status=order.payment_status,
+        payment_method=order.payment_method,
+        payment_status_changed_at=order.payment_status_changed_at,
+        payment_status_reason=order.payment_status_reason,
+        items=[_comprobante_out(p, carpeta) for p in filas],
+    )
+
+
+@router.get("/orders/{order_id}/payment-proofs", response_model=ComprobantesOut)
+async def comprobantes_del_pedido(
+    order_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("pack_commerce"))],
+) -> ComprobantesOut:
+    """Comprobantes del pedido (los 20 más recientes) con su imagen firmada y el resultado."""
+    async with get_session() as session:
+        order = await get_owned(session, Order, order_id, principal.tenant_id)
+        if order is None:
+            raise ApiError.not_found("Pedido no encontrado.")
+        return await _comprobantes_out(session, order)
+
+
+@router.post("/orders/{order_id}/payment-status", response_model=ComprobantesOut)
+async def cambiar_estado_de_pago(
+    order_id: uuid.UUID,
+    payload: EstadoDePagoIn,
+    principal: Annotated[Principal, Depends(require("pack_commerce", write=True))],
+) -> ComprobantesOut:
+    """Revisión manual del pago. Queda quién, cuándo y la nota. Un pedido pagado no se vuelve a
+    rechazar desde aquí (un reembolso no es un rechazo); rechazar un comprobante deja el pedido
+    `rechazado` y el agente deja de presentarlo como pagado."""
+    from datetime import UTC
+
+    from .models import PaymentProof
+
+    nota = payload.nota.strip()
+    if payload.accion == "rechazar" and not nota:
+        raise ApiError.bad_request("Escribe el motivo del rechazo.", "missing_reason")
+    async with get_session() as session:
+        order = (
+            await session.execute(
+                select(Order).where(Order.tenant_id == principal.tenant_id, Order.id == order_id).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if order is None:
+            raise ApiError.not_found("Pedido no encontrado.")
+        proof = None
+        if payload.proof_id is not None:
+            proof = (
+                await session.execute(
+                    select(PaymentProof).where(
+                        PaymentProof.tenant_id == principal.tenant_id,
+                        PaymentProof.id == payload.proof_id,
+                        PaymentProof.order_id == order.id,
+                        PaymentProof.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            if proof is None:
+                raise ApiError.not_found("Comprobante no encontrado.")
+        elif payload.accion != "marcar_pagado":
+            raise ApiError.bad_request("Elige el comprobante que confirmas o rechazas.", "missing_proof")
+        if order.payment_status == "pagado" and payload.accion == "rechazar":
+            raise ApiError(409, "already_paid", "El pedido ya está pagado: no se rechaza desde aquí.")
+        nuevo = "rechazado" if payload.accion == "rechazar" else "pagado"
+        ahora = datetime.now(UTC)
+        actor = getattr(principal.admin, "id", None)
+        if proof is not None:
+            proof.status = nuevo
+            proof.reviewed_by = actor
+            proof.reviewed_at = ahora
+            proof.review_note = nota or None
+        ya_pagado = order.payment_status == "pagado"
+        order.payment_status = nuevo
+        order.payment_status_changed_by = actor
+        order.payment_status_changed_at = ahora
+        order.payment_status_reason = nota or {"confirmar": "Comprobante confirmado", "marcar_pagado": "Marcado pagado"}.get(
+            payload.accion
+        )
+        if nuevo == "pagado" and not ya_pagado:
+            # Cierra la tarea que espera el pago (comprobar_transferencia / tomar_pedido), como el webhook.
+            from .module import CRMModule
+
+            await CRMModule._emitir_pedido_pagado(session, principal.tenant_id, order)
+        await session.flush()
+        return await _comprobantes_out(session, order)

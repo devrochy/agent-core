@@ -156,14 +156,13 @@ async def _check_and_bump_create_rate_limit(waba_id: str) -> None:
         )
 
 
-async def create_template(
+async def post_template(
     waba_id: str,
     token: str,
     app_secret: str,
     version: str,
     connection_id: uuid.UUID,
     tenant_id: uuid.UUID,
-    waba_account_id: uuid.UUID,
     *,
     name: str,
     language: str,
@@ -171,7 +170,10 @@ async def create_template(
     components: list[dict[str, Any]],
     parameter_format: str | None = None,
     allow_category_change: bool = True,
-) -> MessageTemplate:
+) -> tuple[str | None, str]:
+    """Valida, gasta el límite de creación y hace el POST a Meta. Devuelve `(id de Meta, status)` SIN tocar la base:
+    quien llama decide cómo persistir (`create_template` inserta la fila; las plantillas con opciones, HU-OPC-04,
+    completan una fila que reservaron ANTES del POST para poder reintentar sin duplicar)."""
     if len(name) > 512:
         raise TemplateValidationError("name: máximo 512 caracteres")
     validate_template_components(category, components, parameter_format)
@@ -194,8 +196,48 @@ async def create_template(
     meta_template_id = str((data or {}).get("id") or "") or None
     # Meta normalmente devuelve "PENDING" acá, pero no se asume: se lee del
     # campo `status` de la respuesta si viene, default explícito si no.
-    status = str((data or {}).get("status") or "PENDING")
+    return meta_template_id, str((data or {}).get("status") or "PENDING")
 
+
+async def find_template_by_name(
+    waba_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID, *, name: str, language: str
+) -> dict[str, Any] | None:
+    """`GET /{waba_id}/message_templates?name=` -- la plantilla de ESE nombre e idioma, o None. Es el filtro por
+    `name` de Graph (documentado; no verificado contra Meta real desde este entorno): se usa solo para conciliar un
+    reintento tras un POST de resultado desconocido, y se vuelve a comparar el nombre y el idioma de lo que
+    responde, así que un filtro ignorado no adopta otra plantilla."""
+    data = await graph_fetch(
+        f"/{waba_id}/message_templates", token=token, app_secret=app_secret,
+        query={"name": name, "fields": "id,name,status,category,language,parameter_format", "limit": "100"},
+        version=version, connection_id=connection_id,
+    )
+    for item in (data or {}).get("data", []):
+        if item.get("name") == name and item.get("language") == language:
+            return item
+    return None
+
+
+async def create_template(
+    waba_id: str,
+    token: str,
+    app_secret: str,
+    version: str,
+    connection_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    waba_account_id: uuid.UUID,
+    *,
+    name: str,
+    language: str,
+    category: str,
+    components: list[dict[str, Any]],
+    parameter_format: str | None = None,
+    allow_category_change: bool = True,
+) -> MessageTemplate:
+    meta_template_id, status = await post_template(
+        waba_id, token, app_secret, version, connection_id, tenant_id, name=name, language=language,
+        category=category, components=components, parameter_format=parameter_format,
+        allow_category_change=allow_category_change,
+    )
     async with get_session() as session:
         row = MessageTemplate(
             tenant_id=tenant_id, waba_account_id=waba_account_id, meta_template_id=meta_template_id,
@@ -276,20 +318,28 @@ async def update_template(
 
 
 async def delete_template_all_languages(
-    waba_id: str, name: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID, tenant_id: uuid.UUID
+    waba_id: str,
+    name: str,
+    token: str,
+    app_secret: str,
+    version: str,
+    connection_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    *,
+    waba_account_id: uuid.UUID | None = None,
 ) -> None:
     """`DELETE /{WABA_ID}/message_templates?name={NAME}` -- borra TODAS las
-    versiones de idioma de esa plantilla."""
+    versiones de idioma de esa plantilla. Con `waba_account_id` solo marca las filas de esa
+    WABA (el mismo nombre puede existir en otra WABA del negocio y allá sigue viva)."""
     await graph_fetch(
         f"/{waba_id}/message_templates", method="DELETE", token=token, app_secret=app_secret,
         query={"name": name}, version=version, connection_id=connection_id, tenant_id=tenant_id,
     )
     async with get_session() as session:
-        rows = (
-            await session.execute(
-                select(MessageTemplate).where(MessageTemplate.name == name, MessageTemplate.tenant_id == tenant_id)
-            )
-        ).scalars().all()
+        query = select(MessageTemplate).where(MessageTemplate.name == name, MessageTemplate.tenant_id == tenant_id)
+        if waba_account_id is not None:
+            query = query.where(MessageTemplate.waba_account_id == waba_account_id)
+        rows = (await session.execute(query)).scalars().all()
         for row in rows:
             row.status = "DELETED"
 

@@ -26,6 +26,7 @@ from core.admin.advanced_service import (
 from core.admin.auth import (
     SESSION_COOKIE,
     TENANT_COOKIE,
+    NegocioSuspendido,
     current_admin,
     login,
     logout,
@@ -68,7 +69,7 @@ from core.admin.meta_numbers_service import (
     add_number,
     list_numbers,
     request_code,
-    resolve_waba_and_token,
+    resolve_waba_and_credentials,
     verify_number,
 )
 from core.admin.meta_templates_service import (
@@ -78,6 +79,7 @@ from core.admin.meta_templates_service import (
 )
 from core.admin.permissions import OWNER_GRANTABLE_SECTIONS
 from core.admin.permissions import catalog as sections_catalog
+from core.admin.roles import actua_como_master, es_master, es_tester
 from core.admin.settings_service import (
     format_business_ranges,
     parse_business_ranges,
@@ -93,6 +95,11 @@ from core.admin.waweb_service import (
 from core.admin.waweb_service import (
     session_state as waweb_session_state,
 )
+from core.agents.habilitacion import (
+    configure_plugin_for_tenant,
+    set_pack_for_tenant,
+)
+from core.agents.habilitacion import ensure_pack_activated as _ensure_pack_activated
 from core.agents.spec import (
     CORE_PACK_ID,
     activate_spec_version,
@@ -103,7 +110,9 @@ from core.agents.spec import (
     save_spec_version,
 )
 from core.billing.enforcement import QuotaExceeded
+from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD, NO_SON_TURNOS
 from core.config import get_settings
+from core.config_limites import rango
 from core.db.models import (
     Admin,
     AdminPermission,
@@ -121,7 +130,6 @@ from core.db.models import (
     Tenant,
     TenantUser,
     UsageLedger,
-    WabaAccount,
     utcnow,
 )
 from core.db.session import get_owned, get_session
@@ -140,10 +148,9 @@ from core.llm.difficulty_router import (
 from core.mcp.host import mcp_host
 from core.plugin_manager import plugin_manager
 from core.shared.crypto import get_secret_box
-from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
-from core.shared.tenant import admin_tenants, get_current_tenant_id, tenant_scope
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.tenant import get_current_tenant_id, negocios_de_cuenta, tenant_scope
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -253,7 +260,14 @@ async def login_page(request: Request) -> HTMLResponse:
 
 @router.post("/login")
 async def login_submit(request: Request, email: str = Form(...), password: str = Form(...)):
-    token = await login(email, password)
+    try:
+        token = await login(email, password)
+    except NegocioSuspendido as exc:
+        return _render(
+            "login.html",
+            {"request": request, "assistant_name": get_settings().app_name, "error": exc.mensaje},
+            status_code=403,
+        )
     if token is None:
         return _render(
             "login.html",
@@ -340,7 +354,7 @@ async def switch_tenant(request: Request, tenant_id: str = Form(...)) -> Redirec
     admin = await current_admin(request)
     if admin is None:
         return _login_redirect()
-    tenants = await admin_tenants(admin.id)
+    tenants = (await negocios_de_cuenta(admin)).operativos
     if any(str(t[0]) == tenant_id for t in tenants):
         response = RedirectResponse("/admin", status_code=303)
         response.set_cookie(
@@ -379,7 +393,7 @@ def _slugify(value: str) -> str:
 
 async def _require_master(request: Request) -> bool:
     admin = await current_admin(request)
-    if admin is None or admin.role != "master":
+    if admin is None or not actua_como_master(admin):
         return False
     return True
 
@@ -534,9 +548,16 @@ async def tenants_create(
             status_code=303,
         )
 
+    if es_tester(admin):
+        from core.alta_negocio import motivo_para_rechazar_alta_de_tester
+
+        motivo = await motivo_para_rechazar_alta_de_tester(tenant_slug, admin_email or None)
+        if motivo:
+            return RedirectResponse(f"/admin/tenants/nuevo?flash={motivo}&flash_type=danger", status_code=303)
+
     triggers = [t.strip() for t in escalation_triggers.split(",") if t.strip()]
     try:
-        from core.onboarding import onboard_tenant
+        from core.alta_negocio import onboard_tenant
 
         tid, _steps = await onboard_tenant(
             name=name,
@@ -546,13 +567,14 @@ async def tenants_create(
             persona={"role": "asistente", "tone": tone},
             escalation_triggers=triggers or None,
             packs=packs or None,
-            admin_email=admin_email or admin.email,
+            # Un tester no queda como owner del negocio (ADR-0134): ya los ve todos.
+            admin_email=admin_email or (None if es_tester(admin) else admin.email),
             admin_password=admin_password or None,
             whatsapp=None,
         )
         # El master que crea el tenant siempre queda vinculado (si el admin del
         # tenant es otro email), para no perderlo del selector de tenant.
-        if admin_email and admin_email != admin.email:
+        if admin_email and admin_email != admin.email and not es_tester(admin):
             await _ensure_tenant_link(admin.id, tid, "owner")
     except Exception as exc:
         log.exception("tenant_create_failed")
@@ -641,25 +663,39 @@ async def tenants_activate(request: Request, tenant_id: uuid.UUID):
 async def tenants_purge(request: Request, tenant_id: uuid.UUID, confirm_phrase: str = Form(default="")):
     """Eliminación física IRREVERSIBLE (excepción a la invariante #8).
 
-    Exige que `confirm_phrase` sea exactamente "ELIMINAR <slug>". Solo master.
+    Exige el tenant suspendido y que `confirm_phrase` sea exactamente "ELIMINAR <slug>".
+    Solo master (también en test: el tester no purga, invariante 8).
     """
-    if not await _require_master(request):
+    purgador = await current_admin(request)
+    if purgador is None or not es_master(purgador):
         return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
-    from core.tenants import purge_tenant
+    from urllib.parse import quote
+
+    from core.tenants import TenantNotSuspendedError, purge_tenant
 
     ref = str(tenant_id)
     try:
-        await purge_tenant(ref, confirm_phrase)
+        redis_limpio = await purge_tenant(ref, confirm_phrase)
+    except TenantNotSuspendedError as exc:
+        return RedirectResponse(
+            f"/admin/tenants?flash={quote(str(exc))}&flash_type=danger", status_code=303
+        )
     except ValueError as exc:
         return RedirectResponse(
-            f"/admin/tenants?flash={str(exc)[:140]}&flash_type=danger", status_code=303
+            f"/admin/tenants?flash={quote(str(exc)[:140])}&flash_type=danger", status_code=303
         )
     except Exception as exc:
         log.exception("tenant_purge_failed")
         return RedirectResponse(
-            f"/admin/tenants?flash=Error al eliminar: {str(exc)[:140]}&flash_type=danger",
+            f"/admin/tenants?flash={quote('Error al eliminar: ' + str(exc)[:140])}&flash_type=danger",
             status_code=303,
         )
+    if not redis_limpio:
+        aviso = (
+            "Negocio eliminado de la base, pero su estado Redis no se pudo limpiar. "
+            f"Reintenta con: agent-core tenant purge-redis {tenant_id}"
+        )
+        return RedirectResponse(f"/admin/tenants?flash={quote(aviso)}&flash_type=warning", status_code=303)
     return RedirectResponse("/admin/tenants?flash=tenant_eliminado&flash_type=success", status_code=303)
 
 
@@ -688,6 +724,9 @@ async def _require_collaborators(request: Request, *, write: bool = False) -> bo
         return False
     if admin.role == "master":
         return True
+    if es_tester(admin):
+        # El tester gestiona colaboradores como dueño del negocio activo (ADR-0134), no como master.
+        return actua_como_master(admin)
     return await _tenant_role(admin.id, get_current_tenant_id()) == "owner"
 
 
@@ -732,14 +771,27 @@ async def _collaborators_context(request: Request) -> dict[str, Any] | None:
 
     async with get_session() as session:
         if is_master:
-            admins = (await session.execute(select(Admin).order_by(Admin.email))).scalars().all()
+            admins = (
+                (
+                    await session.execute(
+                        select(Admin)
+                        .where(Admin.deleted_at.is_(None))
+                        .order_by(Admin.email)
+                    )
+                )
+                .scalars()
+                .all()
+            )
         else:
             admins = list(
                 (
                     await session.execute(
                         select(Admin)
                         .join(TenantUser, TenantUser.admin_id == Admin.id)
-                        .where(TenantUser.tenant_id == tid)
+                        .where(
+                            TenantUser.tenant_id == tid,
+                            Admin.deleted_at.is_(None),
+                        )
                         .order_by(Admin.email)
                     )
                 ).scalars().all()
@@ -850,15 +902,23 @@ async def collaborators_create(
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    resultado = await create_collaborator(
-        actor=me,
-        email=email,
-        password=password,
-        role=role,
-        username=username,
-        tenant_slug=tenant,
-        pack_roles=pack_roles,
-    )
+    try:
+        resultado = await create_collaborator(
+            actor=me,
+            email=email,
+            password=password,
+            role=role,
+            username=username,
+            tenant_slug=tenant,
+            pack_roles=pack_roles,
+        )
+    except QuotaExceeded as exc:
+        # Tope de colaboradores del plan (ADR-0142): mismo mensaje que el 409 de la API.
+        from urllib.parse import quote
+
+        from core.api.plan_limits import plan_limit_message
+
+        return _collab_redirect(quote(plan_limit_message(exc)), "danger")
     if isinstance(resultado, str):
         return _collab_redirect(resultado, "danger")
     _audit("create_collaborator", me.email if me else "?", email, role=role, tenant=tenant or "*")
@@ -961,9 +1021,17 @@ async def collaborators_toggle(request: Request, admin_id: uuid.UUID):
     me = await current_admin(request)
     if not await _require_collaborators(request, write=True):
         return RedirectResponse("/admin?flash=sin_permiso&flash_type=danger", status_code=303)
-    error = await toggle_active(
-        actor=me, admin_id=admin_id, current_tenant_id=get_current_tenant_id()
-    )
+    try:
+        error = await toggle_active(
+            actor=me, admin_id=admin_id, current_tenant_id=get_current_tenant_id()
+        )
+    except QuotaExceeded as exc:
+        # Reactivar con el negocio al tope de colaboradores (ADR-0142).
+        from urllib.parse import quote
+
+        from core.api.plan_limits import plan_limit_message
+
+        return _collab_redirect(quote(plan_limit_message(exc)), "danger")
     if error is not None:
         return _collab_redirect(error, "danger")
     async with get_session() as session:
@@ -989,10 +1057,13 @@ def _parse_business_ranges(text: str) -> list[dict[str, Any]]:
 
 
 def _declarative_tools_json(spec) -> str:  # type: ignore[no-untyped-def]
-    """Definiciones declarativas del tenant a JSON editable (ADR-0052)."""
+    """Definiciones declarativas del tenant a JSON editable (ADR-0052). Los headers sensibles
+    literales salen enmascarados: el panel nunca muestra un secreto (HU-AOS-12)."""
     import json as _json
 
-    tools = (spec.extensions or {}).get("tools") or []
+    from core.agents.declarativas import enmascarar
+
+    tools = enmascarar((spec.extensions or {}).get("tools") or [])
     return _json.dumps(tools, indent=2, ensure_ascii=False) if tools else ""
 
 
@@ -1039,48 +1110,6 @@ async def spec_editor() -> RedirectResponse:
     return RedirectResponse("/admin/configuracion?tab=avanzado", status_code=307)
 
 
-async def _ensure_pack_activated(pack: str) -> str | None:
-    """Activa un pack si su código todavía no estaba cargado. Devuelve el error
-    (str) o None si quedó activo (o ya lo estaba).
-
-    Un pack con config obligatoria y sin fila previa para el tenant actual (ej.
-    nunca pasó por `tenant create --packs` ni por `/admin/plugins/<id>/configurar`)
-    no activa: `load_config` exige una fila existente. Se intenta una config
-    vacía por default (mismo patrón que ya usa `onboard_tenant` en
-    core/onboarding.py) para los packs cuyo schema no tiene campos obligatorios.
-
-    Si el schema SÍ exige campos reales (ej. credenciales de una pasarela de
-    pago), antes esto dejaba pasar el `ValidationError` crudo de pydantic tal
-    cual al flash del admin ("3 validation errors for PaymentsConfig...") --
-    inentendible para quien solo apretó el botón "Activar" en vez de
-    "Configurar" primero. Ahora se traduce a un mensaje accionable, sin pisar
-    una configuración real si ya existía.
-    """
-    if plugin_manager.is_active(pack):
-        return None
-    try:
-        module = plugin_manager.get(pack)
-        if module is not None and module.config_schema is not None:
-            async with get_session() as session:
-                has_config = (
-                    await session.execute(
-                        select(PluginConfig).where(
-                            PluginConfig.plugin_id == pack,
-                            PluginConfig.tenant_id == get_current_tenant_id(),
-                        )
-                    )
-                ).scalar_one_or_none() is not None
-            if not has_config:
-                try:
-                    await plugin_manager.save_config(pack, {})
-                except PluginConfigError:
-                    return f'{pack} necesita configuración -- usá el botón "Configurar" (⚙️) primero'
-        await plugin_manager.activate(pack)
-        return None
-    except PluginError as exc:
-        return f"{pack}: {exc}"
-
-
 async def _save_spec_version(new_spec: AgentSpec) -> str | None:
     """Delegación a `core.agents.spec.save_spec_version` (fuente única)."""
     return await save_spec_version(new_spec)
@@ -1124,6 +1153,21 @@ async def spec_save(request: Request):
         if raw_json.strip():
             # fallback de poder: JSON completo validado por el contrato congelado
             data = json.loads(raw_json)
+            new_spec = AgentSpec.model_validate(data)
+            # Las tools declarativas pasan por el mismo validador que su editor (HU-AOS-12):
+            # sin literales sensibles nuevos ni secretos fuera de sus dominios.
+            from core.agents.declarativas import tools_del_editor_crudo
+
+            data = new_spec.model_dump(mode="json")
+            ext = dict(data.get("extensions") or {})
+            tools = await tools_del_editor_crudo(
+                get_current_tenant_id(), ext.get("tools"), (current.extensions or {}).get("tools")
+            )
+            if tools is None:
+                ext.pop("tools", None)
+            else:
+                ext["tools"] = tools
+            data["extensions"] = ext
             new_spec = AgentSpec.model_validate(data)
         else:
             # Los packs ya no se editan acá: se activan/desactivan por tenant
@@ -1208,6 +1252,12 @@ async def dashboard(request: Request):
                 select(func.count(Message.id)).where(
                     Message.tenant_id == my_tenant,
                     Message.created_at >= week_ago,
+                    # Sin los del playground, como `conversations_7d` (y `api/routers/dashboard.py`).
+                    ~Message.conversation_id.in_(
+                        select(Conversation.id).where(
+                            Conversation.tenant_id == my_tenant, Conversation.channel == TEST_CHANNEL
+                        )
+                    ),
                 )
             )
         ).scalar() or 0
@@ -1224,6 +1274,7 @@ async def dashboard(request: Request):
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
                     UsageLedger.tenant_id == my_tenant,
                     UsageLedger.created_at >= month_ago,
+                    no_es_prueba(my_tenant, UsageLedger.conversation_id),
                 )
             )
         ).scalar() or 0
@@ -1562,92 +1613,6 @@ def _quota_redirect(exc: QuotaExceeded) -> RedirectResponse:
     )
 
 
-async def configure_plugin_for_tenant(plugin_id: str, values: dict[str, Any]) -> None:
-    """Guarda la config del plugin, lo activa y lo habilita para el tenant actual.
-
-    Punto ÚNICO compartido por el panel SSR y la API `/api/v1` (ADR-0076/0077): la
-    lógica de cifrado, activación y cuota del pack no se duplica. Levanta
-    `QuotaExceeded` si el plan no permite habilitar otro pack.
-    """
-    await plugin_manager.save_config(plugin_id, values)
-    await plugin_manager.activate(plugin_id)
-    await _enable_pack_for_tenant(plugin_id)
-
-
-async def _enable_pack_for_tenant(pack: str) -> int | None:
-    """Agrega `pack` a `AgentSpec.packs` del tenant actual (nueva versión).
-
-    Aplica la cuota de plugins del plan (ADR-0045): si ya está en el límite y el
-    pack no estaba habilitado, levanta `QuotaExceeded`.
-    """
-    spec = await load_active_spec()
-    if pack in spec.packs:
-        return None
-    tenant_id = get_current_tenant_id()
-    if tenant_id is not None:
-        from core.agents.spec import count_tenant_packs
-        from core.billing.enforcement import quota_decision
-
-        decision = await quota_decision(tenant_id, "plugins")
-        if not decision.allowed:
-            raise QuotaExceeded(
-                "plugins", count_tenant_packs(spec), decision.limit or 0
-            )
-    new_spec = spec.model_copy(update={"packs": sorted({*spec.packs, pack})})
-    version = await _save_spec_version(new_spec)
-    await _seed_flow_for_current_tenant(pack)
-    return version
-
-
-async def _seed_flow_for_current_tenant(pack: str) -> None:
-    """Siembra/actualiza el flujo del pack en el `flow.json` del tenant (ADR-0054).
-
-    Best-effort: un fallo de filesystem no puede tumbar la activación (el runtime
-    cae al default del pack si el archivo no está). No pisa las secciones propias
-    del tenant ni las de otros packs.
-    """
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return
-    try:
-        from core.agents.flow import seed_tenant_flow
-        from core.shared.tenant import tenant_slug
-
-        slug = await tenant_slug(tenant_id)
-        if slug:
-            seed_tenant_flow(slug, [pack])
-    except Exception:
-        log.warning("tenant_flow_seed_failed", plugin=pack, exc_info=True)
-
-
-async def _disable_pack_for_tenant(pack: str) -> int | None:
-    """Quita `pack` de `AgentSpec.packs` del tenant actual (nueva versión).
-
-    NO desactiva el código globalmente — otro tenant puede seguir usándolo.
-    """
-    spec = await load_active_spec()
-    if pack not in spec.packs:
-        return None
-    new_spec = spec.model_copy(update={"packs": sorted(set(spec.packs) - {pack})})
-    return await _save_spec_version(new_spec)
-
-
-async def set_pack_for_tenant(pack: str, enabled: bool) -> str | None:
-    """Habilita/deshabilita un pack para el tenant actual (fuente única SSR + API).
-
-    Devuelve un mensaje de error, o `None` si quedó aplicado. Levanta
-    `QuotaExceeded` si el plan no permite habilitar otro pack.
-    """
-    if enabled:
-        error = await _ensure_pack_activated(pack)
-        if error is not None:
-            return error
-        await _enable_pack_for_tenant(pack)
-        return None
-    await _disable_pack_for_tenant(pack)
-    return None
-
-
 @router.post("/plugins/{plugin_id}/activar")
 async def plugin_activate(request: Request, plugin_id: str):
     """Habilita `plugin_id` para el TENANT ACTUAL únicamente (AgentSpec.packs)."""
@@ -1753,7 +1718,6 @@ async def connections_page(request: Request):
         for c in connections
     ]
 
-    settings = get_settings()
     if tid is not None:
         async with get_session() as session:
             meta_connections = (
@@ -1776,8 +1740,10 @@ async def connections_page(request: Request):
                 for p in phone_rows:
                     phones_by_connection.setdefault(p.connection_id, p.display_phone_number or p.phone_number_id)
 
+        from core.gateway.meta_credentials import origin_label
+
         for mc in meta_connections:
-            origen = "Embedded Signup" if mc.meta_app_id == settings.meta_app_id else "BYOK (app propia)"
+            origen = origin_label(mc.origin)  # del origen guardado (ADR-0094)
             rows.append({
                 "id": mc.id,
                 "tipo": "meta_connection",
@@ -1880,13 +1846,13 @@ async def connection_new(request: Request):
             )
         from core.db.models import ChannelConnection
         from core.db.session import get_owned, get_session
-        from core.gateway.connections import credentials_of
+        from core.gateway.connections import administrada_aparte, credentials_of
 
         async with get_session() as session:
             connection = await get_owned(
                 session, ChannelConnection, connection_uuid, get_current_tenant_id()
             )
-        if connection is None:
+        if connection is None or administrada_aparte(connection):  # canónica de Meta o chat web (ADR-0115)
             return RedirectResponse(
                 "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
             )
@@ -1948,13 +1914,13 @@ async def connection_new_save(request: Request):
             )
         from core.db.models import ChannelConnection
         from core.db.session import get_owned, get_session
-        from core.gateway.connections import credentials_of
+        from core.gateway.connections import administrada_aparte, credentials_of
 
         async with get_session() as session:
             existing = await get_owned(
                 session, ChannelConnection, connection_uuid, get_current_tenant_id()
             )
-        if existing is None:
+        if existing is None or administrada_aparte(existing):  # canónica de Meta o chat web (ADR-0115)
             return RedirectResponse(
                 "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
             )
@@ -1989,8 +1955,11 @@ async def connection_new_save(request: Request):
     except Exception as exc:
         log.exception("connection_type_save_failed")
         suffix = f"&connection_id={connection_id}" if connection_id else ""
+        # Solo los errores de negocio (ValueError) se muestran: uno de la base expondría
+        # nombres de constraints y valores.
+        detalle = str(exc)[:120] if isinstance(exc, ValueError) else "revisa los datos e intenta de nuevo"
         return RedirectResponse(
-            f"/admin/conexiones/nuevo?type={ctype.id}{suffix}&flash=Error al guardar: {str(exc)[:120]}&flash_type=danger",
+            f"/admin/conexiones/nuevo?type={ctype.id}{suffix}&flash=Error al guardar: {detalle}&flash_type=danger",
             status_code=303,
         )
 
@@ -2093,26 +2062,6 @@ async def connection_delete(request: Request, connection_id: uuid.UUID):
 # ------------------------------------------------------------------ números adicionales de una WABA
 # Prefijo "meta/" para no chocar con /conexiones/{connection_id}/... de
 # arriba, que son rutas de ChannelConnection (modelo viejo/distinto).
-async def _resolve_waba_and_token(connection_id: uuid.UUID, tenant_id: uuid.UUID | None):
-    from core.db.models import MetaConnection
-    from core.gateway import meta_token_store
-    from core.gateway.meta_onboarding import TOKEN_KIND
-
-    async with get_session() as session:
-        connection = await get_owned(session, MetaConnection, connection_id, tenant_id)
-        if connection is None:
-            return None, None, None
-        waba = (
-            await session.execute(select(WabaAccount).where(WabaAccount.connection_id == connection_id))
-        ).scalars().first()
-    if waba is None:
-        return connection, None, None
-    token = await meta_token_store.get_token(
-        connection_id, TOKEN_KIND, connection.business_id or str(connection_id), tenant_id=tenant_id
-    )
-    return connection, waba, token
-
-
 @router.get("/conexiones/meta/{connection_id}/numeros", response_class=HTMLResponse)
 async def meta_connection_numeros_page(request: Request, connection_id: str):
     ctx = await _base_context(request, "connections")
@@ -2120,7 +2069,7 @@ async def meta_connection_numeros_page(request: Request, connection_id: str):
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    connection, waba, _token = await resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, waba, _creds = await resolve_waba_and_credentials(uuid.UUID(connection_id), tid)
     if connection is None:
         return RedirectResponse(
             "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
@@ -2187,7 +2136,7 @@ async def meta_connection_plantillas_page(request: Request, connection_id: str):
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    connection, waba, _token = await resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, waba, _creds = await resolve_waba_and_credentials(uuid.UUID(connection_id), tid)
     if connection is None:
         return RedirectResponse(
             "/admin/conexiones?flash=Conexión no encontrada&flash_type=danger", status_code=303
@@ -2260,9 +2209,9 @@ async def meta_connection_plantilla_editar(request: Request, connection_id: str,
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    connection, _waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, _waba, creds = await resolve_waba_and_credentials(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
-    if connection is None or not token:
+    if connection is None or creds is None:
         return RedirectResponse(f"{url}?flash=No hay conexión lista todavía&flash_type=danger", status_code=303)
 
     async with get_session() as session:
@@ -2272,7 +2221,7 @@ async def meta_connection_plantilla_editar(request: Request, connection_id: str,
 
     try:
         await update_template(
-            row.meta_template_id, token, get_settings().meta_app_secret, connection.graph_api_version,
+            row.meta_template_id, creds.access_token, creds.app_secret, creds.graph_api_version,
             connection.id, tid, category=category or None,
         )
     except TemplateValidationError as exc:
@@ -2291,6 +2240,7 @@ async def meta_connection_plantilla_eliminar(request: Request, connection_id: st
 
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
     error = await delete_template(get_current_tenant_id(), connection_id, template_id)
+    error = str(error) if error is not None else None
     if error is not None:
         return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Plantilla eliminada (todos los idiomas)", status_code=303)
@@ -2306,9 +2256,9 @@ async def meta_connection_plantilla_eliminar_traduccion(request: Request, connec
         return _login_redirect()
 
     tid = get_current_tenant_id()
-    connection, waba, token = await _resolve_waba_and_token(uuid.UUID(connection_id), tid)
+    connection, waba, creds = await resolve_waba_and_credentials(uuid.UUID(connection_id), tid)
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
-    if connection is None or waba is None or not token:
+    if connection is None or waba is None or creds is None:
         return RedirectResponse(f"{url}?flash=No hay conexión/WABA lista todavía&flash_type=danger", status_code=303)
 
     async with get_session() as session:
@@ -2318,8 +2268,8 @@ async def meta_connection_plantilla_eliminar_traduccion(request: Request, connec
 
     try:
         await delete_template_one_language(
-            waba.waba_id, row.name, row.meta_template_id, token, get_settings().meta_app_secret,
-            connection.graph_api_version, connection.id, tid,
+            waba.waba_id, row.name, row.meta_template_id, creds.access_token, creds.app_secret,
+            creds.graph_api_version, connection.id, tid,
         )
     except GraphError as exc:
         return RedirectResponse(f"{url}?flash={exc.message[:200]}&flash_type=danger", status_code=303)
@@ -2334,6 +2284,7 @@ async def meta_connection_plantillas_sync(request: Request, connection_id: str):
 
     url = f"/admin/conexiones/meta/{connection_id}/plantillas"
     error = await sync_templates_now(get_current_tenant_id(), connection_id)
+    error = str(error) if error is not None else None
     if error is not None:
         return RedirectResponse(f"{url}?flash={error}&flash_type=danger", status_code=303)
     return RedirectResponse(f"{url}?flash=Sincronizado", status_code=303)
@@ -2356,21 +2307,13 @@ async def meta_health_page(request: Request):
             )
         ).scalars().all()
 
-    # Expiración del access token por conexión (badge de aviso antes de que venza).
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
-    from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.gateway.meta_token_store import get_token_expires_at
+    # Expiración del access token por conexión (badge de aviso antes de que venza): la
+    # del token que la conexión usa según su `origin` (ADR-0094).
+    from core.gateway.meta_credentials import access_token_expires_at
 
     token_expiry: dict = {}
     for connection in connections:
-        exp = await get_token_expires_at(
-            connection.id, CLOUD_API_ACCESS_TOKEN_KIND, connection.meta_app_id, tenant_id=tid
-        )
-        if exp is None:
-            exp = await get_token_expires_at(
-                connection.id, TOKEN_KIND, connection.business_id or str(connection.id), tenant_id=tid
-            )
-        token_expiry[connection.id] = exp
+        token_expiry[connection.id] = await access_token_expires_at(connection)
 
     ctx.update(connections=connections, token_expiry=token_expiry, now=datetime.now(UTC))
     return _render("meta_salud.html", ctx)
@@ -2503,24 +2446,30 @@ async def costs_page(request: Request):
     tenant_id = get_current_tenant_id()
     # Filtro explícito por tenant (además de RLS): el panel es multi-tenant.
     by_tenant = UsageLedger.tenant_id == tenant_id
+    sin_prueba = no_es_prueba(tenant_id, UsageLedger.conversation_id)
 
     async with get_session() as session:
         today_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= today_start
+                    by_tenant, UsageLedger.created_at >= today_start, sin_prueba
                 )
             )
         ).scalar() or 0
         month_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= month_ago
+                    by_tenant, UsageLedger.created_at >= month_ago, sin_prueba
                 )
             )
         ).scalar() or 0
+        # Las filas `embedding` (ingesta del pack de conocimiento, ADR-0145 §3) no son turnos.
         total_turns = (
-            await session.execute(select(func.count(UsageLedger.id)).where(by_tenant))
+            await session.execute(
+                select(func.count(UsageLedger.id)).where(
+                    by_tenant, UsageLedger.kind.not_in(NO_SON_TURNOS), sin_prueba
+                )
+            )
         ).scalar() or 0
         by_model_rows = (
             await session.execute(
@@ -2532,7 +2481,7 @@ async def costs_page(request: Request):
                     func.avg(UsageLedger.latency_ms),
                     func.sum(UsageLedger.cost_usd),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .where(by_tenant, UsageLedger.created_at >= month_ago, sin_prueba)
                 .group_by(UsageLedger.model)
             )
         ).all()
@@ -2544,7 +2493,13 @@ async def costs_page(request: Request):
                     func.sum(UsageLedger.cost_usd),
                     func.max(UsageLedger.created_at),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .where(
+                    by_tenant,
+                    UsageLedger.created_at >= month_ago,
+                    UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                    sin_prueba,
+                    UsageLedger.conversation_id.is_not(None),
+                )
                 .group_by(UsageLedger.conversation_id)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(20)
@@ -2726,11 +2681,13 @@ async def settings_page(request: Request):
             session.add(app_settings)
     spec = await load_active_spec()
     enabled = enabled_packs(spec)
+    from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
+
     all_guardrails = [
         {"name": g.name, "plugin_id": g.plugin_id}
         for g in mcp_host.get_guardrails()
         if g.plugin_id in enabled
-    ]
+    ] + [{"name": name, "plugin_id": "core"} for name in TOGGLES]
     # Flujo de atención (ADR-0054): solo lectura en el panel (la edición es por
     # archivo del tenant, ADR-0017/0026). `resolve_flow` cae al default del pack
     # si el tenant todavía no tiene flow.json. Se filtra por las tools realmente
@@ -2745,7 +2702,12 @@ async def settings_page(request: Request):
     ctx.update(
         tab=request.query_params.get("tab", "identidad"),
         s=app_settings,
-        behavior=dict(app_settings.behavior_config),
+        behavior={
+            **dict(app_settings.behavior_config),
+            "disabled_guardrails": normalizar_desactivados(
+                (app_settings.behavior_config or {}).get("disabled_guardrails", [])
+            ),
+        },
         all_guardrails=all_guardrails,
         escalation_keywords=list((app_settings.escalation_config or {}).get("keywords", [])),
         escalation=dict(app_settings.escalation_config or {}),
@@ -2855,8 +2817,13 @@ async def settings_skills_save(request: Request):
     # Tools declarativas del tenant (ADR-0052): JSON en extensions["tools"].
     if form.get("declarative_tools_json") is not None:
         import json as _json
+        from urllib.parse import quote
 
-        from core.mcp.declarative import validate_declarative_tools
+        from core.agents.declarativas import preparar
+        from core.agents.secretos import guardar_secretos_declarativos, secretos_configurados
+        from core.kernel.procedures import catalogo_de_acciones
+        from core.mcp.declarative import rejected_domains
+        from core.plugin_manager import plugin_manager
 
         extensions = dict(data.get("extensions") or {})
         raw = str(form.get("declarative_tools_json") or "").strip()
@@ -2869,7 +2836,45 @@ async def settings_skills_save(request: Request):
                     f"/admin/configuracion?tab=habilidades&flash=JSON de tools inválido: {str(exc)[:120]}&flash_type=danger",
                     status_code=303,
                 )
-        extensions["tools"] = validate_declarative_tools(parsed)
+        rejected = rejected_domains(parsed)
+        if rejected:
+            # Anti-SSRF (ADR-0052): solo dominios públicos con punto; ni IPs ni
+            # nombres internos (`redis`, `localhost`, `*.internal`).
+            msg = f"allowed_domains no permitidos (usa dominios públicos): {', '.join(rejected)[:160]}"
+            return RedirectResponse(
+                f"/admin/configuracion?tab=habilidades&flash={quote(msg)}&flash_type=danger",
+                status_code=303,
+            )
+        # Mismo validador que `/api/v1` (HU-AOS-12): sin literales en headers sensibles (los
+        # enmascarados se migran a la instalación `core`). Los secretos nuevos se cargan desde
+        # el panel nuevo: el SSR no tiene campo para valores.
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return _login_redirect()
+        preparadas = preparar(
+            parsed,
+            extensions.get("tools"),
+            {},
+            await secretos_configurados(tenant_id),
+            set(catalogo_de_acciones(plugin_manager.list_modules())),
+        )
+        if preparadas.errores:
+            ruta, msg = next(iter(preparadas.errores.items()))
+            return RedirectResponse(
+                f"/admin/configuracion?tab=habilidades&flash={quote(f'{ruta}: {msg}'[:200])}&flash_type=danger",
+                status_code=303,
+            )
+        if preparadas.secretos:
+            from core.agents.secretos import SecretoInvalido
+
+            try:
+                await guardar_secretos_declarativos(tenant_id, preparadas.secretos)
+            except SecretoInvalido as exc:
+                return RedirectResponse(
+                    f"/admin/configuracion?tab=habilidades&flash={quote(str(exc)[:200])}&flash_type=danger",
+                    status_code=303,
+                )
+        extensions["tools"] = preparadas.tools
         data["extensions"] = extensions
     return await _save_spec_from_form(request, data, "habilidades")
 
@@ -2956,7 +2961,7 @@ async def settings_save(
     assistant_name: str = Form(...),
     business_description: str = Form(default=""),
     brand_voice: str = Form(default=""),
-    tono: str = Form(default="calido"),
+    tono: str = Form(default=""),  # obsoleto (HU-CFG-01): se acepta y se ignora
     debounce_mode: str = Form(default="natural"),
     guardrail_max_retries: int = Form(default=1),
     disabled_guardrails: list[str] = Form(default=[]),  # noqa: B008
@@ -2982,7 +2987,9 @@ async def settings_save(
     # seguridad (el filtro solo puede restringir, nunca ampliar acceso),
     # pero evita basura persistida.
     spec = await load_active_spec()
-    valid_names = {g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled_packs(spec)}
+    from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
+
+    valid_names = {g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled_packs(spec)} | set(TOGGLES)
     async with get_session() as session:
         app_settings = (
             await session.execute(
@@ -3000,15 +3007,18 @@ async def settings_save(
         app_settings.brand_voice = brand_voice
         behavior = dict(app_settings.behavior_config)
         behavior.update(
-            tono=tono,
             debounce_mode=debounce_mode,
-            guardrail_max_retries=max(0, guardrail_max_retries),
-            disabled_guardrails=sorted(valid_names & set(disabled_guardrails)),
-            difficulty_long_message_threshold=max(50, min(5000, difficulty_long_message_threshold)),
-            difficulty_turnos_sin_resolver_threshold=max(
-                1, min(20, difficulty_turnos_sin_resolver_threshold)
+            guardrail_max_retries=rango("guardrail_max_retries").recortar(guardrail_max_retries),
+            disabled_guardrails=sorted(valid_names & set(normalizar_desactivados(disabled_guardrails))),
+            difficulty_long_message_threshold=rango("difficulty_long_message_threshold").recortar(
+                difficulty_long_message_threshold
             ),
-            difficulty_score_threshold=max(1, min(10, difficulty_score_threshold)),
+            difficulty_turnos_sin_resolver_threshold=rango(
+                "difficulty_turnos_sin_resolver_threshold"
+            ).recortar(difficulty_turnos_sin_resolver_threshold),
+            difficulty_score_threshold=rango("difficulty_score_threshold").recortar(
+                difficulty_score_threshold
+            ),
         )
         app_settings.behavior_config = behavior
         keywords = [t.strip() for t in escalation_keywords.split(",") if t.strip()]
@@ -3021,7 +3031,7 @@ async def settings_save(
             "keywords": keywords,
             "business_hours": business_hours,
             "out_of_hours_message": out_of_hours_message.strip(),
-            "auto_escalate_after_turns": max(0, auto_escalate_after_turns),
+            "auto_escalate_after_turns": rango("auto_escalate_after_turns").recortar(auto_escalate_after_turns),
         }
     # Personalidad del AgentSpec (ADR-0050): se persiste como versión nueva del
     # spec (versionable), no en AppSettings.
@@ -3029,7 +3039,7 @@ async def settings_save(
     persona_data["persona"].update(
         {
             "tone": persona_tone or persona_data["persona"]["tone"],
-            "warmth": max(0, min(5, persona_warmth)),
+            "warmth": rango("persona_warmth").recortar(persona_warmth),
             "emojis": persona_emojis or persona_data["persona"]["emojis"],
             "maxLength": max(0, persona_max_length),
             "forbiddenPhrases": [p.strip() for p in persona_forbidden.split(",") if p.strip()],

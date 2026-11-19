@@ -25,23 +25,30 @@ class CobranzaConfig(BasePluginConfig):
     )
     moneda: str = Field(default="COP", description="Moneda ISO-4217 de la cartera")
     pais: str = Field(default="", description="País de operación (ISO-3166)")
+    # Días: nunca negativos (P0 de pruebas 2026-10-17; el formulario responde 422 por campo).
     dias_tolerancia_cobro: int = Field(
-        default=0, description="Días de tolerancia de pago del propietario"
+        default=0, ge=0, le=365, description="Días de tolerancia de pago del propietario"
     )
     dias_anticipacion_cobro: int = Field(
-        default=0, description="Días de anticipación del cobro al propietario"
+        default=0, ge=0, le=365, description="Días de anticipación del cobro al propietario"
     )
+    # `oculto`: el runtime no lee estas dos claves (HU-CFG-09); no salen en el formulario para que nadie
+    # crea que apagan al asistente. Se conserva lo guardado.
     asistente_activo: bool = Field(
-        default=True, description="Habilitar las respuestas automáticas por WhatsApp"
+        default=True,
+        description="Habilitar las respuestas automáticas por WhatsApp",
+        json_schema_extra={"oculto": True},
     )
     umbral_mora_dias: int = Field(
-        default=5, description="Días de atraso a partir de los cuales el cliente es 'rojo'"
+        default=5, ge=0, le=365, description="Días de atraso a partir de los cuales el cliente es 'rojo'"
     )
     aviso_vencimiento_dias: int = Field(
-        default=2, description="Días de anticipación del recordatorio de cuota"
+        default=2, ge=0, le=365, description="Días de anticipación del recordatorio de cuota"
     )
     escalar_siempre_a_humano: bool = Field(
-        default=False, description="Desviar toda conversación a un gestor humano"
+        default=False,
+        description="Desviar toda conversación a un gestor humano",
+        json_schema_extra={"oculto": True},
     )
     # Cobro digital (ADR-0067). Con `pack_payments` activo se generan links/QR en
     # línea; sin él, la app muestra la cuenta informativa de abajo.

@@ -7,28 +7,43 @@ que la vista SSR `/admin/colaboradores`). Requiere la sección `collaborators`.
 
 from __future__ import annotations
 
+import mimetypes
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from core.admin.collaborators_service import (
     audit,
     create_collaborator,
+    delete_collaborator,
+    es_miembro_del_negocio,
     grant_permission,
     link_tenant,
     pack_collaborator_roles,
+    perfiles_de_pack,
+    reactivate_collaborator,
     reset_password,
+    resolve_tenant_id,
     revoke_permission,
+    secciones_del_catalogo,
+    set_permissions,
     toggle_active,
+    unlink_tenant,
 )
-from core.api.deps import Principal, require
+from core.admin.permissions import acceso_y_origen
+from core.admin.roles import ROLES_DE_PLATAFORMA
+from core.almacenamiento import abrir, resolver_avatar
+from core.api.deps import Principal, es_owner_o_master, require
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.billing.enforcement import QuotaExceeded
 from core.db.models import Admin, AdminPermission, Tenant, TenantUser
 from core.db.session import get_session
+from core.mcp.types import PackProfile
 
 router = APIRouter(prefix="/admin/collaborators", tags=["admin · colaboradores"])
 
@@ -49,17 +64,36 @@ class CollaboratorItem(BaseModel):
     id: uuid.UUID
     email: str
     username: str | None
+    nombre: str | None
+    telefono: str | None
+    avatar_url: str | None
     role: str
     active: bool
     is_self: bool
     is_platform_master: bool
     permissions: list[PermissionItem]
     links: list[TenantLink]
+    pack_profiles: list[PackProfile] = []
+    """Perfiles que los packs tienen de la cuenta (ADR-0176): p. ej. el gestor de cobranza."""
+    deleted: bool = False
+    """La cuenta está dada de baja (ADR-0198); el listado la trae solo con `?eliminadas=1`."""
+    can_delete: bool = False
+    can_reactivate: bool = False
 
 
 class PackRole(BaseModel):
     value: str
     label: str
+
+
+class ExisteResponse(BaseModel):
+    existe: bool
+    eliminada: bool = False
+    """El correo pertenece a una cuenta dada de baja: se reactiva, no se reasigna (ADR-0198)."""
+
+
+class UsernameDisponibleResponse(BaseModel):
+    disponible: bool
 
 
 @router.get("/pack-roles", response_model=list[PackRole])
@@ -70,24 +104,90 @@ async def list_pack_roles(
     return [PackRole(**r) for r in await pack_collaborator_roles()]
 
 
+@router.get("/existe", response_model=ExisteResponse)
+async def email_existe(
+    email: str,
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+) -> ExisteResponse:
+    """¿Ya existe una cuenta con este correo? Lo usa el alta en dos pasos (D-SPEC-34).
+
+    Si la cuenta fue dada de baja (ADR-0198), `existe` es False (el correo no se reasigna solo)
+    pero `eliminada` es True: el alta avisa que hay que reactivarla, no crear otra.
+    """
+    email = email.strip().lower()
+    async with get_session() as session:
+        cuenta = (
+            await session.execute(
+                select(Admin.id, Admin.deleted_at).where(Admin.email == email)
+            )
+        ).first()
+    if cuenta is None:
+        return ExisteResponse(existe=False)
+    return ExisteResponse(existe=cuenta.deleted_at is None, eliminada=cuenta.deleted_at is not None)
+
+
+@router.get("/username-disponible", response_model=UsernameDisponibleResponse)
+async def username_disponible(
+    username: str,
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+) -> UsernameDisponibleResponse:
+    """¿El `username` está libre? Validación en tiempo real del alta (D-SPEC-34)."""
+    usuario = username.strip()
+    if not usuario:
+        return UsernameDisponibleResponse(disponible=False)
+    async with get_session() as session:
+        ocupado = (
+            await session.execute(select(Admin.id).where(Admin.username == usuario))
+        ).scalar_one_or_none() is not None
+    return UsernameDisponibleResponse(disponible=not ocupado)
+
+
 @router.get("", response_model=list[CollaboratorItem])
 async def list_collaborators(
     principal: Annotated[Principal, Depends(require("collaborators"))],
+    todos: bool = False,
+    eliminadas: bool = False,
 ) -> list[CollaboratorItem]:
+    """Cuentas del **negocio activo**. El master puede pedir `?todos=1` para ver todas las
+    cuentas de la plataforma (gestión de cuentas); un owner siempre ve solo su negocio.
+
+    Con `?eliminadas=1` trae las cuentas dadas de baja (ADR-0198): el master todas; un
+    dueño/tester solo las que dio de baja en su negocio activo.
+    """
     me = principal.admin
     is_master = me.role == "master"
     tid = principal.tenant_id
+    other_links: dict[uuid.UUID, int] = {}
+    global_perms: dict[uuid.UUID, int] = {}
 
     async with get_session() as session:
-        if is_master:
-            admins = (await session.execute(select(Admin).order_by(Admin.email))).scalars().all()
+        if eliminadas:
+            query = select(Admin).where(Admin.deleted_at.is_not(None)).order_by(Admin.email)
+            if not is_master:
+                query = query.where(Admin.deleted_from_tenant_id == tid)
+            admins = (await session.execute(query)).scalars().all()
+        elif is_master and (todos or tid is None):
+            admins = (
+                (
+                    await session.execute(
+                        select(Admin)
+                        .where(Admin.deleted_at.is_(None))
+                        .order_by(Admin.email)
+                    )
+                )
+                .scalars()
+                .all()
+            )
         else:
             admins = list(
                 (
                     await session.execute(
                         select(Admin)
                         .join(TenantUser, TenantUser.admin_id == Admin.id)
-                        .where(TenantUser.tenant_id == tid)
+                        .where(
+                            TenantUser.tenant_id == tid,
+                            Admin.deleted_at.is_(None),
+                        )
                         .order_by(Admin.email)
                     )
                 )
@@ -101,8 +201,8 @@ async def list_collaborators(
         if admin_ids:
             perm_where = [AdminPermission.admin_id.in_(admin_ids)]
             link_where = [TenantUser.admin_id.in_(admin_ids)]
-            if not is_master:
-                # Un owner solo ve el scope de SU tenant.
+            if not (is_master and todos):
+                # Sin «todas las cuentas», solo el scope de SU tenant.
                 perm_where.append(AdminPermission.tenant_id == tid)
                 link_where.append(TenantUser.tenant_id == tid)
             perms = (
@@ -125,6 +225,33 @@ async def list_collaborators(
                     .order_by(Tenant.name)
                 )
             ).all()
+            if not is_master and not eliminadas and tid is not None:
+                # Exclusividad de la cuenta para saber si un dueño puede eliminarla: mismo
+                # criterio que `target_allowed_for_owner`, sin una consulta por fila.
+                other_links = dict(
+                    (
+                        await session.execute(
+                            select(TenantUser.admin_id, func.count())
+                            .where(
+                                TenantUser.admin_id.in_(admin_ids),
+                                TenantUser.tenant_id != tid,
+                            )
+                            .group_by(TenantUser.admin_id)
+                        )
+                    ).all()
+                )
+                global_perms = dict(
+                    (
+                        await session.execute(
+                            select(AdminPermission.admin_id, func.count())
+                            .where(
+                                AdminPermission.admin_id.in_(admin_ids),
+                                AdminPermission.tenant_id.is_(None),
+                            )
+                            .group_by(AdminPermission.admin_id)
+                        )
+                    ).all()
+                )
 
     perms_by: dict[uuid.UUID, list[PermissionItem]] = {}
     for admin_id, section, access, slug in perms:
@@ -135,11 +262,43 @@ async def list_collaborators(
     for admin_id, role, slug, name in links:
         links_by.setdefault(admin_id, []).append(TenantLink(role=role, slug=slug, name=name))
 
+    perfiles: dict[uuid.UUID, list[PackProfile]] = {}
+    if tid is not None and not eliminadas and not (is_master and todos):
+        detalle_total = es_owner_o_master(principal)
+
+        def ver_detalle(pack_id: str) -> bool:
+            # Owner/master, o quien tiene acceso a alguna sección del pack (el pack mismo o una sub-sección).
+            return detalle_total or any(
+                acceso and (seccion == pack_id or seccion.startswith(f"{pack_id}:"))
+                for seccion, acceso in principal.permissions.items()
+            )
+
+        perfiles = await perfiles_de_pack(tid, admin_ids, ver_detalle=ver_detalle)
+
+    def puede_eliminar(a: Admin) -> bool:
+        if a.deleted_at is not None or a.id == me.id:
+            return False
+        if a.role in ROLES_DE_PLATAFORMA:
+            return False
+        if is_master:
+            return True
+        if tid is None:
+            return False
+        rol = next((link.role for link in links_by.get(a.id, [])), None)
+        return (
+            rol == "colaborador"
+            and other_links.get(a.id, 0) == 0
+            and global_perms.get(a.id, 0) == 0
+        )
+
     return [
         CollaboratorItem(
             id=a.id,
             email=a.email,
             username=a.username,
+            nombre=a.nombre,
+            telefono=a.telefono,
+            avatar_url=resolver_avatar(a.avatar_url),
             role=a.role,
             active=a.active,
             is_self=a.id == me.id,
@@ -148,6 +307,13 @@ async def list_collaborators(
                 perms_by.get(a.id, []), key=lambda p: (p.section, p.scope)
             ),
             links=links_by.get(a.id, []),
+            pack_profiles=perfiles.get(a.id, []),
+            deleted=a.deleted_at is not None,
+            can_delete=puede_eliminar(a),
+            can_reactivate=(
+                a.deleted_at is not None
+                and (is_master or (tid is not None and a.deleted_from_tenant_id == tid))
+            ),
         )
         for a in admins
     ]
@@ -159,12 +325,18 @@ class CollaboratorCreate(BaseModel):
     password: str
     role: str = "colaborador"
     username: str = ""
+    nombre: str = ""
+    telefono: str = ""
     tenant: str = ""
     pack_roles: list[str] = []
 
 
 class PasswordReset(BaseModel):
     password: str
+
+
+class DeleteRequest(BaseModel):
+    reason: str = ""
 
 
 class GrantRequest(BaseModel):
@@ -183,25 +355,48 @@ class LinkRequest(BaseModel):
     role: str = "colaborador"
 
 
+class UnlinkRequest(BaseModel):
+    tenant: str
+
+
+class SetPermissionsRequest(BaseModel):
+    tenant: str = ""
+    permissions: dict[str, str]
+
+
+class PermissionState(BaseModel):
+    section: str
+    access: str
+    heredado: bool
+
+
 def _fail(error: str | None) -> None:
     if error is not None:
         raise ApiError.bad_request(error, "collaborator_error")
 
 
-@router.post("", status_code=200)
+@router.post("", status_code=200, responses=plan_limit_responses("colaboradores"))
 async def create_collaborator_endpoint(
     payload: CollaboratorCreate,
     principal: Annotated[Principal, Depends(require("collaborators", write=True))],
 ) -> JSONResponse:
-    resultado = await create_collaborator(
-        actor=principal.admin,
-        email=payload.email,
-        password=payload.password,
-        role=payload.role,
-        username=payload.username,
-        tenant_slug=payload.tenant,
-        pack_roles=payload.pack_roles,
-    )
+    """Alta de una cuenta nueva o invitación de una existente (ADR-0081). Al tope de
+    colaboradores del plan, 409 `plan_limit_colaboradores` y no se crea ni se invita a nadie
+    (D-35, ADR-0142)."""
+    try:
+        resultado = await create_collaborator(
+            actor=principal.admin,
+            email=payload.email,
+            password=payload.password,
+            role=payload.role,
+            username=payload.username,
+            nombre=payload.nombre,
+            telefono=payload.telefono,
+            tenant_slug=payload.tenant,
+            pack_roles=payload.pack_roles,
+        )
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from None
     if isinstance(resultado, str):
         raise ApiError.bad_request(resultado, "collaborator_error")
     audit(
@@ -277,6 +472,61 @@ async def revoke_collaborator_permission(
     return Response(status_code=204)
 
 
+@router.get("/{admin_id}/permissions", response_model=list[PermissionState])
+async def read_collaborator_permissions(
+    admin_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+    tenant: str = "",
+) -> list[PermissionState]:
+    """Acceso efectivo por sección y si es heredado, para la grilla de permisos (D-SPEC-34-1).
+
+    Un owner/tester ve el estado en su negocio activo; el master elige el negocio con `tenant`
+    (vacío = alcance global)."""
+    me = principal.admin
+    if me.role == "master":
+        tenant_id = await resolve_tenant_id(tenant) if tenant else None
+        if tenant and tenant_id is None:
+            raise ApiError.bad_request("tenant no encontrado", "collaborator_error")
+    else:
+        tenant_id = principal.tenant_id
+        # Un owner/tester solo lee cuentas de su negocio activo. Misma respuesta que para un UUID
+        # inexistente: no revela qué cuentas existen en otros negocios ni sus permisos globales.
+        if not await es_miembro_del_negocio(admin_id, tenant_id):
+            raise ApiError.bad_request("admin no encontrado", "collaborator_error")
+
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id)
+    if target is None or target.deleted_at is not None:
+        raise ApiError.bad_request("admin no encontrado", "collaborator_error")
+
+    estado = await acceso_y_origen(target, tenant_id, secciones_del_catalogo())
+    return [PermissionState(section=s, access=a, heredado=h) for s, (a, h) in estado.items()]
+
+
+@router.post("/{admin_id}/permissions", status_code=204)
+async def set_collaborator_permissions(
+    admin_id: uuid.UUID,
+    payload: SetPermissionsRequest,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    """Aplica en bloque los permisos de un colaborador (grilla, D-SPEC-34-1)."""
+    error = await set_permissions(
+        actor=principal.admin,
+        admin_id=admin_id,
+        permissions=payload.permissions,
+        tenant_slug=payload.tenant,
+    )
+    _fail(error)
+    audit(
+        "set_permissions",
+        principal.admin.email,
+        str(admin_id),
+        scope=payload.tenant or "*",
+        secciones=sorted(payload.permissions),
+    )
+    return Response(status_code=204)
+
+
 @router.post("/{admin_id}/link", status_code=204)
 async def link_collaborator_tenant(
     admin_id: uuid.UUID,
@@ -296,14 +546,115 @@ async def link_collaborator_tenant(
     return Response(status_code=204)
 
 
-@router.post("/{admin_id}/toggle", status_code=204)
+@router.post("/{admin_id}/unlink", status_code=204)
+async def unlink_collaborator_tenant(
+    admin_id: uuid.UUID,
+    payload: UnlinkRequest,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    """Desvincula la cuenta de un negocio (ADR-0136). Un owner solo de su negocio activo y
+    solo a colaboradores; el master, de cualquiera. Nadie deja un negocio sin propietario."""
+    error = await unlink_tenant(actor=principal.admin, admin_id=admin_id, tenant_slug=payload.tenant)
+    _fail(error)
+    audit("unlink", principal.admin.email, str(admin_id), tenant=payload.tenant)
+    return Response(status_code=204)
+
+
+@router.post("/{admin_id}/toggle", status_code=204, responses=plan_limit_responses("colaboradores"))
 async def toggle_collaborator_active(
     admin_id: uuid.UUID,
     principal: Annotated[Principal, Depends(require("collaborators", write=True))],
 ) -> Response:
-    error = await toggle_active(
-        actor=principal.admin, admin_id=admin_id, current_tenant_id=principal.tenant_id
-    )
+    try:
+        error = await toggle_active(
+            actor=principal.admin, admin_id=admin_id, current_tenant_id=principal.tenant_id
+        )
+    except QuotaExceeded as exc:
+        # Reactivar una cuenta con el negocio al tope de colaboradores (ADR-0142).
+        raise plan_limit_error(exc) from None
     _fail(error)
     audit("toggle", principal.admin.email, str(admin_id))
     return Response(status_code=204)
+
+
+@router.post("/{admin_id}/delete", status_code=204)
+async def delete_collaborator_endpoint(
+    admin_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+    payload: DeleteRequest | None = None,
+) -> Response:
+    """Baja lógica de una cuenta de equipo (ADR-0198).
+
+    No borra la identidad ni el historial: la cuenta deja de entrar, sale de Equipo y se
+    revocan sus vínculos, permisos y sesiones. El perfil de Gestor de Cobranza se da de baja
+    sin tocar sus registros ni sus carteras. Solo se reactiva con la acción explícita.
+    """
+    error = await delete_collaborator(
+        actor=principal.admin,
+        admin_id=admin_id,
+        current_tenant_id=principal.tenant_id,
+        reason=(payload.reason if payload is not None else ""),
+    )
+    _fail(error)
+    return Response(status_code=204)
+
+
+@router.post(
+    "/{admin_id}/reactivate",
+    status_code=204,
+    responses=plan_limit_responses("colaboradores"),
+)
+async def reactivate_collaborator_endpoint(
+    admin_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    """Reactiva la MISMA cuenta eliminada (mismo correo, mismo historial y mismo Gestor).
+
+    El master reactiva cualquiera; un dueño/tester solo las que dio de baja en su negocio
+    activo. Reactivar vuelve a ocupar cupo de colaboradores del plan.
+    """
+    try:
+        error = await reactivate_collaborator(
+            actor=principal.admin,
+            admin_id=admin_id,
+            current_tenant_id=principal.tenant_id,
+        )
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from None
+    _fail(error)
+    return Response(status_code=204)
+
+
+@router.get("/{admin_id}/avatar")
+async def get_collaborator_avatar(
+    admin_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("collaborators"))],
+) -> FileResponse:
+    """Sirve la foto de un colaborador visible para la sesión (mismo origen para el panel)."""
+    me = principal.admin
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id)
+        if (
+            target is None
+            or target.deleted_at is not None
+            or not target.avatar_url
+            or target.avatar_url.startswith(("http://", "https://"))
+        ):
+            raise ApiError.not_found("Foto no encontrada.")
+        if me.role != "master":
+            visible = (
+                await session.execute(
+                    select(TenantUser.id).where(
+                        TenantUser.tenant_id == principal.tenant_id,
+                        TenantUser.admin_id == admin_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if visible is None:
+                raise ApiError.not_found("Foto no encontrada.")
+        valor = target.avatar_url
+    ruta = abrir(valor)
+    if ruta is None:
+        raise ApiError.not_found("Foto no encontrada.")
+    media = mimetypes.guess_type(ruta.name)[0] or "application/octet-stream"
+    return FileResponse(ruta, media_type=media, headers={"Cache-Control": "private, max-age=60"})

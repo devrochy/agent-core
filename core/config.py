@@ -6,13 +6,16 @@ Regla: el core NUNCA lee os.environ directamente; siempre a través de `settings
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
+from datetime import date
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DebounceMode = Literal["inmediato", "rapido", "natural", "pausado"]
+DebounceMode = Literal["inmediato", "corto", "rapido", "natural", "pausado"]
 SplitStyle = Literal["un_mensaje", "pocos_cortos", "varios_cortos"]
 
 DEBOUNCE_DELAY_MS: dict[str, int] = {
@@ -24,17 +27,57 @@ DEBOUNCE_DELAY_MS: dict[str, int] = {
 }
 
 
+# Campos cuyo valor nunca se muestra en `repr` (ni en tracebacks con variables locales de rich
+# o typer, que imprimen el objeto entero) y contraseñas dentro de URLs.
+_CAMPOS_SECRETOS = ("key", "secret", "token", "password", "dsn")
+_CLAVE_EN_URL = re.compile(r"(://[^/\s:@]+:)[^@\s/]+@")
+OCULTO = "**********"
+
+
+def _ocultar(nombre: str | None, valor: Any) -> Any:
+    if not isinstance(valor, str) or not valor:
+        return valor
+    if nombre and any(p in nombre.lower() for p in _CAMPOS_SECRETOS):
+        return OCULTO
+    return _CLAVE_EN_URL.sub(rf"\g<1>{OCULTO}@", valor)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    def __repr_args__(self) -> Iterator[tuple[str | None, Any]]:  # type: ignore[override]
+        """`repr`/`str`/rich nunca muestran secretos: un traceback con variables locales que
+        pase por un frame con `settings` (el loop, los runners) imprimía la API key."""
+        for nombre, valor in super().__repr_args__():
+            yield nombre, _ocultar(nombre, valor)
 
     # --- Aplicación ---
     app_name: str = Field(default="Agent Core", alias="APP_NAME")
     app_env: Literal["development", "production"] = Field(default="development", alias="APP_ENV")
     app_secret_key: str = Field(default="change-me", alias="APP_SECRET_KEY")
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
+    # Modo Sandbox de WhatsApp vía Twilio (HU-CONN-20, adenda del ADR-0186): solo en test, apagado por defecto. Se lee
+    # únicamente en `core/gateway/twilio/sandbox.py`.
+    twilio_sandbox_permitido: bool = Field(default=False, alias="TWILIO_SANDBOX_PERMITIDO")
+    # Número compartido del sandbox (el `From` de cada mensaje). Configurable por si Twilio lo cambia.
+    twilio_sandbox_e164: str = Field(default="+14155238886", alias="TWILIO_SANDBOX_E164")
+    # Kill-switch del canal Telegram (ADR-0199, D-74): encendido por defecto, para todos los negocios. Apagado cierra
+    # alta, webhook, salida y salud. Se lee únicamente en `core/gateway/telegram/habilitado.py`.
+    telegram_habilitado: bool = Field(default=True, alias="TELEGRAM_HABILITADO")
     # URL del panel nuevo: a donde vuelve el navegador tras el OAuth de Google.
     # En producción suele coincidir con el origen público; en dev apunta al :3200.
     panel_base_url: str = Field(default="", alias="PANEL_BASE_URL")
+    # Rol `tester` del centro de pruebas (SPEC-30, ADR-0134): master sin Colaboradores.
+    # SOLO en test. Apagado (producción), un tester no inicia sesión ni se puede crear.
+    qa_testers_enabled: bool = Field(default=False, alias="QA_TESTERS_ENABLED")
+    # HU-CRM-06 (ADR-0150): números (con o sin `+`) que pueden recibir un envío a un segmento
+    # cuando el entorno no es producción real (desarrollo o test con QA_TESTERS_ENABLED). Vacío =
+    # en esos entornos no sale ningún envío a un segmento. En producción no se mira.
+    segment_send_allowlist: str = Field(default="", alias="SEGMENT_SEND_ALLOWLIST")
+    # Landing pública: de donde se sirve el widget embebible del chat web
+    # (/widget.js) y el formulario alojado. Se usa para armar el fragmento
+    # que el negocio pega en su sitio (HU-CHAN-02).
+    landing_base_url: str = Field(default="https://www.solvershub.site", alias="LANDING_BASE_URL")
     # Prefijo de ruta bajo el que se sirve la app detrás de un proxy inverso
     # (p. ej. "/agent-core" en Coolify/Tailscale). Vacío = servida en la raíz.
     # El proxy QUITA el prefijo al reenviar; para las URLs que genera la app
@@ -65,6 +108,14 @@ class Settings(BaseSettings):
     # el dueño. Vacío = usa DATABASE_URL.
     migrations_database_url: str = Field(default="", alias="MIGRATIONS_DATABASE_URL")
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+    # Proxies de confianza (CIDR, separados por coma): solo si la conexión llega
+    # desde uno de estos se leen `X-Forwarded-For`/`CF-Connecting-IP` para saber la
+    # IP del cliente (bloqueo de login, HU-ARCH-04). Por defecto, las redes privadas
+    # y loopback: Traefik de Coolify, cloudflared y el BFF del panel viven ahí.
+    trusted_proxy_cidrs: str = Field(
+        default="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,::1/128,fc00::/7",
+        alias="TRUSTED_PROXY_CIDRS",
+    )
 
     # --- Cifrado ---
     # MASTER_ENCRYPTION_KEY: clave Fernet legada -- SecretBox ya no la usa para
@@ -86,11 +137,41 @@ class Settings(BaseSettings):
         default="deepseek", alias="LLM_PROVIDER"
     )
     llm_api_key: str = Field(default="", alias="LLM_API_KEY")
-    llm_model: str = Field(default="deepseek-chat", alias="LLM_MODEL")
-    llm_model_reasoning: str = Field(default="deepseek-reasoner", alias="LLM_MODEL_REASONING")
+    # Modelos vigentes de DeepSeek (V4). `deepseek-chat` y `deepseek-reasoner` se
+    # discontinuaron el 2026-07-24: no usarlos, ni como respaldo (P-05/D-22).
+    llm_model: str = Field(default="deepseek-flash", alias="LLM_MODEL")
+    llm_model_reasoning: str = Field(default="deepseek-flash", alias="LLM_MODEL_REASONING")
+    # Modelo de respaldo ante error del proveedor o fallas de tools > 5 %/h.
+    llm_model_fallback: str = Field(default="gpt-4o-mini", alias="LLM_MODEL_FALLBACK")
     llm_base_url: str = Field(default="https://api.deepseek.com", alias="LLM_BASE_URL")
+    # Modo de razonamiento para modelos V4: los IDs explícitos lo activan por
+    # defecto, así que el chat normal debe apagarlo explícitamente.
+    llm_thinking_default: bool = Field(default=False, alias="LLM_THINKING_DEFAULT")
+    llm_thinking_reasoning: bool = Field(default=True, alias="LLM_THINKING_REASONING")
     llm_max_tokens: int = Field(default=4096, alias="LLM_MAX_TOKENS")
     difficulty_routing: bool = Field(default=True, alias="DIFFICULTY_ROUTING")
+
+    # --- Multimedia entrante (SPEC-04, ADR-0151) ---
+    # Fallback de plataforma; cada negocio puede sobrescribirlo en el panel (BYOK).
+    # Audio (STT): Groq es el default por costo. Visión: DeepSeek por costo.
+    stt_provider: Literal["groq", "openai"] = Field(default="groq", alias="STT_PROVIDER")
+    stt_model: str = Field(default="whisper-large-v3-turbo", alias="STT_MODEL")
+    stt_api_key: str = Field(default="", alias="STT_API_KEY")
+    vision_provider: Literal["deepseek", "anthropic", "openai"] = Field(
+        default="deepseek", alias="VISION_PROVIDER"
+    )
+    vision_model: str = Field(default="deepseek-flash", alias="VISION_MODEL")
+    vision_api_key: str = Field(default="", alias="VISION_API_KEY")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
+    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    deepseek_api_key: str = Field(default="", alias="DEEPSEEK_API_KEY")
+    # Límites defensivos de la descarga/procesamiento (HU-MEDIA-02).
+    media_max_bytes: int = Field(default=16 * 1024 * 1024, alias="MEDIA_MAX_BYTES")
+    media_download_timeout_s: float = Field(default=20.0, alias="MEDIA_DOWNLOAD_TIMEOUT_S")
+    stt_timeout_s: float = Field(default=45.0, alias="STT_TIMEOUT_S")
+    vision_timeout_s: float = Field(default=45.0, alias="VISION_TIMEOUT_S")
+    # TTS de salida (pack-voice, ADR-0197): la síntesis corre en el worker de envío.
+    tts_timeout_s: float = Field(default=60.0, alias="TTS_TIMEOUT_S")
 
     # --- Embeddings ---
     embedding_provider: Literal["local", "openai", "none"] = Field(
@@ -99,12 +180,37 @@ class Settings(BaseSettings):
     embedding_model: str = Field(default="all-MiniLM-L6-v2", alias="EMBEDDING_MODEL")
     embedding_dimensions: int = Field(default=384, alias="EMBEDDING_DIMENSIONS")
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    # Embeddings del pack de conocimiento (ADR-0145 §3), aparte de los de la memoria: `hash` es
+    # determinista y sin red (develop, CI y test); `openai` solo con `APP_ENV=production`.
+    knowledge_embedding_provider: Literal["hash", "openai"] = Field(
+        default="hash", alias="KNOWLEDGE_EMBEDDING_PROVIDER"
+    )
+    # Tope mensual en USD del gate de pass^k por negocio (HU-AOS-21): lo paga la plataforma. El
+    # master puede fijar otro en `tenants.settings.evals.tope_usd_mensual`.
+    eval_tope_usd_mensual: float = Field(default=10.0, ge=0, alias="EVAL_TOPE_USD_MENSUAL")
+    # Corredor del gate (HU-AOS-21 parte 3b). Base de eval (mismo Postgres, base `agentcore_eval`):
+    # URL del rol de runtime y del rol dueño (migra y registra `pack_versions`). El subproceso del
+    # corredor recibe ESTAS y no la del negocio. El gate no se cierra con ellas: eso es un seguimiento.
+    eval_database_url: str = Field(default="", alias="EVAL_DATABASE_URL")
+    eval_migrations_database_url: str = Field(default="", alias="EVAL_MIGRATIONS_DATABASE_URL")
+    # Tiempo máximo del subproceso de una medición y vigencia de una solicitud sin respuesta.
+    eval_timeout_segundos: int = Field(default=3600, ge=60, alias="EVAL_TIMEOUT_SEGUNDOS")
+    # Base lógica de Redis del subproceso: aparte de la del negocio (memoria de trabajo y cola de
+    # Celery), para que nada de lo que encole el efímero llegue a los workers reales.
+    eval_redis_db: int = Field(default=15, ge=1, le=15, alias="EVAL_REDIS_DB")
     # Retención de la memoria semántica en días (ADR-0053). 0 = sin purga automática.
     memory_retention_days: int = Field(default=0, alias="MEMORY_RETENTION_DAYS")
+    # Huérfanas de la prueba del panel (HU-ARCH-14): se purgan las conversaciones `test`
+    # sin actividad en las últimas N horas. 0 = desactivado (solo se purga al cerrar).
+    playground_retention_hours: int = Field(default=6, ge=0, alias="PLAYGROUND_RETENTION_HOURS")
 
     # --- WhatsApp (Meta Cloud API) ---
     whatsapp_verify_token: str = Field(default="", alias="WHATSAPP_VERIFY_TOKEN")
     whatsapp_app_secret: str = Field(default="", alias="WHATSAPP_APP_SECRET")
+    # Webhook fail-closed (HU-ARCH-05): sin `app_secret` resoluble, un POST se
+    # rechaza con 401. En test se puede permitir explícitamente sin firma, con
+    # aviso en el log. Nunca activarlo en producción.
+    webhook_allow_unsigned: bool = Field(default=False, alias="WEBHOOK_ALLOW_UNSIGNED")
     whatsapp_access_token: str = Field(default="", alias="WHATSAPP_ACCESS_TOKEN")
     whatsapp_phone_number_id: str = Field(default="", alias="WHATSAPP_PHONE_NUMBER_ID")
 
@@ -125,6 +231,20 @@ class Settings(BaseSettings):
     meta_app_id: str = Field(default="", alias="META_APP_ID")
     meta_app_secret: str = Field(default="", alias="META_APP_SECRET")
     meta_config_id: str = Field(default="", alias="META_CONFIG_ID")
+    # Configuración de Facebook Login for Business de Messenger (permisos de Páginas: `pages_messaging`,
+    # `pages_show_list`, `pages_manage_metadata`; ADR-0152). Es DISTINTA de `META_CONFIG_ID`, que es la de
+    # Embedded Signup de WhatsApp y no concede esos permisos. Sin ella el alta de Messenger no está disponible.
+    meta_messenger_config_id: str = Field(default="", alias="META_MESSENGER_CONFIG_ID")
+    # Configuración de Facebook Login for Business de Instagram (`instagram_basic`, `instagram_manage_messages`,
+    # `pages_show_list`, `pages_manage_metadata`; HU-CHAN-04). PROPIA: no se mezcla con la de Messenger.
+    meta_instagram_config_id: str = Field(default="", alias="META_INSTAGRAM_CONFIG_ID")
+    # Instagram Login (HU-CHAN-04, ruta b): otra app de Meta (la «app de Instagram» del producto), con su propio
+    # App ID/Secret y sus propios permisos. Nunca se mezclan con los de Facebook Login. Apagada por defecto
+    # (`INSTAGRAM_LOGIN_ENABLED`): se prende solo después de probarla con una cuenta real en test.
+    instagram_app_id: str = Field(default="", alias="INSTAGRAM_APP_ID")
+    instagram_app_secret: str = Field(default="", alias="INSTAGRAM_APP_SECRET")
+    instagram_login_redirect_uri: str = Field(default="", alias="INSTAGRAM_LOGIN_REDIRECT_URI")
+    instagram_login_enabled: bool = Field(default=False, alias="INSTAGRAM_LOGIN_ENABLED")
     # Versión de Graph API usada SOLO por el módulo de preflight (core/gateway/
     # meta_preflight.py) -- no toca los v21.0 hardcodeados en outbound.py ni en
     # connections.py::verify_meta_credentials (envío de mensajes en producción).
@@ -140,7 +260,20 @@ class Settings(BaseSettings):
     # --- Comportamiento ---
     debounce_mode: DebounceMode = Field(default="natural", alias="DEBOUNCE_MODE")
     max_agent_iterations: int = Field(default=6, alias="MAX_AGENT_ITERATIONS")
-    message_split_style: SplitStyle = Field(default="pocos_cortos", alias="MESSAGE_SPLIT_STYLE")
+    message_split_style: SplitStyle = Field(default="un_mensaje", alias="MESSAGE_SPLIT_STYLE")
+
+    # --- Agent OS (ADR-0112) ---
+    # El ruteo por (conexión, cliente) de ADR-0115 ya no es una bandera: es siempre (ADR-0191).
+
+    # --- Onboarding obligatorio (HU-SH-10, adenda a ADR-0124) ---
+    # Fecha de corte (AAAA-MM-DD): solo los negocios creados desde ese día pasan por el recorrido
+    # de primer uso. Vacía = función apagada (ningún negocio es forzado ni ve el aviso).
+    onboarding_desde: date | None = Field(default=None, alias="ONBOARDING_DESDE")
+
+    @field_validator("onboarding_desde", mode="before")
+    @classmethod
+    def _onboarding_desde_vacio(cls, value: Any) -> Any:
+        return None if isinstance(value, str) and not value.strip() else value
 
     # --- Modo demo (SOLO desarrollo) ---
     # Activa un LLM fake determinístico y un envío de canal no-op para probar el
@@ -152,6 +285,37 @@ class Settings(BaseSettings):
     # tenant ruidoso ahogue a los demás en el mismo worker.
     max_concurrent_turns: int = Field(default=8, alias="MAX_CONCURRENT_TURNS")
     max_turns_per_tenant: int = Field(default=2, alias="MAX_TURNS_PER_TENANT")
+
+    # --- Reclamo de pendientes del consumer (HU-ARCH-06, ADR-0090) ---
+    # Un mensaje que quedó `pending` (crash, deploy, turno colgado) se reclama con
+    # XAUTOCLAIM tras este idle. Un claim de idempotencia incompleto más viejo que
+    # `claim_stale_seconds` se considera abandonado y se revoca para reprocesar.
+    # Invariante: turn_timeout_s < inbound_reclaim_idle_ms < claim_stale_seconds,
+    # así un turno acotado nunca se confunde con un abandono.
+    inbound_reclaim_idle_ms: int = Field(default=300_000, alias="INBOUND_RECLAIM_IDLE_MS")
+    claim_stale_seconds: int = Field(default=600, alias="CLAIM_STALE_SECONDS")
+
+    # --- Retención de los streams de entrada (ADR-0053, docs/MULTITENANT.md) ---
+    # Llevan texto y teléfono de los clientes. Lo procesado se borra al ackear (XDEL);
+    # como red, el consumer recorta lo ackeado más viejo que `inbound_stream_retention_hours`
+    # (nunca lo pendiente ni lo no leído). La DLQ guarda `inbound_dlq_retention_hours`
+    # (mínimo 24 h) para revisar y reintentar desde el panel; después se borra.
+    inbound_stream_retention_hours: int = Field(
+        default=24, ge=1, le=720, alias="INBOUND_STREAM_RETENTION_HOURS"
+    )
+    inbound_dlq_retention_hours: int = Field(
+        default=168, ge=24, le=2160, alias="INBOUND_DLQ_RETENTION_HOURS"
+    )
+
+    # --- Presupuesto de un turno (HU-ARCH-27) ---
+    # `turn_timeout_s` es el presupuesto TOTAL del turno (todas las llamadas al
+    # LLM y tools): al agotarse se corta y el mensaje no queda colgado. La espera
+    # por el cupo del tenant tiene tope (`turn_queue_timeout_s`); si se agota, el
+    # turno se reprograma/reclama en vez de esperar para siempre. `turn_slow_warn_s`
+    # registra los turnos lentos para ver el problema antes de que sea incidente.
+    turn_timeout_s: int = Field(default=180, alias="TURN_TIMEOUT_S")
+    turn_queue_timeout_s: int = Field(default=30, alias="TURN_QUEUE_TIMEOUT_S")
+    turn_slow_warn_s: int = Field(default=30, alias="TURN_SLOW_WARN_S")
 
     # --- Costos de Meta ---
     # Franquicia de 1000 mensajes de servicio gratis/mes por número: cifra
@@ -176,12 +340,84 @@ class Settings(BaseSettings):
     # Sandbox por default (mismo criterio que pack-payments): producción se
     # habilita explícitamente.
     wompi_billing_sandbox: bool = Field(default=True, alias="WOMPI_BILLING_SANDBOX")
+    # R-05 (HU-SH-04, ADR-0123): Wompi admite UNA URL de eventos por cuenta y ambiente. Si la
+    # cuenta de la plataforma es la misma que usa el pack de pagos de un negocio (el de
+    # `solvershub`, que vende los planes), su URL apunta a `/webhooks/billing/wompi` y los
+    # eventos que no son de un pago de la plataforma se reenvían a ESE negocio (UUID). Vacío =
+    # cuentas separadas: no se reenvía nada (fail-closed).
+    billing_wompi_eventos_tenant: str = Field(default="", alias="BILLING_WOMPI_EVENTOS_TENANT")
+    # Días antes del fin del período en que el job de renovación genera el cobro del
+    # siguiente y avisa por el canal preferido del negocio (HU-SH-04).
+    billing_dias_renovacion: int = Field(default=5, ge=1, le=28, alias="BILLING_DIAS_RENOVACION")
+
+    # --- Aprovisionamiento automático de negocios (HU-SH-03, ADR-0121) ---
+    # Negocios VENDEDORES por UUID, separados por coma (p. ej. el de `solvershub`): solo
+    # un `subscription.activated` de uno de ellos crea un negocio nuevo. Vacío = apagado.
+    # Va en el worker (ahí corre el despachador del outbox). No hay token de servicio.
+    # Desde HU-SH-04 (ADR-0123) también es el canal asistente del cobro de la plataforma.
+    provisioning_seller_tenants: str = Field(default="", alias="PROVISIONING_SELLER_TENANTS")
+    # Antiabuso del alta (HU-SH-07, ADR-0125). Pedidos de planes de la plataforma por hora
+    # desde un mismo origen (el cliente del chat): pasado el cupo, se frenan. Va en la app,
+    # donde corren las tools.
+    alta_pedidos_por_hora: int = Field(default=3, ge=1, le=100, alias="ALTA_PEDIDOS_POR_HORA")
+    # Pedidos de alta de la misma persona (cliente, teléfono o documento) en 24 h a partir de
+    # los cuales el alta va a revisión humana («muchos intentos»). Va en el worker.
+    alta_intentos_revision: int = Field(default=3, ge=2, le=100, alias="ALTA_INTENTOS_REVISION")
+    # Crédito mensual (HU-BILL-04/06, ADR-0144): COP por USD con que se convierten los costos de
+    # proveedor a créditos AL ESCRIBIR el ledger. Cada fila guarda la tasa que usó
+    # (`usage_ledger.trm_cop`), así que cambiarla no reescribe el consumo ya medido.
+    # 4000 es el supuesto de `modelo-de-precios.md` (calc_precios.py): PENDIENTE DEL DUEÑO fijar
+    # la TRM oficial (HU-BILL-01). Rango acotado: un valor absurdo en un env no factura a todos.
+    billing_trm_cop: float = Field(default=4000.0, ge=2000, le=8000, alias="BILLING_TRM_COP")
+    # Acciones de IA cotizadas (HU-BILL-16, ADR-0194, enmienda de ADR-0144 §11): antes de gastar
+    # se verifica que el crédito del mes alcance y, si no, 409 `plan_limit_creditos`. Encendido
+    # por decisión del dueño (D-71); apagado solo mide. No afecta los turnos ni la ingesta.
+    billing_bloquear_por_creditos: bool = Field(default=True, alias="BILLING_BLOQUEAR_POR_CREDITOS")
+    # Costo de referencia en USD de reconocer UNA imagen con la llave de la plataforma, para
+    # cotizar antes de llamar al proveedor: ~1.500 tokens de entrada y ~300 de salida con
+    # Claude Haiku 4.5 (`core/media/catalog.py`) ≈ 0,003. Lo registrado después es el costo real.
+    billing_vision_costo_referencia_usd: float = Field(
+        default=0.003, ge=0, le=1, alias="BILLING_VISION_COSTO_REFERENCIA_USD"
+    )
 
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
     otel_exporter_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     otel_service_name: str = Field(default="agent-core", alias="OTEL_SERVICE_NAME")
+    # Métricas OTLP (ADR-0188), independientes de las trazas. Apagadas = no-op: los contadores
+    # declarados con `opentelemetry.metrics` no salen del proceso. El endpoint es la URL
+    # completa (`http://alloy:4318/v1/metrics`), igual que OTEL_EXPORTER_OTLP_ENDPOINT lo es
+    # para las trazas: no se le agrega `/v1/metrics`.
+    otel_metrics_enabled: bool = Field(default=False, alias="OTEL_METRICS_ENABLED")
+    otel_metrics_endpoint: str = Field(default="", alias="OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+    # Rol del contenedor (api, worker, beat, connector), el mismo que leen los entrypoints. Las
+    # sondas de métricas (ADR-0188) corren solo en la API.
+    agent_core_role: str = Field(default="api", alias="AGENT_CORE_ROLE")
+    # Ledger del Coordinador (HU-AOS-10, adenda de ADR-0112): `core_decisions`, `turn_outcomes`
+    # y la propagación del `turn_id` a `messages`/`usage_ledger`/`audit_log`. Es observabilidad,
+    # no cambia la conducta; apagarlo deja las columnas en NULL. Es "la bandera" de la HU.
+    kernel_ledger_enabled: bool = Field(default=True, alias="KERNEL_LEDGER_ENABLED")
+
+    # --- Correo de sistema (recuperación de contraseña, ADR-0098) ---
+    # SMTP de la plataforma, distinto del canal SMTP por tenant (que exige
+    # contexto de negocio). Sin host configurado, el envío es log-only
+    # (mismo criterio que las alertas de Slack).
+    system_smtp_host: str = Field(default="", alias="SYSTEM_SMTP_HOST")
+    system_smtp_port: int = Field(default=587, alias="SYSTEM_SMTP_PORT")
+    system_smtp_username: str = Field(default="", alias="SYSTEM_SMTP_USERNAME")
+    system_smtp_password: str = Field(default="", alias="SYSTEM_SMTP_PASSWORD")
+    system_smtp_from: str = Field(default="", alias="SYSTEM_SMTP_FROM")
+
+    # --- Notificaciones push de la app oficial (ADR-0099) ---
+    # Expo Push Service con el projectId de EAS existente. Sin
+    # EXPO_PUSH_ENABLED, el envío es log-only (mismo criterio que el correo de
+    # sistema): un canal sin configurar no rompe el flujo.
+    expo_push_enabled: bool = Field(default=False, alias="EXPO_PUSH_ENABLED")
+    expo_push_url: str = Field(
+        default="https://exp.host/--/api/v2/push/send", alias="EXPO_PUSH_URL"
+    )
+    expo_push_access_token: str = Field(default="", alias="EXPO_PUSH_ACCESS_TOKEN")
 
     # --- Alertas (salud de conexiones Meta) ---
     # Sin webhook configurado, send_alert() solo loguea (nunca fue un canal
@@ -197,3 +433,28 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+# Valores que nunca son una clave real: el default del campo y los de ejemplo de la documentación.
+_CLAVES_DE_EJEMPLO = frozenset({"", "change-me", "changeme", "secret", "ci-only-not-a-secret-app-key"})
+LARGO_MINIMO_CLAVE = 32
+
+
+class ClaveSecretaInsegura(RuntimeError):
+    """`APP_SECRET_KEY` firma invitaciones, archivos, A2A, opciones directas, procedimientos y el
+    antiabuso: con el default, cualquiera que lea el repo puede falsificar esas firmas."""
+
+
+def verificar_clave_secreta(settings: Settings | None = None) -> None:
+    """En producción (también test, que corre con `APP_ENV=production`) la API, el worker y el
+    beat no arrancan con una `APP_SECRET_KEY` de ejemplo o corta. Se genera con
+    `openssl rand -hex 32`. Fuera de producción no se exige nada."""
+    settings = settings or get_settings()
+    if settings.app_env != "production":
+        return
+    clave = settings.app_secret_key.strip()
+    if clave.lower() in _CLAVES_DE_EJEMPLO or len(clave) < LARGO_MINIMO_CLAVE:
+        raise ClaveSecretaInsegura(
+            f"APP_SECRET_KEY insegura en producción (de ejemplo o de menos de {LARGO_MINIMO_CLAVE} caracteres); "
+            "genérala con `openssl rand -hex 32`"
+        )

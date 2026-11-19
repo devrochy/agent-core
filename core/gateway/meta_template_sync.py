@@ -42,14 +42,27 @@ async def list_templates(waba_id: str, token: str, app_secret: str, version: str
     return items
 
 
-async def acquire_sync_lock(waba_id: str) -> bool:
+async def acquire_sync_lock(tenant_id: uuid.UUID, waba_id: str) -> bool:
     """Traduce el `jobId` de BullMQ (`tpl:{wabaId}:{yyyy-MM-dd-HH}`) pedido
     en el ticket a un lock de Redis: cron y botón manual comparten esta
-    llave, así una sync manual no repite lo que el cron ya hizo esa hora."""
+    llave, así una sync manual no repite lo que el cron ya hizo esa hora.
+
+    La llave lleva el tenant: `waba_id` no es único entre negocios, y sin él un
+    negocio podía gastar el turno horario de otro (auditor-multitenant, HU-CONN-01)."""
     redis = get_redis()
     hour_key = datetime.now(UTC).strftime("%Y-%m-%d-%H")
-    key = f"tpl_sync_lock:{waba_id}:{hour_key}"
+    key = f"tpl_sync_lock:{tenant_id}:{waba_id}:{hour_key}"
     return bool(await redis.set(key, "1", ex=3600, nx=True))
+
+
+def _quality_score(item: dict[str, Any]) -> str | None:
+    """`quality_score` de Graph: desde v2x llega como objeto (`{"score": "GREEN",
+    "date": ...}`); antes era texto. La columna es texto: se guarda el `score`.
+    Con el objeto crudo el INSERT fallaba y ninguna plantilla se sincronizaba."""
+    valor = item.get("quality_score")
+    if isinstance(valor, dict):
+        valor = valor.get("score")
+    return str(valor) if valor else None
 
 
 async def sync_templates(
@@ -90,7 +103,7 @@ async def sync_templates(
                         meta_template_id=str(item.get("id") or "") or None,
                         name=name, language=language, category=item.get("category"),
                         parameter_format=item.get("parameter_format"), status=item.get("status") or "PENDING",
-                        quality_score=item.get("quality_score"), components=item.get("components"),
+                        quality_score=_quality_score(item), components=item.get("components"),
                         synced_at=utcnow(),
                     )
                 )
@@ -99,7 +112,7 @@ async def sync_templates(
                 existing.category = item.get("category")
                 existing.parameter_format = item.get("parameter_format")
                 existing.status = item.get("status") or existing.status
-                existing.quality_score = item.get("quality_score")
+                existing.quality_score = _quality_score(item)
                 existing.components = item.get("components")
                 existing.synced_at = utcnow()
                 existing.sync_error = None

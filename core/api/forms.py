@@ -15,12 +15,36 @@ def is_secret(prop: dict[str, Any]) -> bool:
     return bool(prop.get("writeOnly")) or prop.get("format") == "password"
 
 
+def is_hidden(prop: dict[str, Any]) -> bool:
+    """Campo marcado `json_schema_extra={"oculto": True}`: no sale en el formulario ni se edita desde él."""
+    return bool(prop.get("oculto"))
+
+
+def hide_fields(schema: dict[str, Any], values: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """El esquema y los valores sin los campos ocultos (lo que el formulario debe mostrar)."""
+    props = schema.get("properties") or {}
+    ocultos = {n for n, p in props.items() if isinstance(p, dict) and is_hidden(p)}
+    if not ocultos:
+        return schema, values
+    visible = {**schema, "properties": {n: p for n, p in props.items() if n not in ocultos}}
+    if isinstance(schema.get("required"), list):
+        visible["required"] = [n for n in schema["required"] if n not in ocultos]
+    return visible, {n: v for n, v in values.items() if n not in ocultos}
+
+
 def coerce_schema_values(
     schema: dict[str, Any], values: dict[str, Any], previous: dict[str, Any]
 ) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for name, prop in (schema.get("properties") or {}).items():
         if not isinstance(prop, dict):
+            continue
+        if is_hidden(prop):
+            # El formulario no lo muestra: lo guardado se conserva y lo que llegue se ignora.
+            if name in previous:
+                out[name] = previous[name]
+            elif "default" in prop:
+                out[name] = prop["default"]
             continue
         if name not in values:
             if is_secret(prop) and name in previous:

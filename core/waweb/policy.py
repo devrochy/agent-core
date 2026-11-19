@@ -14,6 +14,8 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
+from core.config_limites import rango
+
 MODE_REPLY_ONLY = "reply_only"
 MODE_ALLOW_OUTBOUND = "allow_outbound"
 _MODES = frozenset({MODE_REPLY_ONLY, MODE_ALLOW_OUTBOUND})
@@ -27,9 +29,9 @@ DEFAULT_WARMUP_ENABLED = True
 # re-aceptar en las conexiones nuevas (el texto legal cambió).
 RISK_ACK_VERSION = "2026-09-27"
 
-_MIN_DELAY_BOUNDS = (0, 60_000)
-_MAX_DELAY_BOUNDS = (0, 120_000)
-_CAP_BOUNDS = (0, 10_000)
+_MIN_DELAY_BOUNDS = rango("waweb_send_min_delay_ms")
+_MAX_DELAY_BOUNDS = rango("waweb_send_max_delay_ms")
+_CAP_BOUNDS = rango("waweb_daily_outbound_cap")
 
 
 @dataclass(frozen=True)

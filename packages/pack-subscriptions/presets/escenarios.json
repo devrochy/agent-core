@@ -1,0 +1,8 @@
+{
+  "seed": {
+    "planes": [
+      {"name": "Plan Básico de café", "description": "Una bolsa de 500 g al mes.", "price": 45000, "periodicidad": "mensual", "trial_dias": 0},
+      {"name": "Plan Anual de asesoría", "description": "Una asesoría al mes durante un año.", "price": 480000, "periodicidad": "anual", "trial_dias": 0}
+    ]
+  }
+}

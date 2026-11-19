@@ -9,18 +9,45 @@ se ensambla:
      {language}).
   2. Bloques dinámicos del turno (voz de marca, skills activas, perfil y memorias)
      que cambian por turno — van al final para no invalidar el cache de los bloques
-     estables (docs/PROMPT-CACHING-GUIDE.md).
+     estables (docs/PROMPT-CACHING-GUIDE.md). La fecha y hora actual del negocio es
+     la última parte y solo trae el dato; cómo usarla lo dice el playbook
+     `reglas-operacion` (ADR-0091).
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agentcore_contracts import AgentSpec
 
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
+
+DEFAULT_TIMEZONE = "America/Bogota"
+# Encabezado del dato de fecha y hora (ADR-0091). Lo usa también la normalización de las
+# grabaciones de evals (`core/llm/cassette.py`) para ignorar la parte que cambia cada minuto.
+CURRENT_DATETIME_HEADER = "## Fecha y hora actual"
+
+_NEXT_DAYS = {"es": "Próximos días", "en": "Next days", "pt": "Próximos dias"}
+_TOMORROW = {"es": "mañana", "en": "tomorrow", "pt": "amanhã"}
+# Nombres de día (lunes=0) y mes (enero=1) por idioma: datos, no instrucciones.
+_WEEKDAYS = {
+    "es": ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"),
+    "en": ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
+    "pt": ("segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"),
+}
+_MONTHS = {
+    "es": ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+           "septiembre", "octubre", "noviembre", "diciembre"),
+    "en": ("January", "February", "March", "April", "May", "June", "July", "August",
+           "September", "October", "November", "December"),
+    "pt": ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+           "setembro", "outubro", "novembro", "dezembro"),
+}
 
 
 @dataclass
@@ -37,6 +64,15 @@ class PromptContext:
     active_skills_summary: str = ""   # descripción de las skills activas del turno
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
+    relacion: str = ""                # ficha de la relación con cada módulo (HU-CRM-14); "" sin datos
+    referencias: list[str] = field(default_factory=list)  # ids vigentes de la conversación (ADR-0130)
+    accion_por_confirmar: str = ""    # acción que espera el sí del cliente (HU-ARCH-36); "" sin pendiente
+    state_card: str = ""              # tarjeta de estado (ADR-0114); "" sin tareas abiertas
+    team_notes: str = ""              # notas del equipo sobre el cliente (ADR-0147); "" sin notas
+    service_hours: str = ""           # horario del equipo humano (HU-AOS-58); "" si no es informativo
+    no_disponible: str = ""           # etapas del flujo sin herramientas en este turno (HU-AOS-35); "" si no hay
+    timezone: str = DEFAULT_TIMEZONE  # zona del negocio (ADR-0091)
+    now: datetime | None = None       # None = ahora; inyectable en tests
 
     @property
     def template_vars(self) -> dict[str, str]:
@@ -44,7 +80,7 @@ class PromptContext:
         emoji_names = {
             "none": "no uses emojis",
             "sparse": "usa emojis con moderación",
-            "free": "podés usar emojis libremente",
+            "free": "puedes usar emojis libremente",
         }
         return {
             "assistant_name": self.assistant_name,
@@ -59,13 +95,58 @@ class PromptContext:
         }
 
 
+def _current_datetime_part(ctx: PromptContext) -> str:
+    """Fecha y hora actual en la zona del negocio, como dato (ADR-0091)."""
+    try:
+        tz = ZoneInfo(ctx.timezone or DEFAULT_TIMEZONE)
+        tz_name = ctx.timezone or DEFAULT_TIMEZONE
+    except (ZoneInfoNotFoundError, ValueError):
+        log.warning("prompt_timezone_invalid", timezone=ctx.timezone)
+        tz, tz_name = ZoneInfo(DEFAULT_TIMEZONE), DEFAULT_TIMEZONE
+    now = ctx.now or datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    local = now.astimezone(tz)
+    lang = ctx.language if ctx.language in _WEEKDAYS else "es"
+    weekday = _WEEKDAYS[lang][local.weekday()]
+    month = _MONTHS[lang][local.month - 1]
+    hour = local.strftime("%H:%M")
+    if lang == "en":
+        line = f"Today is {weekday}, {month} {local.day}, {local.year} — {hour} ({tz_name})."
+    elif lang == "pt":
+        line = f"Hoje é {weekday}, {local.day} de {month} de {local.year} — {hour} ({tz_name})."
+    else:
+        line = f"Hoy es {weekday}, {local.day} de {month} de {local.year} — {hour} ({tz_name})."
+    return f"{CURRENT_DATETIME_HEADER}\n{line}\n{_next_days_line(local.date(), lang)}"
+
+
+def _next_days_line(today: date, lang: str) -> str:
+    """Los 7 días siguientes con su fecha (E2E HU-CAL-06: "el próximo miércoles"
+    se resolvía a la semana equivocada; con la lista el modelo no hace cuentas)."""
+    days = []
+    for offset in range(1, 8):
+        day = today + timedelta(days=offset)
+        weekday = _WEEKDAYS[lang][day.weekday()]
+        month = _MONTHS[lang][day.month - 1]
+        label = f"{weekday}, {month} {day.day}" if lang == "en" else (
+            f"{weekday}, {day.day} de {month}" if lang == "pt" else f"{weekday} {day.day} de {month}"
+        )
+        days.append(f"{_TOMORROW[lang]} {label}" if offset == 1 else label)
+    return f"{_NEXT_DAYS[lang]}: " + " · ".join(days) + "."
+
+
 async def _render_playbook(
-    spec: AgentSpec, ref_name: str, vars_: dict[str, str], tenant_slug: str | None
+    spec: AgentSpec,
+    ref_name: str,
+    vars_: dict[str, str],
+    tenant_slug: str | None,
+    overrides: Mapping[str, str] | None = None,
+    estricto: bool = False,
 ) -> str | None:
     """Carga el playbook y sustituye placeholders. None si no está en el índice."""
     from core.agents.playbooks import load_playbook
 
-    content = await load_playbook(spec, ref_name, tenant_slug=tenant_slug)
+    content = await load_playbook(spec, ref_name, tenant_slug=tenant_slug, overrides=overrides, estricto=estricto)
     if content is None:
         return None
     try:
@@ -75,36 +156,98 @@ async def _render_playbook(
         return content
 
 
+def bloque_dinamico(ctx: PromptContext) -> str:
+    """El último bloque del prompt: el contexto dinámico del turno (capacidades, perfil, memorias,
+    referencias, tarjeta de estado y la fecha y hora al final). Puro. Lo usa `build_system_blocks`
+    y, con el motor activo, el loop para refrescar solo este bloque cuando la etapa cambia a mitad
+    del turno (adenda 2026-10-13 de ADR-0113): el prefijo cacheado no se toca."""
+    dynamic_parts: list[str] = []
+    if ctx.active_skills_summary:
+        dynamic_parts.append(f"## Capacidades activas en este turno\n{ctx.active_skills_summary}")
+    if ctx.entity_profile:
+        # Ya serializado y escapado por `core/memory/memoria_en_prompt.py` (rótulos en su playbook).
+        dynamic_parts.append(ctx.entity_profile)
+    if ctx.relacion:
+        # Ya serializada y escapada por `core/memory/relacion.py` (rótulos en su playbook del kernel).
+        dynamic_parts.append(ctx.relacion)
+    if ctx.recalled_memories:
+        # Se escapan al leer: protege también lo guardado antes de HU-ARCH-35 (invariante 7).
+        from core.memory.memoria_en_prompt import serializar_recuerdos
+
+        recuerdos = serializar_recuerdos(ctx.recalled_memories)
+        if recuerdos:
+            dynamic_parts.append(recuerdos)
+    if ctx.referencias:
+        # Ya saneadas por el core (`core/orchestrator/referencias.py`): solo datos.
+        referencias = "\n".join(ctx.referencias)
+        dynamic_parts.append(f"## Referencias vigentes de esta conversación\n{referencias}")
+    if ctx.accion_por_confirmar:
+        # Ya serializada y escapada por `core/kernel/confirmacion_pendiente.py` (rótulos en su playbook).
+        dynamic_parts.append(ctx.accion_por_confirmar)
+    if ctx.team_notes:
+        # Ya serializadas y escapadas por `core/memory/notas.py` (rótulos en su playbook del kernel).
+        dynamic_parts.append(ctx.team_notes)
+    if ctx.state_card:
+        # Ya serializada y escapada por el kernel (`core/kernel/tarjeta.py`), justo antes de la fecha.
+        dynamic_parts.append(ctx.state_card)
+    if ctx.service_hours:
+        # Armada por `core/kernel/horario_de_servicio.py` desde su playbook; solo con horario informativo.
+        dynamic_parts.append(ctx.service_hours)
+    if ctx.no_disponible:
+        # Armado por `core/agents/compiler.py` desde su playbook del kernel: el flujo fijo es el de la
+        # release completa y lo que falta en este turno se dice aquí (adenda HU-AOS-35 de ADR-0117).
+        dynamic_parts.append(ctx.no_disponible)
+    # Siempre la última parte: cambia cada minuto y no debe tocar el prefijo cacheado.
+    dynamic_parts.append(_current_datetime_part(ctx))
+    return "\n\n".join(dynamic_parts)
+
+
 async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
     """Ensambla los bloques del system prompt desde el spec + playbooks + turno."""
-    import uuid
-
-    blocks: list[str] = []
-
     # Override por tenant (ADR-0026): se resuelve UNA VEZ acá, no dentro de
     # cada llamada a load_playbook -- este loop puede pedir 4-6 playbooks por
     # turno, y una query de slug por cada uno sería un N+1 real.
+    # El negocio sale del `tenant_scope`, nunca de `spec.tenantId` (viaja en el
+    # JSON que guarda el propio negocio y podría apuntar a otro).
     tenant_slug: str | None = None
     try:
-        from core.shared.tenant import tenant_slug as _tenant_slug
+        from core.shared.tenant import current_tenant_slug
 
-        tenant_slug = await _tenant_slug(uuid.UUID(spec.tenantId))
+        tenant_slug = await current_tenant_slug()
     except Exception:
-        # `tenantId` inválido (specs de test) o la BD no responde: el
-        # override es una capa extra, no la fuente de verdad -- degradar a
-        # "sin override" en vez de tumbar el ensamblado del prompt entero.
-        # Se loggea igual para que un fallo persistente de BD no quede
-        # invisible (antes era un `pass` silencioso).
-        log.warning("tenant_slug_resolve_failed", tenant_id=spec.tenantId, exc_info=True)
+        # La BD no responde: el override es una capa extra, no la fuente de
+        # verdad -- degradar a "sin override" en vez de tumbar el ensamblado
+        # del prompt entero. Se loggea igual para que un fallo persistente de
+        # BD no quede invisible (antes era un `pass` silencioso).
+        log.warning("tenant_slug_resolve_failed", exc_info=True)
     if tenant_slug is None:
         # "" (no None) le dice a load_playbook "ya se intentó, no hay slug"
         # -- evita que cada llamada del loop de abajo reintente la misma
         # query si la resolución de arriba falló (ej. BD caída).
         tenant_slug = ""
 
+    blocks = await bloques_fijos(spec, ctx, tenant_slug=tenant_slug)
+    # 3. Contexto dinámico del turno (va al final; no invalida el cache estable)
+    blocks.append(bloque_dinamico(ctx))
+    return blocks
+
+
+async def bloques_fijos(
+    spec: AgentSpec,
+    ctx: PromptContext,
+    *,
+    tenant_slug: str | None,
+    overrides: Mapping[str, str] | None = None,
+    estricto: bool = False,
+) -> list[str]:
+    """Los bloques estables del prompt (todo menos el dinámico): los arma igual la ruta de
+    siempre (`build_system_blocks`) y el compilador de la release (HU-AOS-35), que pasa los
+    overrides congelados por parámetro y `estricto` para no cachear un bloque de menos."""
+    blocks: list[str] = []
+
     # 1. Playbooks del tenant, en el orden del índice (identidad, tono, reglas...)
     for ref in spec.playbooks:
-        rendered = await _render_playbook(spec, ref.name, ctx.template_vars, tenant_slug)
+        rendered = await _render_playbook(spec, ref.name, ctx.template_vars, tenant_slug, overrides, estricto)
         if rendered:
             blocks.append(rendered)
 
@@ -121,17 +264,4 @@ async def build_system_blocks(spec: AgentSpec, ctx: PromptContext) -> list[str]:
             "Cada etapa lista las herramientas que corresponden a ese momento:\n"
             f"{ctx.flow_summary}"
         )
-
-    # 3. Contexto dinámico del turno (va al final; no invalida el cache estable)
-    dynamic_parts: list[str] = []
-    if ctx.active_skills_summary:
-        dynamic_parts.append(f"## Capacidades activas en este turno\n{ctx.active_skills_summary}")
-    if ctx.entity_profile:
-        dynamic_parts.append(f"## Lo que sabes de este cliente\n{ctx.entity_profile}")
-    if ctx.recalled_memories:
-        recalled = "\n".join(f"- {m}" for m in ctx.recalled_memories)
-        dynamic_parts.append(f"## Hechos relevantes de interacciones pasadas\n{recalled}")
-    if dynamic_parts:
-        blocks.append("\n\n".join(dynamic_parts))
-
     return blocks

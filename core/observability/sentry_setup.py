@@ -1,7 +1,7 @@
 """Sentry: integración OPCIONAL, mismo patrón que `tracing.py` (OTel) --
 sin `SENTRY_ENABLED`/`SENTRY_DSN`, `configure_sentry()` es no-op.
 
-`_before_send` redacta tokens de Meta (`EAA...`) como RED DE ÚLTIMA
+`_before_send` redacta tokens de Meta (`EAA...`) y de bots de Telegram como RED DE ÚLTIMA
 INSTANCIA -- el código de este repo ya no debería mandarle un token a
 Sentry por construcción (`graph_fetch` solo pone el token en el header
 Authorization, nunca en un valor que termine en un evento capturado), pero
@@ -17,11 +17,42 @@ from typing import Any
 from core.config import get_settings
 
 _META_TOKEN_RE = re.compile(r"EAA[A-Za-z0-9]{20,}")
+# Token de un bot de Telegram (`<bot_id>:<secreto>`, ADR-0199): va en la ruta de cada llamada a la Bot API, así que la
+# URL de un breadcrumb de httpx o el mensaje de una excepción lo pueden arrastrar.
+_TELEGRAM_TOKEN_RE = re.compile(r"\d+:[A-Za-z0-9_-]{30,}")
+# Claves que se tapan además de las de sentry-sdk (`token`, `secret`, `password`...), en el
+# cuerpo del request y en las variables de cada frame, también dentro de dicts anidados: el
+# PIN de verificación en dos pasos de un número viaja en el cuerpo de
+# `POST .../numbers/{id}/register` y en locales como `pin`, `previous_pin` o `body` (el modelo
+# del request lo lleva como `SecretStr`, que no sale en su repr).
+_EXTRA_DENYLIST = [
+    "pin", "new_pin", "previous_pin", "app_secret", "access_token", "verify_token",
+    # Embedded Signup (HU-SH-05): el canje lleva `client_secret` y `code` en `params`; el token
+    # de app es "app_id|app_secret"; los PIN del wizard viven en `nuevo` y `guardado`.
+    "client_secret", "code", "codigo", "attempt", "app_token", "input_token", "params", "nuevo", "guardado",
+    # Tools declarativas (HU-AOS-12): headers sensibles y los locales que los llevan (el spec
+    # v2 todavía puede tener literales en `extensions.tools`; los secretos de la instalación
+    # `core` se descifran en `valores`/`actuales`).
+    "authorization", "cookie", "x-api-key", "x_api_key", "headers", "extensions", "secretos",
+    "valores", "actuales", "nuevos", "secrets", "cuerpo", "secretos_enviados", "valor", "texto",
+    "limpios", "entrada", "data", "value", "guardado", "contenido",
+    # Acceso del dueño (ADR-0175): el enlace de un solo uso y lo que lo arma o lo lleva.
+    "enlace", "inv", "nonce", "token_nonce",
+    # Conector de WhatsApp Web (ADR-0188): el evento entrante y el trabajo de salida llevan el texto y
+    # el teléfono del cliente; `qr` es el código de vinculación vigente.
+    "event", "qr", "job", "text", "sender", "jid", "to", "raw",
+    # Canal Telegram (ADR-0199): el token del bot y el secreto del webhook.
+    "bot_token", "webhook_secret", "creds",
+    # El webhook de Telegram (y el de Twilio): el cuerpo crudo y el update llevan el texto y el nombre del cliente.
+    "raw_body", "update_", "mensaje", "mensajes", "caption", "first_name", "last_name",
+    # El teléfono que el cliente comparte por Telegram (ADR-0199 §8).
+    "phone_number", "contact", "shared_phone", "telefono",
+]
 _configured = False
 
 
 def _redact_meta_tokens(text: str) -> str:
-    return _META_TOKEN_RE.sub("[redacted]", text)
+    return _TELEGRAM_TOKEN_RE.sub("[redacted]", _META_TOKEN_RE.sub("[redacted]", text))
 
 
 def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] | None:
@@ -40,6 +71,12 @@ def _before_send(event: dict[str, Any], hint: dict[str, Any]) -> dict[str, Any] 
         return event
 
 
+def _event_scrubber():  # type: ignore[no-untyped-def]
+    from sentry_sdk.scrubber import DEFAULT_DENYLIST, EventScrubber
+
+    return EventScrubber(denylist=[*DEFAULT_DENYLIST, *_EXTRA_DENYLIST], recursive=True)
+
+
 def configure_sentry() -> None:
     global _configured
     if _configured:
@@ -49,5 +86,7 @@ def configure_sentry() -> None:
         return
     import sentry_sdk
 
-    sentry_sdk.init(dsn=settings.sentry_dsn, before_send=_before_send, send_default_pii=False)
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn, before_send=_before_send, send_default_pii=False, event_scrubber=_event_scrubber()
+    )
     _configured = True

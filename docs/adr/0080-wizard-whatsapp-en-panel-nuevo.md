@@ -1,6 +1,7 @@
 # ADR-0080 — El wizard de WhatsApp (Embedded Signup/BYOK) se reconstruye en el panel nuevo
 
-- **Estado:** aceptado
+- **Estado:** aceptado · **implementado** (Embedded Signup en el panel nuevo: [ADR-0128](0128-embedded-signup-real.md),
+  HU-SH-05, 2026-10-09)
 - **Fecha:** 2026-09-29
 - **Supera a:** ADR-0078
 
@@ -46,3 +47,4 @@ retira el router OAuth clásico.
   (Meta App con Embedded Signup y cliente OAuth de Google con el `redirect_uri` del API);
   con mocks se valida el flujo completo salvo la llamada real a Meta/Google.
 - ADR-0078 queda **superado** y se mantiene solo como registro histórico.
+

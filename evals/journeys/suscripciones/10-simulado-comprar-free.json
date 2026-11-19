@@ -1,0 +1,52 @@
+{
+  "nombre": "simulado-comprar-free",
+  "descripcion": "Cliente simulado (HU-ARCH-28) que quiere el Plan Free: se valida el estado final (suscripción en prueba y sin link de pago), no el texto exacto.",
+  "pasos": [
+    {
+      "nota": "el cliente simulado conversa hasta activar el Free",
+      "simulado": {
+        "objetivo": "Activar el Plan Free de la academia. Das tus datos cuando te los pidan y confirmás si te preguntan.",
+        "datos": {
+          "nombre": "Ana Gómez",
+          "cedula": "1012345678",
+          "celular": "3001234567",
+          "correo": "ana+{cliente.id}@example.com"
+        },
+        "max_turnos": 8
+      },
+      "espera_fin": [
+        "objetivo",
+        "tope"
+      ]
+    },
+    {
+      "nota": "suscripción en prueba",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "trialing",
+          "valor_periodo": 0,
+          "trial_termina": {
+            "$no_nulo": true
+          }
+        },
+        "guardar_como": "suscripcion"
+      }
+    },
+    {
+      "nota": "sin cargo pendiente por cobrar para un plan gratis",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.id}",
+          "estado": "pendiente"
+        },
+        "filas": 0
+      }
+    }
+  ]
+}

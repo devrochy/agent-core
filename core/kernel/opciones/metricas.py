@@ -1,0 +1,69 @@
+"""Métricas del toque (SPEC-40, ADR-0172 §Observabilidad): `option_taps_total{outcome,via}`,
+`option_tap_latency_seconds{outcome,via}` y `option_tool_errors_total{tool}`; y las del envío, `option_sends_total{canal,via}` y
+`option_send_failures_total{canal,outcome}` (HU-OPC-02).
+
+Usan la API de OpenTelemetry (`opentelemetry.metrics`), que sin un `MeterProvider` configurado es un no-op
+(igual que `core/observability/tracing.py` sin `OTEL_ENABLED`). Hoy el repo no configura el proveedor de
+métricas ni expone `/metrics`: lo observable es el log estructurado `option_tap` (un evento por toque, con
+`outcome` y `latency_ms`); los instrumentos quedan listos para cuando se conecte el exportador. Las
+etiquetas son un conjunto cerrado (`outcome`) o el nombre de una tool del catálogo (`tool`): nunca ids ni
+valores.
+"""
+
+from __future__ import annotations
+
+from opentelemetry import metrics
+
+_meter = metrics.get_meter("agent-core")
+_toques = _meter.create_counter("option_taps_total", description="Toques de opciones directas por resultado")
+_latencia = _meter.create_histogram(
+    "option_tap_latency_seconds", unit="s", description="Del inbound a la respuesta fija de un toque"
+)
+_errores_tool = _meter.create_counter(
+    "option_tool_errors_total", description="Tools que fallaron al ejecutarse desde una opción"
+)
+
+
+_envios = _meter.create_counter("option_sends_total", description="Envíos de plantillas con opciones por canal y vía")
+
+
+_envios_fallidos = _meter.create_counter(
+    "option_send_failures_total", description="Envíos de plantillas con opciones que no salieron, por canal y resultado"
+)
+
+
+def envio_fallido(canal: str, outcome: str) -> None:
+    """Un envío que no salió. `outcome` es el conjunto cerrado de `envio` (flag_off, sin_plantilla, paused…)."""
+    _envios_fallidos.add(1, {"canal": canal[:20], "outcome": outcome})
+
+
+def envio(canal: str, via: str) -> None:
+    """Un envío que quedó encolado. `canal` es el de la conversación (conjunto cerrado de canales) y `via`, la
+    etiqueta de `envio.ETIQUETA_VIA` (interactivo | plantilla | texto): ningún id ni valor del cliente."""
+    _envios.add(1, {"canal": canal[:20], "via": via})
+
+
+def toque(outcome: str, segundos: float, via: str = "button") -> None:
+    """`via` es `button` (payload firmado de un botón) o `text` (respuesta a un menú numerado, C2): conjunto cerrado
+    del resolver. Separa lo que viene del botón de lo que viene de un número escrito por el cliente."""
+    _toques.add(1, {"outcome": outcome, "via": via})
+    _latencia.record(max(0.0, segundos), {"outcome": outcome, "via": via})
+
+
+def error_de_tool(tool: str) -> None:
+    """La etiqueta es el nombre de la tool SOLO si la registra el binario; las declarativas las nombra cada
+    negocio, y un valor que controla un negocio no va a una métrica global."""
+    from core.mcp.host import mcp_host
+
+    registrada = mcp_host.get_tool(tool)
+    _errores_tool.add(1, {"tool": tool[:80] if registrada is not None else "declarativa"})
+
+
+_publicaciones_meta = _meter.create_counter(
+    "option_meta_publications_total", description="Publicaciones de versiones de opciones como plantilla de Meta, por resultado"
+)
+
+
+def publicacion_meta(outcome: str) -> None:
+    """Una publicación a Meta. `outcome` es el conjunto cerrado de `meta` (published, meta_rejected, network_error…)."""
+    _publicaciones_meta.add(1, {"outcome": outcome})

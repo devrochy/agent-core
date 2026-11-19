@@ -1,27 +1,35 @@
-"""Autorización por sección del panel (RBAC configurable, ADR-0047).
+"""Autorización por sección del panel (RBAC configurable, ADR-0047, ADR-0136).
 
 Fuente única de verdad de "qué puede hacer un admin en el panel". Resuelve el
 acceso efectivo combinando, por orden de prioridad:
 
-1. `Admin.role == "master"` → bypass total.
+1. `Admin.role == "master"` → bypass total (el tester habilitado, ADR-0134, igual).
 2. Permiso explícito en `admin_permissions` para (admin, sección), global
-   (`tenant_id is null`) o del tenant activo; gana el máximo (`write > read`).
+   (`tenant_id is null`) o del tenant activo. Desde ADR-0136 hay tres valores:
+   `read`, `write` y `none` (denegado, solo por negocio), y la fila de una sub-sección
+   (`pack_cobranza:reportes`) prevalece sobre la del pack completo (`pack_cobranza`).
+   Dentro de un nivel, `none` deniega aunque exista un grant; si no, gana el máximo
+   (`write > read`).
 3. Rol por defecto del `tenant_user` del tenant activo: `owner` → `write`,
    `colaborador` → `read`, salvo en las secciones de plataforma (`tenants`) y en
-   las de gestión de cuentas (`collaborators`), que exigen owner o master.
+   las de gestión de cuentas (`collaborators`), que exigen owner o master, y en las
+   `OPT_IN_SECTIONS` (`observability`, ADR-0169), que el colaborador no hereda.
 
 El catálogo de secciones vive en código (no en tabla): las del core más una por
-pack, con el `id` del plugin como clave.
+pack (el `id` del plugin) y sus sub-secciones (ADR-0063). La resolución es una función
+pura (`resolver_seccion`) que comparten `effective_access`, `permissions_for` y
+`notification_recipients`.
 """
 
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from fastapi import Request
 from sqlalchemy import select
 
+from core.admin.roles import acceso_de_plataforma, es_master, es_tester
 from core.db.models import Admin, AdminPermission, TenantUser
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
@@ -32,28 +40,103 @@ CORE_SECTIONS: dict[str, str] = {
     "leads": "Leads",
     "conversations": "Conversaciones",
     "escalations": "Escalaciones",
+    # Mi agente y su data (HU-AOS-47, ADR-0140): lectura por agente de lo que hizo.
+    "agents": "Agentes",
     "connections": "Conexiones",
     "plugins": "Plugins",
     "costs": "Costos LLM",
     "plan": "Plan y consumo",
     "settings": "Configuración",
+    # Automatizaciones del negocio (ADR-0201): el dueño escribe; el colaborador lee por defecto
+    # y el dueño puede darle `write` o quitárselo en Colaboradores.
+    "automatizaciones": "Automatizaciones",
     "tenants": "Tenants",
     "collaborators": "Colaboradores",
+    # Depurador del turno (HU-AOS-28, ADR-0169): entradas y salidas de las acciones, redactadas.
+    "observability": "Observabilidad",
+    # Centro de pruebas de la plataforma (SPEC-30, ADR-0133): global, de master y testers.
+    "qa": "Pruebas",
+    # Dispositivos de la cuenta y alertas de acceso (SPEC-42, ADR-0174): del negocio, no de un pack.
+    "devices": "Dispositivos",
+    "access_alerts": "Alertas de acceso",
 }
 
 # Secciones que NUNCA se heredan del rol del `tenant_user`: son de master o de
 # permiso explícito (gestión de plataforma).
-GLOBAL_ONLY_SECTIONS: frozenset[str] = frozenset({"tenants"})
+GLOBAL_ONLY_SECTIONS: frozenset[str] = frozenset({"tenants", "qa"})
 
 # Secciones que solo el `owner` del tenant (o master) puede usar: el `colaborador`
 # no las hereda. Gestionar cuentas no es una capacidad de colaborador.
 OWNER_ONLY_SECTIONS: frozenset[str] = frozenset({"collaborators"})
 
+# Secciones que el `owner` hereda pero el `colaborador` no (ADR-0169 §1): el colaborador las tiene
+# solo con un permiso explícito que le da el dueño (ver datos de las acciones de los clientes).
+# Dispositivos y alertas de acceso (ADR-0174) también: ver los equipos y los intentos de acceso de las cuentas
+# es información de seguridad; el colaborador la tiene solo si el dueño se la concede.
+OPT_IN_SECTIONS: frozenset[str] = frozenset({"observability", "devices", "access_alerts"})
+
 # Secciones que un `owner` puede otorgar a un colaborador de su tenant: el
 # catálogo menos las de plataforma y la propia gestión de cuentas.
 OWNER_GRANTABLE_SECTIONS: frozenset[str] = GLOBAL_ONLY_SECTIONS | OWNER_ONLY_SECTIONS
 
-_ACCESS_RANK = {"read": 1, "write": 2}
+ACCESS_NONE = "none"
+VALID_ACCESS: tuple[str, ...] = ("read", "write", ACCESS_NONE)
+_ACCESS_RANK = {ACCESS_NONE: 0, "read": 1, "write": 2}
+
+
+def seccion_padre(section: str) -> str | None:
+    """`pack_cobranza` para `pack_cobranza:reportes`; `None` si la sección no es sub-sección."""
+    pack, sep, _sub = section.partition(":")
+    return pack if sep else None
+
+
+def resolver_explicito(
+    explicitos: Mapping[str, Iterable[str]], section: str
+) -> tuple[bool, str | None]:
+    """Acceso explícito de una sección: `(hay_fila, acceso)`.
+
+    `explicitos` mapea sección → accesos de las filas aplicables (global y del tenant
+    activo). El nivel más específico gana (la sub-sección antes que el pack); dentro de un
+    nivel, `none` deniega sobre cualquier grant; si no, el máximo. Sin filas en ningún
+    nivel devuelve `(False, None)` y el llamador cae al default del rol.
+    """
+    for key in (section, seccion_padre(section)):
+        if key is None:
+            continue
+        accesos = [a for a in (explicitos.get(key) or ()) if a in _ACCESS_RANK]
+        if not accesos:
+            continue
+        if ACCESS_NONE in accesos:
+            return True, None
+        return True, max(accesos, key=lambda a: _ACCESS_RANK[a])
+    return False, None
+
+
+def acceso_por_rol(section: str, role: str | None, tenant_id: uuid.UUID | None) -> str | None:
+    """Default que hereda el rol del `tenant_user` en el tenant activo (ADR-0047 §3)."""
+    if tenant_id is None or section in GLOBAL_ONLY_SECTIONS:
+        return None
+    if role == "owner":
+        return "write"
+    if role == "colaborador" and section not in OPT_IN_SECTIONS:
+        return "read"
+    return None
+
+
+def resolver_seccion(
+    section: str,
+    role: str | None,
+    tenant_id: uuid.UUID | None,
+    explicitos: Mapping[str, Iterable[str]],
+) -> str | None:
+    """Acceso efectivo de un admin que NO es de plataforma (función pura, ADR-0136)."""
+    # Gestionar cuentas nunca se hereda por grant ni se deniega por fila: es del `owner`.
+    if section in OWNER_ONLY_SECTIONS:
+        return "write" if role == "owner" else None
+    hay_fila, acceso = resolver_explicito(explicitos, section)
+    if hay_fila:
+        return acceso
+    return acceso_por_rol(section, role, tenant_id)
 
 
 def catalog(sections: Iterable[str] | None = None) -> dict[str, str]:
@@ -70,7 +153,11 @@ def catalog(sections: Iterable[str] | None = None) -> dict[str, str]:
 
 
 def pack_section_keys(modules: Iterable[object]) -> set[str]:
-    """Sub-secciones que aportan los packs (ADR-0063): `section_key` o el `plugin_id`."""
+    """Sub-secciones que aportan los packs (ADR-0063): `section_key` o el `plugin_id`.
+
+    Incluye las sub-secciones de permiso declaradas en `section_keys` (sin item de
+    menú), p. ej. `pack_calendar:notificaciones`.
+    """
     keys: set[str] = set()
     for module in modules:
         plugin_id = getattr(module, "id", None)
@@ -78,33 +165,40 @@ def pack_section_keys(modules: Iterable[object]) -> set[str]:
             continue
         for item in getattr(module, "admin_menu", None) or []:
             keys.add(item.get("section_key") or plugin_id)
+        for key in getattr(module, "section_keys", None) or []:
+            keys.add(key)
     return keys
 
 
-def _best(current: str | None, candidate: str) -> str:
-    if current is None or _ACCESS_RANK.get(candidate, 0) > _ACCESS_RANK.get(current, 0):
-        return candidate
-    return current
+async def _filas_explicitas(
+    admin_id: uuid.UUID, tenant_id: uuid.UUID | None, secciones: Iterable[str] | None = None
+) -> dict[str, list[str]]:
+    """Filas de `admin_permissions` aplicables (globales o del tenant activo), por sección."""
+    async with get_session() as session:
+        where = [
+            AdminPermission.admin_id == admin_id,
+            AdminPermission.tenant_id.is_(None) | (AdminPermission.tenant_id == tenant_id),
+        ]
+        if secciones is not None:
+            where.append(AdminPermission.section.in_(list(secciones)))
+        rows = (
+            await session.execute(
+                select(AdminPermission.section, AdminPermission.access).where(*where)
+            )
+        ).all()
+    explicitos: dict[str, list[str]] = {}
+    for section, access in rows:
+        explicitos.setdefault(section, []).append(access)
+    return explicitos
 
 
 async def explicit_access(
     admin_id: uuid.UUID, section: str, tenant_id: uuid.UUID | None
 ) -> str | None:
-    """Máximo acceso explícito entre el grant global y el del tenant activo."""
-    async with get_session() as session:
-        rows = (
-            await session.execute(
-                select(AdminPermission.access).where(
-                    AdminPermission.admin_id == admin_id,
-                    AdminPermission.section == section,
-                    AdminPermission.tenant_id.is_(None) | (AdminPermission.tenant_id == tenant_id),
-                )
-            )
-        ).scalars().all()
-    best: str | None = None
-    for access in rows:
-        best = _best(best, access)
-    return best
+    """Acceso explícito (sub-sección > pack; `none` deniega) o `None` si no hay fila o deniega."""
+    claves = [section] + ([seccion_padre(section)] if seccion_padre(section) else [])
+    _hay, acceso = resolver_explicito(await _filas_explicitas(admin_id, tenant_id, claves), section)
+    return acceso
 
 
 async def _tenant_user_role(admin_id: uuid.UUID, tenant_id: uuid.UUID | None) -> str | None:
@@ -124,71 +218,57 @@ async def effective_access(
     admin: Admin, section: str, tenant_id: uuid.UUID | None
 ) -> str | None:
     """Acceso efectivo del admin a una sección en el tenant activo (`None` = denegado)."""
-    if admin.role == "master":
-        return "write"
+    plataforma = acceso_de_plataforma(admin, section)
+    if plataforma is not None:
+        # Master y tester (ADR-0134): el rol decide; el tester nunca hereda Colaboradores.
+        return None if plataforma == "none" else plataforma
     role = await _tenant_user_role(admin.id, tenant_id)
-    # Gestionar cuentas nunca se hereda por grant: es del `owner` del tenant.
-    if section in OWNER_ONLY_SECTIONS:
-        return "write" if role == "owner" else None
-    explicit = await explicit_access(admin.id, section, tenant_id)
-    if explicit is not None:
-        return explicit
-    if tenant_id is None or section in GLOBAL_ONLY_SECTIONS:
-        return None
-    if role == "owner":
-        return "write"
-    if role == "colaborador":
-        return "read"
-    return None
+    claves = [section] + ([seccion_padre(section)] if seccion_padre(section) else [])
+    explicitos = await _filas_explicitas(admin.id, tenant_id, claves)
+    return resolver_seccion(section, role, tenant_id, explicitos)
 
 
 async def permissions_for(admin: Admin, sections: Iterable[str]) -> dict[str, str | None]:
     """Mapa sección → acceso efectivo del admin en el tenant activo (para el menú)."""
     sections = list(sections)
-    if admin.role == "master":
-        return {section: "write" for section in sections}
+    if es_master(admin) or es_tester(admin):
+        result_plataforma: dict[str, str | None] = {}
+        for section in sections:
+            acceso = acceso_de_plataforma(admin, section)
+            result_plataforma[section] = None if acceso in (None, "none") else acceso
+        return result_plataforma
 
     tenant_id = get_current_tenant_id()
-    async with get_session() as session:
-        rows = (
-            await session.execute(
-                select(AdminPermission.section, AdminPermission.access).where(
-                    AdminPermission.admin_id == admin.id,
-                    AdminPermission.tenant_id.is_(None) | (AdminPermission.tenant_id == tenant_id),
-                )
-            )
-        ).all()
-        role = None
-        if tenant_id is not None:
-            role = (
-                await session.execute(
-                    select(TenantUser.role).where(
-                        TenantUser.admin_id == admin.id, TenantUser.tenant_id == tenant_id
-                    )
-                )
-            ).scalar_one_or_none()
+    role = await _tenant_user_role(admin.id, tenant_id)
+    explicitos = await _filas_explicitas(admin.id, tenant_id)
+    return {section: resolver_seccion(section, role, tenant_id, explicitos) for section in sections}
 
-    explicit: dict[str, str] = {}
-    for section, access in rows:
-        explicit[section] = _best(explicit.get(section), access)
 
-    default: str | None = None
-    if role == "owner":
-        default = "write"
-    elif role == "colaborador":
-        default = "read"
+async def acceso_y_origen(
+    admin: Admin, tenant_id: uuid.UUID | None, sections: Iterable[str]
+) -> dict[str, tuple[str, bool]]:
+    """Mapa sección → (acceso efectivo, es_heredado) para la grilla de Colaboradores (D-SPEC-34-1).
 
-    result: dict[str, str | None] = {}
+    `acceso` es `none|read|write`. `es_heredado` es `True` cuando el acceso sale del rol del
+    `tenant_user` (no de una fila explícita de `admin_permissions`). Para una cuenta de
+    plataforma (master/tester) lo decide `acceso_de_plataforma` y siempre se marca heredado.
+    """
+    sections = list(sections)
+    if es_master(admin) or es_tester(admin):
+        out: dict[str, tuple[str, bool]] = {}
+        for section in sections:
+            acceso = acceso_de_plataforma(admin, section)
+            out[section] = ("none" if acceso in (None, "none") else acceso, True)
+        return out
+
+    role = await _tenant_user_role(admin.id, tenant_id)
+    explicitos = await _filas_explicitas(admin.id, tenant_id, sections)
+    out = {}
     for section in sections:
-        if section in OWNER_ONLY_SECTIONS:
-            result[section] = "write" if role == "owner" else None
-        elif section in explicit:
-            result[section] = explicit[section]
-        elif default is None or section in GLOBAL_ONLY_SECTIONS:
-            result[section] = None
-        else:
-            result[section] = default
-    return result
+        acceso = resolver_seccion(section, role, tenant_id, explicitos)
+        hay_fila, _ = resolver_explicito(explicitos, section)
+        out[section] = (acceso or "none", not hay_fila)
+    return out
 
 
 async def require_section(request: Request, section: str, *, write: bool = False) -> bool:
@@ -283,3 +363,54 @@ def required_section(
                 return section, write
         return "dashboard", write
     return None
+
+
+async def notification_recipients(section: str, tenant_id: uuid.UUID | None) -> list[str]:
+    """Emails de los admins con acceso efectivo a `section` en el tenant (HU-CAL-02).
+
+    Usado para copiar los correos de agendamiento a los colaboradores que deben
+    enterarse (p. ej. sección `pack_calendar:notificaciones`). Incluye al `owner`
+    del tenant (su rol hereda `write`) y a los masters con permiso explícito.
+    Tabla de sistema (sin RLS): se consulta con `tenant_id` explícito.
+    """
+    if tenant_id is None:
+        return []
+    async with get_session() as session:
+        admins = (await session.execute(select(Admin).where(Admin.active.is_(True)))).scalars().all()
+        # Rol por tenant (owner hereda write) y permisos explícitos de la sección.
+        roles = dict(
+            (
+                await session.execute(
+                    select(TenantUser.admin_id, TenantUser.role).where(
+                        TenantUser.tenant_id == tenant_id
+                    )
+                )
+            ).all()
+        )
+        claves = [section] + ([seccion_padre(section)] if seccion_padre(section) else [])
+        explicit = (
+            await session.execute(
+                select(
+                    AdminPermission.admin_id, AdminPermission.section, AdminPermission.access
+                ).where(
+                    AdminPermission.section.in_(claves),
+                    AdminPermission.tenant_id.is_(None) | (AdminPermission.tenant_id == tenant_id),
+                )
+            )
+        ).all()
+    # Mismo resolutor explícito que el menú y la API (sub-sección > pack; `none` deniega,
+    # ADR-0136). Sin fila decide el rol, pero aquí solo el `owner` recibe copia: un
+    # colaborador hereda `read` de la sección, no los avisos.
+    por_admin: dict[uuid.UUID, dict[str, list[str]]] = {}
+    for admin_id, sec, access in explicit:
+        por_admin.setdefault(admin_id, {}).setdefault(sec, []).append(access)
+    out: list[str] = []
+    for admin in admins:
+        if admin.role == "master":
+            effective = True
+        else:
+            hay_fila, acceso = resolver_explicito(por_admin.get(admin.id, {}), section)
+            effective = acceso is not None if hay_fila else roles.get(admin.id) == "owner"
+        if effective and admin.email:
+            out.append(admin.email)
+    return out

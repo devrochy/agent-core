@@ -17,14 +17,24 @@ from typing import Any
 
 from sqlalchemy import or_, select, text
 
+from core.datos_cliente.guardar import guardar as guardar_datos
+from core.datos_cliente.legado import base_desde_lista, requeridos_efectivos
+from core.datos_cliente.servicio import evaluar_accion
+from core.db.models import Conversation
 from core.db.session import get_owned, get_session
-from core.mcp.types import BaseSkill, MCPTool, ToolContext
-from core.memory import entity as entity_memory
+from core.kernel.oferta import solo_con_motor_activo
+from core.leads import servicio as leads_core
+from core.mcp.types import BaseSkill, MCPTool, Referencia, RegistroCreado, ToolContext
+from core.memory.facts import HechoInvalido, NamespaceNoConcedido
+from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import is_panel_test
+from pack_commerce import sandbox as sandbox_prueba
+from pack_commerce.datos import A_LEGADO, ACCION_POR_ENTREGA
+from pack_commerce.fotos import url_foto
 from pack_commerce.models import (
     CategoryComplement,
     Inventory,
-    Lead,
     Order,
     OrderItem,
     OrderItemBatch,
@@ -38,10 +48,26 @@ from pack_commerce.models import (
 
 CUSTOMER_SEGMENTS = ("nuevo", "ocasional", "frecuente", "fiel", "inactivo")
 
+log = get_logger(__name__)
+
 ORDER_STATUS_ACTIVE = ("abierto", "despachado")
+# Una cotización "en curso": se puede confirmar o convertir en pedido (ADR-0130).
+QUOTE_STATUS_VIGENTE = ("draft", "aceptada")
 
 PAYMENT_METHODS = ("efectivo_contraentrega", "transferencia", "pago_en_linea")
 DELIVERY_METHODS = ("domicilio", "recoger_en_tienda")
+_ETIQUETA_ENTREGA = {"domicilio": "domicilio", "recoger_en_tienda": "recoger en tienda"}
+
+
+def _etiqueta_metodo_entrega(metodo: str) -> str:
+    return _ETIQUETA_ENTREGA.get(metodo, metodo)
+
+
+async def _metodos_entrega(context: ToolContext) -> list[str]:
+    """Métodos que ESTE agente puede ofrecer (HU-CRM-28). Sin ajuste del dueño: ambos."""
+    from core.datos_cliente.ajustes import cargar_data_policy, metodos_entrega_de
+
+    return metodos_entrega_de(await cargar_data_policy(context.agent_id))
 
 
 # ------------------------------------------------------------------ helpers
@@ -58,8 +84,45 @@ def _float(value: Any) -> float:
     return float(value or 0)
 
 
+def _monto_alto_threshold(config: Any) -> float:
+    """Umbral de escalamiento por monto alto (HU-COM-02): `monto_alto_threshold` del negocio."""
+    return getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
+
+
 def _money(value: Any, symbol: str = "$") -> str:
     return f"{symbol}{_float(value):,.0f}"
+
+
+def _foto_del_unico(sku: str, query: str, matches: list[dict[str, Any]], fotos: dict[str, str]) -> str | None:
+    """Foto que el core adjunta a la respuesta de `consultar_inventario` (HU-CRM-01).
+
+    Regla de agent-sale (`extractSingleMatchImageUrl`): solo con un único resultado
+    pedido por SKU, y además (D-SPEC-33-1) por el nombre exacto del producto. Una
+    búsqueda por texto que devuelve uno solo es una exploración y no lleva foto.
+    `fotos` es `{variant_id: image_url}`; solo se manda una URL https."""
+    if len(matches) != 1:
+        return None
+    unico = matches[0]
+    pedido_puntual = bool(sku) or (
+        bool(query) and query.strip().casefold() == str(unico.get("name") or "").strip().casefold()
+    )
+    if not pedido_puntual:
+        return None
+    foto = (fotos.get(str(unico.get("variant_id"))) or "").strip()
+    return foto if foto.lower().startswith("https://") else None
+
+
+def _safe_format(template: str, default: str, **kwargs: Any) -> str:
+    """`template.format(**kwargs)`: si la plantilla del negocio tiene una
+    variable inexistente, devuelve `default` y avisa, sin que la tool falle
+    (HU-ARCH-18: una plantilla mal editada no apaga el comercio)."""
+    if not template:
+        return default
+    try:
+        return template.format(**kwargs)
+    except (KeyError, IndexError, ValueError):
+        log.warning("plantilla_mensaje_invalida", template=template[:80])
+        return default
 
 
 def _now() -> datetime:
@@ -89,12 +152,15 @@ def _parse_uuid(value: str) -> uuid.UUID | None:
         return None
 
 
-async def _plugin_config() -> Any:  # type: ignore[no-untyped-def]
-    """Config del plugin con fallback a None (robusto en pruebas/activación parcial)."""
+async def _plugin_config(agent_id: Any = None) -> Any:  # type: ignore[no-untyped-def]
+    """Config del plugin con fallback a None (robusto en pruebas/activación parcial).
+
+    Con `agent_id` (SPEC-48, HU-COM-21), los campos de `config_agente` (formas de pago y
+    cuentas) de ese agente pisan a los del negocio; el resto sigue siendo del negocio."""
     try:
         from core.plugin_manager import plugin_manager
 
-        return await plugin_manager.load_config("pack_commerce")
+        return await plugin_manager.load_config("pack_commerce", agent_id=agent_id)
     except Exception:
         return None
 
@@ -157,30 +223,296 @@ async def _active_customer_order(customer_id) -> Order | None:  # type: ignore[n
         return result.scalar_one_or_none()
 
 
-async def _transfer_safe_append() -> str:
-    """Arma el bloque de datos de transferencia (nunca lo escribe el LLM)."""
-    config = await _plugin_config()
-    accounts = getattr(config, "transfer_accounts", []) or []
-    if not accounts:
-        return ""
-    lines = ["💳 Datos para tu transferencia:"]
-    for acc in accounts:
-        entity = acc.get("entity", "")
-        account_type = acc.get("accountType", "")
-        number = acc.get("accountNumber", "")
-        holder = acc.get("holderName", "")
-        doc = acc.get("holderDocument", "")
-        line = f"• {entity}"
-        if account_type:
-            line += f" ({account_type})"
-        if number:
-            line += f" N° {number}"
-        if holder:
-            line += f" a nombre de {holder}"
-        if doc:
-            line += f" CC {doc}"
-        lines.append(line)
-    return "\n".join(lines)
+async def _quote_del_cliente(session, quote_id, customer_id) -> Quote | None:  # type: ignore[no-untyped-def]
+    """La cotización SOLO si es del cliente de la conversación (además del tenant).
+
+    El `quote_id` lo pasa el LLM: sin el filtro de `customer_id`, un cliente que
+    conozca el UUID de la cotización de OTRO cliente del mismo negocio podría
+    confirmarla, cambiarle la promoción o convertirla en pedido (IDOR dentro del
+    tenant, auditor-multitenant en HU-SUB-07). Ajena o inexistente devuelven lo
+    mismo (`None`): no se revela que existe.
+    """
+    return (
+        await session.execute(
+            select(Quote).where(
+                Quote.id == quote_id,
+                Quote.customer_id == customer_id,
+                Quote.tenant_id == get_current_tenant_id(),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def _cotizacion_vigente(session, conversation_id, customer_id) -> Quote | None:  # type: ignore[no-untyped-def]
+    """La última cotización en curso de ESTA conversación y de ESTE cliente (ADR-0130).
+
+    Los ids salen del `ToolContext`, nunca del LLM: no se puede llegar a la cotización
+    de otro cliente ni a la de otra conversación del mismo cliente (un draft de hace
+    días no es lo que el cliente está aceptando ahora)."""
+    return (
+        await session.execute(
+            select(Quote)
+            .where(
+                Quote.tenant_id == get_current_tenant_id(),
+                Quote.customer_id == customer_id,
+                Quote.conversation_id == conversation_id,
+                Quote.status.in_(QUOTE_STATUS_VIGENTE),
+            )
+            .order_by(Quote.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _cotizacion_no_encontrada(
+    context: ToolContext, sin_vigente: dict[str, Any], session=None  # type: ignore[no-untyped-def]
+) -> dict[str, Any]:
+    """Error de un `quote_id` que no existe (o no es del cliente). Si la conversación tiene
+    una cotización en curso, el error trae su id y su total para que el modelo reintente
+    con ella; nunca se usa en silencio, porque confirmar es aceptar un total concreto
+    (incidente en test, tenant solvershub, 2026-10-10: el modelo pasó el SKU, el número
+    de un pedido viejo y "Q-0001", y generó 6 cotizaciones sin cerrar el pedido)."""
+    if session is None:
+        async with get_session() as propia:
+            vigente = await _cotizacion_vigente(propia, context.conversation_id, context.customer_id)
+    else:
+        vigente = await _cotizacion_vigente(session, context.conversation_id, context.customer_id)
+    if vigente is None:
+        return sin_vigente
+    return {
+        "error": "Cotización no encontrada.",
+        "quote_id_vigente": str(vigente.id),
+        "estado_vigente": vigente.status,
+        "total_vigente": round(_float(vigente.total), 2),
+        "hint": (
+            "Esta conversación ya tiene una cotización en curso (quote_id_vigente). Si su "
+            "total es el que el cliente aceptó, repetí la llamada con ese quote_id; no "
+            "generes otra cotización."
+        ),
+    }
+
+
+async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUID) -> list[Referencia]:
+    """Lo que el cliente está negociando en esta conversación, para el prompt (ADR-0130):
+    la cotización en curso y el último pedido. Estado actual de las tablas, no texto.
+
+    Entre la cotización vigente y el último pedido, el más nuevo es la compra en curso
+    (una cotización vigente nunca tiene pedido: `crear_pedido` la pasa a `convertida`).
+    - Cotización más nueva: va con `pedido=ninguno`, y el pedido sale como `pedido_anterior`.
+    - Pedido más nuevo: la cotización vieja no se expone (invitaría a confirmar algo viejo).
+    - Un pedido cerrado (cancelado, entregado, expirado) también es `pedido_anterior`.
+    `pedido_anterior` no lleva el total: no se cita como el de la compra actual.
+
+    Incidente (test, tenant solvershub, 2026-10-10): el pedido OC-0001 del Basic (pagado)
+    salía como "pedido" junto a la cotización del Premium; el modelo los unió y dijo
+    que "el pedido OC-0001 ya figura como pagado, así que no hace falta generar otro".
+    """
+    tenant_id = get_current_tenant_id()
+    async with get_session() as session:
+        conversacion = await session.get(Conversation, conversation_id)
+        if is_panel_test(conversacion):
+            return await _referencias_del_sandbox(conversation_id)
+        quote = await _cotizacion_vigente(session, conversation_id, customer_id)
+        order = (
+            await session.execute(
+                select(Order)
+                .where(
+                    Order.tenant_id == tenant_id,
+                    Order.customer_id == customer_id,
+                    Order.conversation_id == conversation_id,
+                )
+                .order_by(Order.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+    if quote is not None and order is not None and order.created_at >= quote.created_at:
+        quote = None
+    referencias: list[Referencia] = []
+    if quote is not None:
+        referencias.append(
+            Referencia(
+                tipo="cotizacion",
+                datos=(
+                    ("quote_id", quote.id),
+                    ("estado", quote.status),
+                    ("total", _float(quote.total)),
+                    ("pedido", "ninguno"),
+                ),
+            )
+        )
+    if order is not None:
+        en_curso = quote is None and order.status in ORDER_STATUS_ACTIVE
+        referencias.append(
+            Referencia(
+                tipo="pedido" if en_curso else "pedido_anterior",
+                datos=(
+                    ("order_id", order.id),
+                    ("numero", order.public_order_number),
+                    ("estado", order.status),
+                    ("estado_pago", order.payment_status),
+                    ("total", _float(order.total) if en_curso else None),
+                ),
+            )
+        )
+    return referencias + await _referencia_de_formas()
+
+
+async def _referencia_de_formas() -> list[Referencia]:
+    """Las formas de pago que el agente en foco puede ofrecer (SPEC-48, HU-COM-21): solo los ids
+    y `si`/`no`, nunca cuentas ni instrucciones (invariante 7). Solo cuando el agente GUARDÓ sus
+    formas: sin configurar, el prompt queda como antes (y las grabaciones de los journeys valen).
+    Sin agente en foco, nada. `crear_pedido` rechaza igual lo no habilitado, con su pista."""
+    from core.shared import release_vigente
+    from pack_commerce.formas_de_pago import METODOS, metodos_configurados
+
+    agente = release_vigente.agente_del_turno()
+    if agente is None:
+        return []
+    configurados = await metodos_configurados(agente.agent_id)
+    if configurados is None:
+        return []
+    activos = set(configurados)
+    return [Referencia(tipo="formas_de_pago", datos=tuple((m, "si" if m in activos else "no") for m in METODOS))]
+
+
+async def _referencias_del_sandbox(conversation_id: uuid.UUID) -> list[Referencia]:
+    """Referencias ficticias de la prueba (HU-ARCH-14): cotización y pedido del sandbox."""
+    from core.mcp.sandbox import SandboxPrueba
+
+    sandbox = SandboxPrueba.de_contexto(conversation_id)
+    cotizaciones = sorted(await sandbox.listar("quotes"), key=lambda q: str(q.get("creado") or ""))
+    pedidos = sorted(await sandbox.listar("orders"), key=lambda p: str(p.get("creado") or ""))
+    referencias: list[Referencia] = []
+    cotizacion = next((q for q in reversed(cotizaciones) if q.get("status") != "convertida"), None)
+    pedido = pedidos[-1] if pedidos else None
+    if cotizacion is not None:
+        referencias.append(
+            Referencia(
+                tipo="cotizacion",
+                datos=(
+                    ("quote_id", uuid.UUID(str(cotizacion["quote_id"]))),
+                    ("estado", cotizacion.get("status", "draft")),
+                    ("total", float(cotizacion.get("total") or 0)),
+                    ("pedido", "ninguno"),
+                ),
+            )
+        )
+    if pedido is not None:
+        en_curso = cotizacion is None and pedido.get("status") in ORDER_STATUS_ACTIVE
+        referencias.append(
+            Referencia(
+                tipo="pedido" if en_curso else "pedido_anterior",
+                datos=(
+                    ("order_id", uuid.UUID(str(pedido["order_id"]))),
+                    ("numero", pedido.get("public_order_number", "")),
+                    ("estado", pedido.get("status", "abierto")),
+                    ("estado_pago", pedido.get("payment_status", "pendiente")),
+                    ("total", float(pedido.get("total") or 0) if en_curso else None),
+                ),
+            )
+        )
+    return referencias + await _referencia_de_formas()
+
+
+async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  # type: ignore[no-untyped-def]
+    """El pedido SOLO si es del cliente de la conversación (ver `_quote_del_cliente`)."""
+    return (
+        await session.execute(
+            select(Order).where(
+                Order.id == order_id,
+                Order.customer_id == customer_id,
+                Order.tenant_id == get_current_tenant_id(),
+            )
+        )
+    ).scalar_one_or_none()
+
+
+def _rechazo_del_link(code: str | None, public_order_number: str) -> dict[str, Any]:
+    """Resultado de `confirmar_pago_pedido` cuando la capacidad rechaza el link.
+
+    Antes todo rechazo salía como `monto_bajo_minimo`: un pedido ya pagado o con un pago en
+    revisión se ofrecía por transferencia. Los casos que necesitan a una persona escalan
+    con `escalate` (el core lo hace, no el modelo).
+    """
+    from core.payments import (
+        EN_REVISION,
+        MONTO_BAJO_MINIMO,
+        MONTO_NO_COINCIDE,
+        SIN_PASARELA,
+        YA_PAGADO,
+    )
+
+    if code == MONTO_BAJO_MINIMO:
+        return {
+            "error": "monto_bajo_minimo",
+            "detail": "El total es menor al mínimo de la pasarela en línea.",
+            "hint": "Ofrecele transferencia o contraentrega.",
+        }
+    if code == SIN_PASARELA:
+        return {
+            "error": "El pago en línea no está disponible para este negocio.",
+            "hint": "Ofrecele transferencia o contraentrega.",
+        }
+    if code == YA_PAGADO:
+        # La pasarela ya aprobó el pago y el pedido todavía no lo refleja (el evento se
+        # procesa aparte): no hay que cobrar de nuevo.
+        return {
+            "error": "ya_pagado",
+            "public_order_number": public_order_number,
+            "detail": "La pasarela ya registró un pago aprobado de este pedido.",
+            "hint": "No le mandes otro link ni le pidas que pague de nuevo.",
+        }
+    if code == EN_REVISION:
+        return {
+            "error": "pago_en_revision",
+            "public_order_number": public_order_number,
+            "detail": "Hay un pago de este pedido en revisión manual (llegó por otro monto).",
+            "escalate": True,
+        }
+    if code == MONTO_NO_COINCIDE:
+        return {
+            "error": "cobro_previo_por_otro_monto",
+            "public_order_number": public_order_number,
+            "detail": "El pedido tiene un link de pago vigente por otro monto.",
+            "escalate": True,
+        }
+    # `no_disponible` o una capacidad que no dice el motivo.
+    return {
+        "error": "pago_en_linea_no_disponible",
+        "detail": "La pasarela no pudo generar el link de pago ahora.",
+        "hint": "Ofrecele reintentar en un momento, o transferencia o contraentrega.",
+    }
+
+
+def _sin_cotizacion_vigente() -> dict[str, Any]:
+    """Error cuando no hay una cotización en curso a la cual apuntar. Ajena o inexistente responden igual (ver `_quote_del_cliente`). Entre turnos el modelo solo
+    ve texto y pierde el `quote_id`: en test (2026-10-10) inventó `confirmar_cotizacion("Q-0001")`
+    después de que la clienta aceptó. El `hint` le dice cómo recuperarlo en el mismo turno."""
+    return {
+        "error": "Cotización no encontrada.",
+        "hint": (
+            "El quote_id es el id que devuelve generar_cotizacion; no lo inventes. Si no lo tienes "
+            "en este turno, genera la cotización otra vez con los mismos productos."
+        ),
+    }
+
+
+_ESTADO_DE_PAGO_VISIBLE = {
+    "pagado": "pagado",
+    "en_revision": "en revisión",
+    "rechazado": "pago rechazado",
+}
+
+
+async def _transfer_safe_append(agent_id: Any = None) -> str:
+    """Arma el bloque de datos de transferencia (nunca lo escribe el LLM). Con `agent_id`, las
+    cuentas propias del agente pisan a las del negocio (SPEC-48, HU-COM-21)."""
+    from core.payments.transferencia import formatear_cuentas
+    from pack_commerce.formas_de_pago import config_del_agente
+
+    # El mismo camino que `metodos_del_agente`: si transferencia está activa, sus cuentas salen.
+    config = await (config_del_agente(agent_id) if agent_id is not None else _plugin_config())
+    return formatear_cuentas(getattr(config, "transfer_accounts", None))
 
 
 async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
@@ -203,7 +535,11 @@ async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  
             select(ProductVariant, Product, Inventory)
             .join(Product, Product.id == ProductVariant.product_id)
             .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
-            .where(condition, ProductVariant.tenant_id == tenant_id)
+            .where(
+                condition,
+                ProductVariant.tenant_id == tenant_id,
+                Product.deleted_at.is_(None),
+            )
         )
         row = result.first()
     if row is None:
@@ -217,171 +553,127 @@ async def _get_variant_with_stock(variant_id_or_sku) -> dict[str, Any] | None:  
     }
 
 
-def _validate_delivery_data(data: dict[str, Any]) -> tuple[bool, list[str]]:
-    required = ("full_name", "id_document", "address", "municipality", "city")
-    missing = [f for f in required if not str(data.get(f, "")).strip()]
+# Métodos de pago que se confirman después (comprobante manual o webhook de pack-payments).
+METODOS_DIFERIDOS = ("transferencia", "pago_en_linea")
+
+
+def _estado_pago_inicial(payment_method: str) -> str:
+    """Estado de pago con el que nace un pedido: diferido si hay que confirmar el pago; la
+    contraentrega se da por pagada al entregar."""
+    return "pendiente" if payment_method in METODOS_DIFERIDOS else "pagado"
+
+
+async def _motor_activo_seguro() -> bool:
+    from core.kernel.oferta import motor_activo
+
+    return await motor_activo() is True
+
+
+def _normalizar_prefijo(prefijo: str) -> str:
+    """Prefijo del número público: mayúsculas, 1-8 alfanuméricos; fallback OC."""
+    texto = str(prefijo or "").strip().upper()
+    if not re.fullmatch(r"[A-Z0-9]{1,8}", texto):
+        return "OC"
+    return texto
+
+
+def _campos_requeridos(config, delivery_method: str) -> list[str]:
+    """Campos que exige el checkout según el tipo de entrega (D-SPEC-09-2).
+
+    El retiro en tienda usa la lista `recoger_en_tienda`; el resto, la de `domicilio`.
+    """
+    campos = getattr(config, "checkout_fields", None) or {}
+    if delivery_method in campos:
+        return list(campos[delivery_method])
+    return list(campos.get("domicilio", ["full_name", "id_document", "address", "municipality", "city"]))
+
+
+def _accion_de_datos(delivery_method: str) -> str:
+    """Acción de la política de datos que corresponde a este pedido (misma regla que `_campos_requeridos`)."""
+    return ACCION_POR_ENTREGA.get(delivery_method, ACCION_POR_ENTREGA["domicilio"])
+
+
+async def _guardar_en_perfil(
+    context: ToolContext,
+    valores: dict[str, Any],
+    *,
+    accion: str | None = None,
+    operativos: tuple[str, ...] = (),
+) -> None:
+    """Copia datos del cliente a su perfil por la puerta de los agentes (ADR-0179 §10), con los
+    `writeNamespaces` del agente (ADR-0114 §3). El registro del pack (lead, pedido) ya quedó guardado:
+    si el agente no tiene `perfil` concedido o el dato no se admite, solo se omite la copia."""
+    valores = {k: v for k, v in valores.items() if v is not None and str(v).strip()}
+    if not valores:
+        return
+    try:
+        await guardar_datos(
+            context.customer_id,
+            valores,
+            accion=accion,
+            operativos=operativos,
+            source="tool",
+            concedidos=context.write_namespaces,
+            agent_id=context.agent_id,
+        )
+    except NamespaceNoConcedido:
+        log.info("ventas_perfil_no_concedido", n=len(valores))
+    except HechoInvalido:
+        log.warning("ventas_perfil_dato_no_admitido", claves=sorted(valores))
+    except Exception:
+        # El lead o el pedido ya quedó guardado y es la fuente: una falla de la copia no lo deshace.
+        log.warning("ventas_perfil_no_guardado", exc_info=True)
+
+
+async def _sobre_faltan_datos(
+    accion: str,
+    customer_data: dict[str, Any],
+    requeridos_del_modulo: list[str],
+    agent_id: uuid.UUID | None = None,
+) -> dict[str, Any] | None:
+    """Sobre unificado `faltan_datos` (aditivo: no sustituye `missing_fields`). Nunca rompe la tool."""
+    try:
+        evaluacion = await evaluar_accion(
+            accion, customer_data, base=base_desde_lista(requeridos_del_modulo), agent_id=agent_id
+        )
+    except Exception:
+        log.warning("ventas_sobre_faltan_datos_fallo", exc_info=True)
+        return None
+    return evaluacion.como_sobre() if evaluacion is not None else None
+
+
+def _validar_checkout(campos_requeridos: list[str], data: dict[str, Any]) -> tuple[bool, list[str]]:
+    missing = [f for f in campos_requeridos if not str(data.get(f, "")).strip()]
     return (not missing, missing)
 
 
-# ------------------------------------------------------------------ LEADS
-class LeadSkill(BaseSkill):
-    name = "lead_skill"
-    description = "Captura y calificación de leads (prospectos de venta)"
-    keywords: list[str] = []  # noqa: RUF012  (siempre activa)
+# ------------------------------------------------------------------ texto
+_ESPACIOS = re.compile(r"\s+")
 
-    def get_tools(self) -> list[MCPTool]:
-        return [
-            MCPTool(
-                name="crear_lead",
-                description=(
-                    "Registra un nuevo prospecto (lead) en el CRM. Úsala cuando el cliente "
-                    "muestre interés y ya tengas al menos su nombre. NO la uses dos veces "
-                    "para la misma persona: si ya existe, usa actualizar_lead."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Nombre completo del prospecto"},
-                        "email": {"type": "string", "description": "Email si lo dio"},
-                        "phone": {"type": "string", "description": "Teléfono si lo dio"},
-                        "interest": {"type": "string", "description": "Qué producto/servicio le interesa"},
-                    },
-                    "required": ["name", "interest"],
-                },
-                handler=self.crear_lead,
-            ),
-            MCPTool(
-                name="calificar_lead",
-                description=(
-                    "Asigna una puntuación 1-10 al lead según presupuesto, urgencia y poder de "
-                    "decisión. Úsala después de hacer al menos 2 preguntas de calificación."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "score": {"type": "integer", "description": "Puntuación 1-10"},
-                        "notes": {"type": "string", "description": "Justificación breve"},
-                    },
-                    "required": ["score"],
-                },
-                handler=self.calificar_lead,
-            ),
-            MCPTool(
-                name="actualizar_lead",
-                description="Actualiza datos del lead existente de esta conversación (nombre, email, teléfono, interés, estado).",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Nombre completo del prospecto"},
-                        "email": {"type": "string"},
-                        "phone": {"type": "string", "description": "Teléfono si lo dio"},
-                        "interest": {"type": "string"},
-                        "status": {
-                            "type": "string",
-                            "enum": ["nuevo", "calificado", "contactado", "convertido", "perdido"],
-                        },
-                    },
-                },
-                handler=self.actualizar_lead,
-            ),
-        ]
 
-    # ------------------------------------------------------------ handlers
-    async def crear_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        async with get_session() as session:
-            tenant_id = get_current_tenant_id()
-            existing = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.idempotency_key == context.idempotency_key,
-                        Lead.tenant_id == tenant_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing is not None:
-                return {"lead_id": str(existing.id), "status": "duplicate"}
+async def _avisar_pedido_nuevo(session, order) -> None:  # type: ignore[no-untyped-def]
+    """Centro de notificaciones (ADR-0167): pedido nuevo, en la transacción que lo crea."""
+    from core.notifications.service import notify
+    from core.notifications.spec import NotificationSpec
 
-            by_customer = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.customer_id == context.customer_id, Lead.tenant_id == tenant_id
-                    )
-                )
-            ).scalar_one_or_none()
-            if by_customer is not None:
-                return {
-                    "lead_id": str(by_customer.id),
-                    "status": "ya_existe",
-                    "hint": "Este cliente ya es un lead. Usa actualizar_lead.",
-                }
-
-            lead = Lead(
-                customer_id=context.customer_id,
-                conversation_id=context.conversation_id,
-                name=arguments.get("name"),
-                email=arguments.get("email"),
-                phone=arguments.get("phone"),
-                interest=arguments.get("interest", ""),
-                idempotency_key=context.idempotency_key,
-            )
-            session.add(lead)
-            await session.flush()
-            lead_id = str(lead.id)
-
-        # Entity Memory (Capa 2): el core recuerda esto en TODAS las conversaciones futuras
-        await entity_memory.upsert_attributes(
-            context.customer_id,
-            {"name": arguments.get("name"), "email": arguments.get("email"), "crm_lead_id": lead_id},
-        )
-        return {"lead_id": lead_id, "status": "created"}
-
-    async def calificar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        try:
-            score = max(1, min(10, int(arguments.get("score", 0))))
-        except (TypeError, ValueError):
-            return {"error": "score inválido: debe ser un número entre 1 y 10."}
-        async with get_session() as session:
-            lead = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.customer_id == context.customer_id,
-                        Lead.tenant_id == get_current_tenant_id(),
-                    )
-                )
-            ).scalar_one_or_none()
-            if lead is None:
-                return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
-            lead.score = score
-            lead.status = "calificado"
-            lead.last_activity_at = _now()
-        return {"lead_id": str(lead.id), "score": score, "status": "calificado"}
-
-    async def actualizar_lead(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
-        async with get_session() as session:
-            lead = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.customer_id == context.customer_id,
-                        Lead.tenant_id == get_current_tenant_id(),
-                    )
-                )
-            ).scalar_one_or_none()
-            if lead is None:
-                return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
-            if arguments.get("name"):
-                lead.name = str(arguments["name"])
-            if arguments.get("email"):
-                lead.email = str(arguments["email"])
-            if arguments.get("phone"):
-                lead.phone = str(arguments["phone"])
-            if arguments.get("interest"):
-                lead.interest = str(arguments["interest"])
-            if arguments.get("status"):
-                lead.status = str(arguments["status"])
-            lead.last_activity_at = _now()
-        if arguments.get("email"):
-            await entity_memory.upsert_attributes(context.customer_id, {"email": arguments["email"]})
-        return {"lead_id": str(lead.id), "status": "actualizado"}
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    await notify(
+        session,
+        tenant_id,
+        NotificationSpec(
+            event_key="commerce.pedido_nuevo",
+            category="ventas",
+            severity="success",
+            title="Pedido nuevo",
+            body=f"El asistente tomó el pedido {order.public_order_number}.",
+            dedupe_key=f"pedido_nuevo:{order.id}",
+            section="pack_commerce",
+            data={"kind": "pedido_nuevo", "order_id": str(order.id)},
+            target={"entity": "pedido", "id": str(order.id), "section": "pack_commerce"},
+        ),
+    )
 
 
 # ------------------------------------------------------------------ CATÁLOGO
@@ -396,7 +688,7 @@ class CatalogSkill(BaseSkill):
                 name="consultar_inventario",
                 description=(
                     "Consulta precios y disponibilidad reales de los productos del menú. "
-                    "Acepta búsqueda libre: pasá solo la palabra clave (ej: 'basic', no 'plan basic'). "
+                    "Acepta búsqueda libre: pasá solo la palabra clave (ej: 'pizza', no 'pizza grande'). "
                     "Úsala SIEMPRE antes de afirmar cualquier precio, stock o disponibilidad. "
                     "Si devuelve `recommendations` en vez de `matches`, es que no encontró el "
                     "producto: decíselo al cliente y ofrecele esas opciones. Nunca inventes precios."
@@ -409,6 +701,7 @@ class CatalogSkill(BaseSkill):
                     },
                 },
                 handler=self.consultar_inventario,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="recomendar_producto",
@@ -425,6 +718,7 @@ class CatalogSkill(BaseSkill):
                     },
                 },
                 handler=self.recomendar_producto,
+                solo_lectura=True,
             ),
         ]
 
@@ -434,8 +728,8 @@ class CatalogSkill(BaseSkill):
         sku = str(arguments.get("sku", "")).strip()
 
         # Búsqueda por lenguaje natural: se tokeniza la frase y se matchea CUALQUIER
-        # token contra nombre, descripción o SKU. Así "plan basic" encuentra el
-        # producto "Basic" (antes `%plan basic%` no matcheaba nada).
+        # token contra nombre, descripción o SKU. Así "pizza grande" encuentra el
+        # producto "Grande" (antes `%pizza grande%` no matcheaba nada).
         tokens = [
             token
             for token in re.split(r"[\s,]+", query.lower())
@@ -443,7 +737,7 @@ class CatalogSkill(BaseSkill):
         ]
 
         def _match(variant: ProductVariant, product: Product, inventory: Inventory | None) -> dict[str, Any]:
-            return {
+            match = {
                 "product_id": str(product.id),
                 "variant_id": str(variant.id),
                 "sku": variant.sku,
@@ -455,6 +749,12 @@ class CatalogSkill(BaseSkill):
                 "stock": inventory.stock_quantity if inventory else 0,
                 "description": product.description or "",
             }
+            # `tiene_foto` solo cuando hay foto: sin ella, el resultado queda igual que antes de
+            # HU-CRM-01 (las grabaciones de los journeys en replay lo comparan). Mismo criterio que
+            # `_foto_del_unico`: una URL http vieja no cuenta.
+            if (url_foto(product) or "").strip().lower().startswith("https://"):
+                match["tiene_foto"] = True
+            return match
 
         async with get_session() as session:
             stmt = (
@@ -464,6 +764,9 @@ class CatalogSkill(BaseSkill):
                 .where(
                     ProductVariant.active.is_(True),
                     ProductVariant.tenant_id == get_current_tenant_id(),
+                    # La foto sale del producto: filtro explícito además de RLS (HU-CRM-01).
+                    Product.tenant_id == get_current_tenant_id(),
+                    Product.deleted_at.is_(None),
                 )
             )
             if sku:
@@ -485,7 +788,13 @@ class CatalogSkill(BaseSkill):
             matches = [_match(variant, product, inventory) for variant, product, inventory in rows]
 
             if matches:
-                return {"matches": matches}
+                resultado: dict[str, Any] = {"matches": matches}
+                fotos = {str(variant.id): (url_foto(product) or "") for variant, product, _ in rows}
+                foto = _foto_del_unico(sku, query, matches, fotos)
+                if foto:
+                    # El core la adjunta a la última burbuja (safe_renderer); el LLM no la ve.
+                    resultado["_image_url"] = foto
+                return resultado
 
             if not query and not sku:
                 return {
@@ -498,10 +807,11 @@ class CatalogSkill(BaseSkill):
             fallback_stmt = (
                 select(ProductVariant, Product, Inventory)
                 .join(Product, Product.id == ProductVariant.product_id)
-                .join(Inventory, Inventory.variant_id == ProductVariant.id)
+                .outerjoin(Inventory, Inventory.variant_id == ProductVariant.id)
                 .where(
                     ProductVariant.active.is_(True),
                     ProductVariant.tenant_id == get_current_tenant_id(),
+                    Product.deleted_at.is_(None),
                     Inventory.stock_quantity > 0,
                 )
                 .order_by(Product.name)
@@ -552,6 +862,7 @@ class CatalogSkill(BaseSkill):
                         ProductVariant.active.is_(True),
                         Inventory.stock_quantity > 0,
                         ProductVariant.tenant_id == get_current_tenant_id(),
+                        Product.deleted_at.is_(None),
                     )
                     .order_by(Product.name)
                     .limit(5)
@@ -616,6 +927,8 @@ class OrderSkill(BaseSkill):
                     "required": ["items"],
                 },
                 handler=self.generar_cotizacion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_generar_cotizacion,
             ),
             MCPTool(
                 name="aplicar_promocion",
@@ -632,14 +945,17 @@ class OrderSkill(BaseSkill):
                     "required": ["quote_id"],
                 },
                 handler=self.aplicar_promocion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_aplicar_promocion,
             ),
             MCPTool(
                 name="confirmar_cotizacion",
                 description=(
-                    "Marca una cotización como aceptada por el cliente. Llamala SOLO cuando el "
-                    "cliente ya vio el total final (con la promoción aplicada si corresponde) y "
-                    "dijo que sí explícitamente. Es el paso OBLIGATORIO antes de crear_pedido -- "
-                    "esa tool falla si la cotización no pasó por acá."
+                    "Marca una cotización como aceptada por el cliente. Llamala al mostrarle el total "
+                    "final (con la promoción aplicada si corresponde): la primera llamada no la "
+                    "acepta, deja la pregunta pendiente. Cuando el cliente diga que sí "
+                    "explícitamente, llamala otra vez con el mismo quote_id. Es el paso OBLIGATORIO "
+                    "antes de crear_pedido -- esa tool falla si la cotización no pasó por acá."
                 ),
                 parameters={
                     "type": "object",
@@ -649,6 +965,9 @@ class OrderSkill(BaseSkill):
                     "required": ["quote_id"],
                 },
                 handler=self.confirmar_cotizacion,
+                side_effects=True,
+                simular=sandbox_prueba.simular_confirmar_cotizacion,
+                sensible=True,
             ),
             MCPTool(
                 name="crear_pedido",
@@ -666,16 +985,21 @@ class OrderSkill(BaseSkill):
                             "enum": ["efectivo_contraentrega", "transferencia", "pago_en_linea"],
                             "description": (
                                 "'pago_en_linea' SOLO si el pack de pagos está activo para este "
-                                "tenant -- llamá luego generar_link_pago con la referencia del pedido."
+                                "tenant -- llamá luego confirmar_pago_pedido con el id del pedido."
                             ),
                         },
                         "delivery_method": {
                             "type": "string",
                             "enum": ["domicilio", "recoger_en_tienda"],
+                            "description": "Cómo recibe el pedido.",
                         },
                         "customer_data": {
                             "type": "object",
-                            "description": "Datos de quien recibe el pedido",
+                            "description": (
+                                "Datos de quien recibe el pedido. Los campos obligatorios dependen "
+                                "del tipo de pedido (la tool responde faltan_datos_cliente con la "
+                                "lista exacta): domicilio pide dirección, retiro en tienda no."
+                            ),
                             "properties": {
                                 "full_name": {"type": "string"},
                                 "id_document": {"type": "string"},
@@ -683,13 +1007,29 @@ class OrderSkill(BaseSkill):
                                 "municipality": {"type": "string"},
                                 "city": {"type": "string"},
                                 "phone": {"type": "string"},
+                                "email": {"type": "string"},
                             },
-                            "required": ["full_name", "id_document", "address", "municipality", "city"],
+                        },
+                        "guardar_datos_cliente": {
+                            "type": "boolean",
+                            "description": (
+                                "True SOLO si el cliente aceptó guardar sus datos para la próxima "
+                                "compra (Ley 1581). False (default) = no se guarda nada en su perfil."
+                            ),
                         },
                     },
-                    "required": ["quote_id", "payment_method", "delivery_method", "customer_data"],
+                    "required": ["quote_id", "payment_method", "customer_data"],
                 },
                 handler=self.crear_pedido,
+                side_effects=True,
+                simular=sandbox_prueba.simular_crear_pedido,
+                # HU-AOS-47: procedencia del pedido (`duplicate` es el de la misma cotización).
+                crea_registro=RegistroCreado(
+                    kind="pedido",
+                    id_key="order_id",
+                    label_key="public_order_number",
+                    es_nuevo=lambda r: r.get("status") == "confirmed",
+                ),
             ),
             MCPTool(
                 name="agregar_item_pedido",
@@ -721,6 +1061,8 @@ class OrderSkill(BaseSkill):
                     "required": ["order_id", "items"],
                 },
                 handler=self.agregar_item_pedido,
+                side_effects=True,
+                simular=sandbox_prueba.simular_agregar_item_pedido,
             ),
             MCPTool(
                 name="consultar_estado_pedido",
@@ -736,6 +1078,74 @@ class OrderSkill(BaseSkill):
                     "required": ["public_order_number"],
                 },
                 handler=self.consultar_estado_pedido,
+                solo_lectura=True,
+                simular=sandbox_prueba.simular_consultar_estado_pedido,
+            ),
+            MCPTool(
+                name="confirmar_pago_pedido",
+                description=(
+                    "Genera (o reutiliza) el link de pago en línea del pedido, con el total exacto "
+                    "calculado por el sistema. Úsala SOLO cuando el cliente eligió pagar en línea. "
+                    "Nunca pasás el monto: la tool lo toma del pedido y lo regenera si el cliente "
+                    "agregó productos. Si el total es menor al mínimo de la pasarela, devuelve un "
+                    "error de negocio: ofrecé transferencia o contraentrega en vez de reintentar."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_id": {
+                            "type": "string",
+                            "description": "ID del pedido creado por crear_pedido",
+                        },
+                    },
+                    "required": ["order_id"],
+                },
+                handler=self.confirmar_pago_pedido,
+                side_effects=True,
+                simular=sandbox_prueba.simular_confirmar_pago_pedido,
+            ),
+            # Solo la ofrece el motor de procedimientos, en la etapa `esperar_pago` de
+            # `tomar_pedido` (HU-AOS-07, cierre por pago): ninguna sección de
+            # flow.json la nombra y su predicado la apaga fuera de un turno con negocio.
+            MCPTool(
+                name="verificar_pago_pedido",
+                description=(
+                    "Verifica si el pago en línea del pedido ya se confirmó. Úsala cuando el "
+                    "cliente diga que ya pagó o pregunte por su pago. Nunca des un pago por "
+                    "confirmado sin esta respuesta."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string", "description": "ID del pedido creado por crear_pedido"},
+                    },
+                    "required": ["order_id"],
+                },
+                handler=self.verificar_pago_pedido,
+                solo_lectura=True,
+                simular=sandbox_prueba.simular_verificar_pago_pedido,
+                connection_predicate=solo_con_motor_activo(),
+            ),
+            # SPEC-48, HU-COM-24: solo la ofrece el motor, en `pack_commerce.comprobar_transferencia`.
+            MCPTool(
+                name="comprobar_comprobante",
+                description=(
+                    "Revisa la última foto de comprobante que mandó el cliente contra su pedido por "
+                    "transferencia. Úsala cuando el cliente mande el comprobante o diga que ya transfirió. "
+                    "Nunca digas que el pago quedó confirmado sin esta respuesta."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string", "description": "ID del pedido del cliente"},
+                        "nota": {"type": "string", "description": "Lo que dijo el cliente del pago, si dijo algo", "maxLength": 300},
+                    },
+                    "required": ["order_id"],
+                },
+                handler=self.comprobar_comprobante,
+                side_effects=True,
+                simular=sandbox_prueba.simular_comprobar_comprobante,
+                connection_predicate=solo_con_motor_activo(),
             ),
         ]
 
@@ -822,12 +1232,12 @@ class OrderSkill(BaseSkill):
     async def aplicar_promocion(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         quote_id = str(arguments.get("quote_id", ""))
         if _parse_uuid(quote_id) is None:
-            return {"error": "Cotización no encontrada."}
+            return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente())
         async with get_session() as session:
             tenant_id = get_current_tenant_id()
-            quote = await get_owned(session, Quote, quote_id, tenant_id)
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return {"error": "Cotización no encontrada."}
+                return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente(), session)
             items = (
                 await session.execute(
                     select(QuoteItem).where(
@@ -865,7 +1275,9 @@ class OrderSkill(BaseSkill):
             return {
                 "quote_id": quote_id,
                 "applied": False,
-                "message": "No hay promociones vigentes aplicables en este momento.",
+                "motivo": "sin_vigentes",
+                "subtotal": _float(quote.subtotal),
+                "total": _float(quote.total),
             }
 
         segment = await classify_customer(quote.customer_id)
@@ -918,13 +1330,13 @@ class OrderSkill(BaseSkill):
                 "subtotal": _float(quote.subtotal),
                 "total": _float(quote.total),
                 "segmento": segment,
-                "message": "No aplicó ninguna promoción.",
+                "motivo": "no_aplica",
             }
 
         benefit, promo = best
         new_total = max(_float(quote.subtotal) - benefit, 0)
         async with get_session() as session:
-            quote = await get_owned(session, Quote, quote_id, get_current_tenant_id())
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             quote.discount = benefit
             quote.total = new_total
             quote.applied_promotion_id = promo.id
@@ -957,20 +1369,15 @@ class OrderSkill(BaseSkill):
         pero ningún código lo escribía jamás)."""
         quote_id = str(arguments.get("quote_id", ""))
         if _parse_uuid(quote_id) is None:
-            return {"error": "Cotización no encontrada."}
+            return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente())
         async with get_session() as session:
             # Defensa en profundidad además de RLS (mismo criterio que
             # calificar_lead/actualizar_lead, auditor-multitenant 2026-09-12):
-            # filtrar tenant_id explícito en vez de session.get() a secas.
-            quote = (
-                await session.execute(
-                    select(Quote).where(
-                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
-                    )
-                )
-            ).scalar_one_or_none()
+            # filtrar tenant_id explícito en vez de session.get() a secas, y
+            # customer_id para que no se pueda confirmar la de otro cliente.
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return {"error": "Cotización no encontrada."}
+                return await _cotizacion_no_encontrada(context, _sin_cotizacion_vigente(), session)
             if quote.status == "convertida":
                 return {"error": "Esta cotización ya se convirtió en un pedido."}
             if quote.status == "expirada":
@@ -978,7 +1385,8 @@ class OrderSkill(BaseSkill):
             quote.status = "aceptada"
             total = _float(quote.total)
 
-        return {"quote_id": quote_id, "status": "aceptada", "total": round(total, 2)}
+        resultado: dict[str, Any] = {"quote_id": quote_id, "status": "aceptada", "total": round(total, 2)}
+        return resultado
 
     @staticmethod
     def _line_matches_promo(line: dict[str, Any], promo: Promotion) -> bool:
@@ -986,6 +1394,9 @@ class OrderSkill(BaseSkill):
             (promo.category_id and line.get("category_id") != promo.category_id)
             or (promo.product_id and line["product"].id != promo.product_id)
             or (promo.variant_id and line["variant"].id != promo.variant_id)
+            # HU-CRM-03 (agent-sale `esElegible`): con aliado, todos los ítems son de ese aliado;
+            # un carrito mixto no aplica. Sin aliados, `ally_id` es None y no cambia nada.
+            or (promo.ally_id and line["product"].ally_id != promo.ally_id)
         )
 
     @staticmethod
@@ -1025,32 +1436,53 @@ class OrderSkill(BaseSkill):
         customer_data = arguments.get("customer_data") or {}
         if not isinstance(customer_data, dict):
             return {
-                "error": "Faltan datos de entrega",
-                "missing_fields": ["full_name", "id_document", "address", "municipality", "city"],
-                "hint": "Pide al cliente esos datos antes de confirmar el pedido.",
+                "status": "faltan_datos_cliente",
+                "error": "Faltan datos del cliente",
+                "missing_fields": ["full_name", "id_document"],
+                "existing_data": {},
+                "hint": "Pide los datos que faltan uno a uno.",
             }
-        config = await _plugin_config()
+        consiente_guardar = bool(arguments.get("guardar_datos_cliente", False))
+        config = await _plugin_config(context.agent_id)
 
         if payment_method not in PAYMENT_METHODS:
             return {
                 "error": "Método de pago no válido. Usa 'efectivo_contraentrega', 'transferencia' o 'pago_en_linea'."
             }
-        if delivery_method not in DELIVERY_METHODS:
+        # SPEC-48, HU-COM-21: solo una forma de pago activa del agente (encendida y configurada).
+        from pack_commerce.formas_de_pago import ETIQUETAS, metodos_configurados
+
+        activos = await metodos_configurados(context.agent_id)
+        if activos is not None and payment_method not in activos:
+            return {
+                "error": "Esa forma de pago no está habilitada.",
+                "formas_disponibles": activos,
+                "hint": "Ofrecele una de estas: " + ", ".join(ETIQUETAS[m].lower() for m in activos),
+            }
+        if delivery_method and delivery_method not in DELIVERY_METHODS:
             return {"error": "Método de entrega no válido. Usa 'domicilio' o 'recoger_en_tienda'."}
+        metodos = await _metodos_entrega(context)
+        if delivery_method and delivery_method not in metodos:
+            return {
+                "error": "Ese método de entrega no está habilitado.",
+                "metodos_disponibles": metodos,
+                "hint": "Ofrecele uno de estos: "
+                + ", ".join(_etiqueta_metodo_entrega(m) for m in metodos)
+                + ".",
+            }
         if _parse_uuid(quote_id) is None:
-            return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
+            return await _cotizacion_no_encontrada(
+                context, _sin_cotizacion_vigente()
+            )
 
         async with get_session() as session:
-            # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12).
-            quote = (
-                await session.execute(
-                    select(Quote).where(
-                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
-                    )
-                )
-            ).scalar_one_or_none()
+            # Defensa en profundidad además de RLS (auditor-multitenant 2026-09-12);
+            # solo la cotización del cliente de la conversación (HU-SUB-07).
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             if quote is None:
-                return {"error": "Cotización no encontrada. Genera una con generar_cotizacion."}
+                return await _cotizacion_no_encontrada(
+                    context, _sin_cotizacion_vigente(), session
+                )
             existing_order = (
                 await session.execute(
                     select(Order).where(
@@ -1086,28 +1518,35 @@ class OrderSkill(BaseSkill):
             if not items:
                 return {"error": "La cotización no tiene productos."}
 
-            threshold = getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
+            if not delivery_method:
+                return {
+                    "error": "Falta el método de entrega.",
+                    "metodos_disponibles": metodos,
+                    "hint": "Preguntale cuál prefiere entre: "
+                    + ", ".join(_etiqueta_metodo_entrega(m) for m in metodos)
+                    + ".",
+                }
+            threshold = _monto_alto_threshold(config)
             if _float(quote.total) > threshold:
                 return {
                     "error": "El total supera el monto máximo permitido y requiere aprobación humana.",
                     "escalate": True,
                 }
 
-            min_online = getattr(config, "pago_en_linea_monto_minimo", 150_000) or 150_000
+            min_online = await self._minimo_pago_en_linea(config)
             if payment_method == "pago_en_linea" and _float(quote.total) < min_online:
                 # Incidente real (tenant yopoldo, 2026-09-12): un pedido de
                 # $54.000 con pago_en_linea nunca iba a poder completarse (el
-                # mínimo real de la pasarela es $150.000, MIN_AMOUNT_COP en
-                # pack_payments/providers/wompi.py -- no importable acá,
-                # invariante 5). Antes esto solo se descubría (si el modelo
-                # llegaba a llamarla) en generar_link_pago, ya tarde para
+                # mínimo de la pasarela era $150.000, el del sandbox; hoy se
+                # pregunta a la capacidad de pagos, invariante 5). Antes esto solo se descubría (si el modelo
+                # llegaba a llamarla) al generar el link, ya tarde para
                 # redirigir la conversación con naturalidad; ahora es
                 # determinístico en el primer punto posible.
                 #
                 # SEGUNDO incidente real, mismo día: la primera versión de este
                 # error incluía el monto exacto en texto libre ("...menores a
                 # $150.000"). El modelo lo repetía en su respuesta, y
-                # `_amount_guardrail` (module.py) lo bloqueaba por "monto no
+                # la verificación de montos (hoy en el core) lo bloqueaba por "monto no
                 # verificado" -- ese guardrail solo reconoce montos que salen
                 # de una clave de MONEY_KEYS en el resultado de una tool, no
                 # números embebidos en un string de error. En vez de enseñarle
@@ -1119,35 +1558,36 @@ class OrderSkill(BaseSkill):
                     "hint": "Ofrecele transferencia o contraentrega en su lugar.",
                 }
 
-        complete, missing = _validate_delivery_data(customer_data)
+        requeridos = _campos_requeridos(config, delivery_method)
+        # Política de datos del cliente (HU-CRM-13): el ajuste del dueño sube o baja campos de la
+        # lista de fábrica; sin ajustes la lista sale igual que entró.
+        accion_datos = _accion_de_datos(delivery_method)
+        requeridos_del_modulo = list(requeridos)
+        try:
+            requeridos = await requeridos_efectivos(
+                accion_datos, requeridos, A_LEGADO, agent_id=context.agent_id
+            )
+        except Exception:
+            log.warning("ventas_politica_datos_no_aplicada", exc_info=True)
+        complete, missing = _validar_checkout(requeridos, customer_data)
         if not complete:
-            return {
-                "error": "Faltan datos de entrega",
+            faltan: dict[str, Any] = {
+                "status": "faltan_datos_cliente",
+                "error": "Faltan datos del cliente",
                 "missing_fields": missing,
-                "hint": "Pide al cliente esos datos antes de confirmar el pedido.",
+                # Ordenado: según el camino, los datos llegan con el orden del modelo o el de
+                # JSONB, y la salida de la tool es parte del prompt (replay de journeys).
+                "existing_data": {k: customer_data[k] for k in sorted(customer_data) if str(customer_data[k] or "").strip()},
+                "hint": "Pide los datos que faltan uno a uno, sin repetir los que ya tenés.",
             }
-
-        # Guardar datos de entrega en la memoria de entidad del core (Capa 2)
-        await entity_memory.upsert_attributes(
-            context.customer_id,
-            {
-                "full_name": customer_data.get("full_name"),
-                "id_document": customer_data.get("id_document"),
-                "address": customer_data.get("address"),
-                "municipality": customer_data.get("municipality"),
-                "city": customer_data.get("city"),
-                "contact_phone": customer_data.get("phone"),
-            },
-        )
-
+            sobre = await _sobre_faltan_datos(
+                accion_datos, customer_data, requeridos_del_modulo, context.agent_id
+            )
+            if sobre is not None:
+                faltan["faltan_datos"] = sobre
+            return faltan
         async with get_session() as session:
-            quote = (
-                await session.execute(
-                    select(Quote).where(
-                        Quote.id == quote_id, Quote.tenant_id == get_current_tenant_id()
-                    )
-                )
-            ).scalar_one_or_none()
+            quote = await _quote_del_cliente(session, quote_id, context.customer_id)
             # Numeración por tenant (ADR-0018): contador atómico por tenant.
             order_seq = (
                 await session.execute(
@@ -1163,6 +1603,7 @@ class OrderSkill(BaseSkill):
                 total=quote.total,
                 idempotency_key=f"quote:{quote.id}",
                 order_seq=order_seq,
+                public_order_number=f"{_normalizar_prefijo(getattr(config, 'order_prefix', None))}-{order_seq:04d}",
                 delivery_full_name=customer_data.get("full_name"),
                 delivery_id_document=customer_data.get("id_document"),
                 delivery_address=customer_data.get("address"),
@@ -1171,10 +1612,11 @@ class OrderSkill(BaseSkill):
                 status="abierto",
                 # transferencia/pago_en_linea se confirman después (comprobante manual o
                 # webhook de pack-payments); contraentrega se da por pagado al entregar.
-                payment_status="pendiente" if payment_method in ("transferencia", "pago_en_linea") else "pagado",
+                payment_status=_estado_pago_inicial(payment_method),
             )
             session.add(order)
             await session.flush()
+            await _avisar_pedido_nuevo(session, order)
             for item in items:
                 session.add(
                     OrderItem(
@@ -1186,6 +1628,15 @@ class OrderSkill(BaseSkill):
                 )
                 await self._decrement_stock(session, item.variant_id, item.quantity)
             quote.status = "convertida"
+            # El lead del cliente queda con los datos del pedido (sin crear otro): el lead es del core (ADR-0193).
+            await leads_core.completar_contacto(
+                session,
+                get_current_tenant_id(),
+                context.customer_id,
+                nombre=customer_data.get("full_name"),
+                email=customer_data.get("email"),
+                telefono=customer_data.get("phone"),
+            )
             order_id = str(order.id)
             public_order_number = order.public_order_number
 
@@ -1202,6 +1653,24 @@ class OrderSkill(BaseSkill):
                         )
                     )
 
+        # Guardar datos de entrega en el perfil SOLO con consentimiento (Ley 1581, D17): sin él, el
+        # pedido se crea igual pero nada queda para la próxima compra. Va por la puerta del aviso de
+        # datos (ADR-0179 §10) y con los `writeNamespaces` del agente. Después de crear el pedido: si el
+        # pedido falla, el perfil no cambia.
+        if consiente_guardar:
+            await _guardar_en_perfil(
+                context,
+                {
+                    "name": customer_data.get("full_name"),
+                    "id_document": customer_data.get("id_document"),
+                    "address": customer_data.get("address"),
+                    "municipio": customer_data.get("municipality") or customer_data.get("city"),
+                    "phone": customer_data.get("phone"),
+                    "email": customer_data.get("email"),
+                },
+                accion=accion_datos,
+            )
+
         result: dict[str, Any] = {
             "order_id": order_id,
             "status": "confirmed",
@@ -1212,11 +1681,18 @@ class OrderSkill(BaseSkill):
             "entregado_en": f"{customer_data.get('address')}, {customer_data.get('municipality')}, {customer_data.get('city')}",
         }
         if payment_method == "transferencia":
-            transfer_block = await _transfer_safe_append()
+            transfer_block = await _transfer_safe_append(context.agent_id)
             template = getattr(config, "order_confirmed_transfer_message", "") or ""
             if transfer_block:
-                message = template.format(
-                    public_order_number=public_order_number, transfer_block=transfer_block
+                default = (
+                    f"Tu pedido {public_order_number} quedó confirmado por transferencia.\n\n"
+                    f"{transfer_block}"
+                )
+                message = _safe_format(
+                    template,
+                    default,
+                    public_order_number=public_order_number,
+                    transfer_block=transfer_block,
                 )
             else:
                 message = (
@@ -1224,10 +1700,19 @@ class OrderSkill(BaseSkill):
                     "Te enviaremos los datos para pagar en breve."
                 )
             result["_safe_append"] = message
+        elif payment_method == "pago_en_linea" and await _motor_activo_seguro():
+            # Con el motor (adenda 2026-10-13 de ADR-0113): el link de `confirmar_pago_pedido`
+            # lleva el número del pedido; un "✅ quedó confirmado" más, en el mismo envío, duplica.
+            pass
         else:
             symbol = getattr(config, "currency_symbol", "$") or "$"
             template = getattr(config, "order_confirmed_message", "") or ""
-            result["_safe_append"] = template.format(
+            default = (
+                f"Tu pedido {public_order_number} quedó confirmado por {_money(quote.total, symbol)}."
+            )
+            result["_safe_append"] = _safe_format(
+                template,
+                default,
                 public_order_number=public_order_number,
                 total=_money(quote.total, symbol),
             )
@@ -1244,13 +1729,7 @@ class OrderSkill(BaseSkill):
             return {"error": "Pedido no encontrado."}
 
         async with get_session() as session:
-            order = (
-                await session.execute(
-                    select(Order).where(
-                        Order.id == order_id, Order.tenant_id == get_current_tenant_id()
-                    )
-                )
-            ).scalar_one_or_none()
+            order = await _order_del_cliente(session, order_id, context.customer_id)
             if order is None:
                 return {"error": "Pedido no encontrado."}
             if order.status != "abierto":
@@ -1286,7 +1765,7 @@ class OrderSkill(BaseSkill):
 
             new_total = _float(order.total) + add_total
             config = await _plugin_config()
-            threshold = getattr(config, "monto_alto_threshold", 1_000_000) or 1_000_000
+            threshold = _monto_alto_threshold(config)
             if new_total > threshold:
                 return {
                     "error": "El total supera el monto máximo permitido y requiere aprobación humana.",
@@ -1306,6 +1785,13 @@ class OrderSkill(BaseSkill):
                 )
                 await self._decrement_stock(session, variant.id, quantity)
             order.total = new_total
+            # El total cambió: el link de pago vigente queda obsoleto. Se sube la
+            # versión para que la próxima `confirmar_pago_pedido` emita `-rN` y la
+            # referencia anterior (y su link) dejen de ser válidas (HU-COM-01).
+            if order.payment_link_url is not None:
+                order.payment_link_version = (order.payment_link_version or 0) + 1
+                order.payment_link_url = None
+                order.payment_reference = None
 
         return {
             "order_id": order_id,
@@ -1314,16 +1800,146 @@ class OrderSkill(BaseSkill):
             "agregados": [{"sku": v.sku, "quantity": q} for v, q, _p in additions],
         }
 
+    async def confirmar_pago_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Link de pago del pedido con el total del SERVIDOR (HU-COM-01, D-SPEC-09-1).
+
+        El LLM nunca pasa monto ni referencia: solo el `order_id`. La referencia
+        sube de versión (`OC-0001` -> `OC-0001-r2`) cuando el total cambió, lo que
+        invalida cualquier link anterior. Usa `payment_registry` del core, así que
+        no importa ningún pack de pagos (invariante nº5).
+        """
+        order_id = str(arguments.get("order_id", ""))
+        if _parse_uuid(order_id) is None:
+            return {"error": "Pedido no encontrado."}
+
+        async with get_session() as session:
+            order = await _order_del_cliente(session, order_id, context.customer_id)
+            if order is None:
+                return {"error": "Pedido no encontrado."}
+            if order.payment_status == "pagado":
+                return {
+                    "order_id": order_id,
+                    "status": "pagado",
+                    "public_order_number": order.public_order_number,
+                    "message": "Este pedido ya está pagado.",
+                }
+            if order.status != "abierto":
+                return {"error": "El pedido ya no está abierto; no se puede generar un link."}
+            total = _float(order.total)
+            base_reference = order.public_order_number
+            version = order.payment_link_version or 0
+
+        from core.payments import PaymentCapabilityError
+
+        capability = await self._payment_capability()
+        if capability is None:
+            return {
+                "error": "El pago en línea no está disponible para este negocio.",
+                "hint": "Ofrecele transferencia o contraentrega.",
+            }
+
+        # Si el pedido ya tenía link para el total actual, se reutiliza; si el
+        # total cambió (versión vigente), se emite una referencia nueva.
+        reference = base_reference if version == 0 else f"{base_reference}-r{version}"
+        try:
+            link = await capability.create_link(
+                reference=reference,
+                amount=total,
+                description=f"Pedido {base_reference}",
+                method="online",
+                agent_id=context.agent_id,  # ADR-0190 §7: la cuenta Wompi del agente que vende
+            )
+        except PaymentCapabilityError as exc:
+            # Rechazo de NEGOCIO: resultado controlado, NO una falla que apague el
+            # pack (HU-ARCH-18). El `code` dice cuál (adenda 2026-10-10 de ADR-0067).
+            log.warning("payment_link_rejected", order_id=order_id, code=exc.code, reason=str(exc))
+            return _rechazo_del_link(exc.code, base_reference)
+
+        async with get_session() as session:
+            order = await _order_del_cliente(session, order_id, context.customer_id)
+            if order is not None:
+                order.payment_reference = reference
+                order.payment_link_url = link.url
+        return {
+            "order_id": order_id,
+            "status": "link_creado",
+            "public_order_number": base_reference,
+            "monto": round(total, 2),
+            "link": link.url or link.qr_payload,
+            # SafeRenderer: el link exacto lo adjunta el core.
+            "_safe_append": f"💳 Podés pagar tu pedido {base_reference} aquí: {link.url}",
+        }
+
+    async def comprobar_comprobante(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Comprobante de transferencia contra el pedido del cliente (SPEC-48, HU-COM-24)."""
+        from pack_commerce.comprobar_transferencia import comprobar
+
+        return await comprobar(arguments, context)
+
+    async def verificar_pago_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
+        """Estado del pago en línea del pedido del cliente (HU-AOS-07), solo lectura.
+
+        Con el pedido `pagado` (el webhook ya llegó y el monto coincidió con el total) devuelve
+        `pago_confirmado`, el dato que cierra la etapa `esperar_pago`; si no, un `error` de negocio
+        (pendiente o rechazado) sin montos. El pedido se busca solo entre los del cliente de la
+        conversación, y el motor liga el `order_id` al de la tarea."""
+        order_id = str(arguments.get("order_id", ""))
+        if _parse_uuid(order_id) is None:
+            return {"error": "Pedido no encontrado."}
+        async with get_session() as session:
+            order = await _order_del_cliente(session, order_id, context.customer_id)
+            if order is None:
+                return {"error": "Pedido no encontrado."}
+            estado, numero = order.payment_status, order.public_order_number
+        if estado == "pagado":
+            # Un valor fijo del enum del dato: nunca un booleano que un `false` pudiera "llenar".
+            return {"order_id": order_id, "public_order_number": numero, "pago_confirmado": "confirmado"}
+        if estado == "rechazado":
+            return {
+                "error": "pago_rechazado",
+                "detail": f"El último intento de pago del pedido {numero} fue rechazado.",
+                "hint": "Ofrécele reintentar con el link (confirmar_pago_pedido lo reenvía, o genera "
+                "uno nuevo si venció).",
+            }
+        return {
+            "error": "pago_pendiente",
+            "detail": f"El pago del pedido {numero} todavía no se ha confirmado.",
+            "hint": "Si ya pagó, puede tardar unos minutos. Si el cliente pide el link (no le llegó, "
+            "venció o lo quiere de nuevo), llama confirmar_pago_pedido: es la única forma de enviárselo; "
+            "nunca escribas que lo reenvías sin llamarla.",
+        }
+
+    async def _minimo_pago_en_linea(self, config: Any) -> float:
+        """Mínimo del pago en línea: el valor explícito del negocio, o el que declara la
+        pasarela para su ambiente. Sin pasarela que lo declare queda el de Wompi en sandbox
+        (150.000), la política anterior."""
+        explicito = getattr(config, "pago_en_linea_monto_minimo", None)
+        if explicito is not None:
+            return float(explicito)
+        from core.payments import monto_minimo
+
+        declarado = await monto_minimo(await self._payment_capability())
+        return declarado if declarado is not None else 150_000.0
+
+    async def _payment_capability(self):  # type: ignore[no-untyped-def]
+        """Capacidad de pago de un pack habilitado, vía el registro del core."""
+        from core.agents.spec import enabled_packs, load_active_spec
+        from core.payments import payment_registry
+
+        spec = await load_active_spec(get_current_tenant_id())
+        return payment_registry.capability_for(enabled_packs(spec))
+
     async def consultar_estado_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         raw = str(arguments.get("public_order_number", "")).strip()
-        match = re.match(r"^\s*OC[-\s]?(\d{1,6})\s*$", raw, re.IGNORECASE)
+        config = await _plugin_config()
+        prefijo = _normalizar_prefijo(getattr(config, "order_prefix", None))
+        match = re.match(rf"^{re.escape(prefijo)}[-\s]?(\d{{1,9}})$", raw, re.IGNORECASE)
         if not match:
             return {
                 "found": False,
-                "hint": "El número de pedido tiene el formato OC-0001. Pídelo al cliente.",
+                "hint": f"El número de pedido tiene el formato {prefijo}-0001. Pídelo al cliente.",
             }
-        public_number = f"OC-{int(match.group(1)):04d}"
-        config = await _plugin_config()
+        public_number = f"{prefijo}-{int(match.group(1)):04d}"
 
         async with get_session() as session:
             tenant_id = get_current_tenant_id()
@@ -1358,13 +1974,15 @@ class OrderSkill(BaseSkill):
             by_id = {v.id: p for v, p in item_details}
 
         status_labels = getattr(config, "order_status_visible", {}) or {}
-        status_label = status_labels.get(order.status, order.status)
         return {
             "found": True,
             "public_order_number": order.public_order_number,
-            "status": status_label,
-            "payment_status": "pagado" if order.payment_status == "pagado" else "pendiente de pago",
+            "status": status_labels.get(order.status, order.status),
             "delivery_method": "domicilio" if order.delivery_method == "domicilio" else "recoger en tienda",
+            "payment_status": _ESTADO_DE_PAGO_VISIBLE.get(order.payment_status, "pendiente de pago"),
+            # El id real del pedido del cliente (el mismo de Referencias vigentes): lo usa
+            # `pack_commerce.pago_en_linea` para reenviar el link sin crear otro pedido (HU-COM-23).
+            "order_id": str(order.id),
             "items": [
                 {
                     "product": by_id.get(i.variant_id).name if by_id.get(i.variant_id) else "Producto",
@@ -1379,6 +1997,16 @@ class OrderSkill(BaseSkill):
 
     @staticmethod
     async def _decrement_stock(session, variant_id, quantity: int) -> None:  # type: ignore[no-untyped-def]
+        variant = (
+            await session.execute(
+                select(ProductVariant).where(
+                    ProductVariant.id == variant_id,
+                    ProductVariant.tenant_id == get_current_tenant_id(),
+                )
+            )
+        ).scalar_one_or_none()
+        if variant is None:
+            return  # variante ajena al negocio: no se toca inventario
         inventory = (
             await session.execute(
                 select(Inventory).where(

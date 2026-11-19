@@ -32,6 +32,11 @@ class PaymentRequestRejected(Exception):
     """
 
 
+class MontoBajoMinimo(PaymentRequestRejected):
+    """El monto es menor al mínimo que el proveedor acepta en este ambiente: el
+    consumidor ofrece otro medio de pago en vez de reintentar."""
+
+
 @dataclass
 class PaymentLinkResult:
     provider_reference: str
@@ -46,6 +51,10 @@ class WebhookEvent:
     provider_reference: str
     status: str  # normalizado a pendiente|aprobado|rechazado (nunca el vocabulario crudo del proveedor)
     raw: dict[str, Any]
+    # Lo que el proveedor dice que se pagó, en unidades de la moneda (no
+    # centavos). `None` si no viene o no está cubierto por la firma: nunca se
+    # confía en un monto que el proveedor no firmó.
+    amount: float | None = None
 
 
 class BasePaymentProvider(ABC):

@@ -14,22 +14,27 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, current_admin
+from core.access.devices import AccesoError
+from core.admin.auth import SESSION_COOKIE, TENANT_COOKIE, NegocioSuspendido, current_admin
 from core.admin.permissions import effective_access, pack_prefixes, required_section
 from core.admin.views import router as admin_router
 from core.api import api_router
-from core.api.errors import ApiError, api_error_handler
-from core.config import get_settings
+from core.api.errors import ApiError, api_error_handler, validation_error_handler
+from core.config import get_settings, verificar_clave_secreta
+from core.gateway.telegram.webhook import router as telegram_webhook_router
+from core.gateway.twilio.webhook import router as twilio_webhook_router
 from core.gateway.webhooks import router as webhooks_router
 from core.mcp.host import mcp_host
+from core.observability.salud import router as salud_router
 from core.orchestrator.consumer import consume_loop
 from core.orchestrator.debounce import poll_debounce_loop, recover_orphaned_conversations
 from core.plugin_manager import plugin_manager
 from core.shared.logger import configure_logging, get_logger
-from core.shared.tenant import admin_tenants, tenant_scope
+from core.shared.tenant import negocios_de_cuenta, tenant_scope
 from core.tools.core_skill import register_core_skills
 
 configure_logging()
@@ -40,10 +45,15 @@ log = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     log.info("starting", app=settings.app_name, env=settings.app_env)
+    verificar_clave_secreta(settings)
 
     from core.observability.sentry_setup import configure_sentry
 
     configure_sentry()  # no-op sin SENTRY_ENABLED/SENTRY_DSN
+
+    from core.observability.metricas import configure_metrics, shutdown_metrics
+
+    configure_metrics()  # no-op sin OTEL_METRICS_ENABLED (ADR-0188)
 
     # 1. Detectar y registrar plugins (entry_points)
     plugin_manager.scan()
@@ -63,11 +73,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 4. Tasks de fondo: consumer del stream + poller del debounce
     consumer_task = asyncio.create_task(consume_loop())
     debounce_task = asyncio.create_task(poll_debounce_loop())
+    # 5. Sondas de métricas (ADR-0188): solo rol api y con OTEL_METRICS_ENABLED.
+    from core.observability.sondas import arrancar as arrancar_sondas
+
+    sondas_task = arrancar_sondas()
 
     yield
 
     consumer_task.cancel()
     debounce_task.cancel()
+    if sondas_task is not None:
+        sondas_task.cancel()
+    shutdown_metrics()  # exporta lo pendiente antes de salir
     log.info("shutdown")
 
 
@@ -80,9 +97,29 @@ app = FastAPI(
     # y de ahí se generan los tipos TS del panel/app (ADR-0077).
     openapi_url=None,
 )
+# Spans por petición con OTEL_ENABLED (ADR-0188), sin `/healthz*` ni la query de la URL.
+from core.observability.tracing import instrumentar_app  # noqa: E402
+
+instrumentar_app(app)
 app.add_exception_handler(ApiError, api_error_handler)
+app.add_exception_handler(RequestValidationError, validation_error_handler)
+
+
+async def acceso_error_handler(_request: Request, exc: AccesoError) -> JSONResponse:
+    """403 del control de equipos fuera de `/api/v1` (app de campo del pack): `{error, code}`, el mismo
+    cuerpo que da el login (ADR-0174 §3). Las rutas `/api/v1/access/*` lo traducen ellas a `ApiError`."""
+    return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+
+
+app.add_exception_handler(AccesoError, acceso_error_handler)
 
 app.include_router(webhooks_router)
+# WhatsApp vía Twilio (ADR-0186): `/webhooks/twilio/{public_id}/inbound|status`.
+app.include_router(twilio_webhook_router)
+# Telegram (ADR-0199): `/webhooks/telegram/{public_id}`.
+app.include_router(telegram_webhook_router)
+# `/healthz/deep` (ADR-0188): pública por el prefijo `/healthz` del middleware.
+app.include_router(salud_router)
 app.include_router(admin_router)
 # API JSON unificada (ADR-0076/0077): se autentica sola por realms.
 app.include_router(api_router)
@@ -172,7 +209,11 @@ async def tenant_context_middleware(request: Request, call_next):
     if admin is None:
         return await call_next(request)
 
-    tenants = await admin_tenants(admin.id)
+    negocios = await negocios_de_cuenta(admin)
+    if negocios.solo_suspendidos:
+        # Dueño o colaborador cuyo(s) negocio(s) está(n) suspendido(s) (ADR-0136).
+        return HTMLResponse(NegocioSuspendido.mensaje, status_code=403)
+    tenants = negocios.operativos
     target: uuid.UUID | None = None
     if tenants:
         # Selector de tenant (C3, Sprint 4): la cookie ac_tenant decide el
@@ -194,6 +235,19 @@ async def tenant_context_middleware(request: Request, call_next):
             if access is None or (write and access != "write"):
                 return _forbidden(request)
         return await call_next(request)
+
+
+# Duración por grupo de ruta (ADR-0188): sin `/healthz*` y sin la ruta exacta (cardinalidad).
+from core.observability.metricas_negocio import MetricasHttpMiddleware  # noqa: E402
+
+app.add_middleware(MetricasHttpMiddleware)
+
+
+# `X-Request-ID` y `request_id` en los logs (ADR-0188). Se agrega después del middleware de
+# tenant para envolverlo: sus logs (y los de las rutas) ya llevan el id.
+from core.observability.request_id import RequestIdMiddleware  # noqa: E402
+
+app.add_middleware(RequestIdMiddleware)
 
 
 @app.get("/")

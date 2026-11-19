@@ -1,0 +1,728 @@
+"""Build de una release candidata por conexión (ADR-0117 §2, HU-AOS-14).
+
+`construir(tenant_id, connection_id, ...)` congela en una release inmutable (forma `release/2`,
+`core/releases/manifiesto.py`) lo que la conexión corre:
+
+1. **Versiones de los agentes.** Por cada instancia viva y habilitada de la conexión, una versión
+   exacta: la última publicada de su agente. Exige el Coordinador. Cada versión pasa otra vez el
+   validador único del contrato (`revisar_spec`, ADR-0113 §1: el binario pudo cambiar desde que
+   se publicó). No se refresca nada desde el AgentSpec v2: Configuración ya no edita agentes
+   (ADR-0191 §4) y cada agente congela su última versión (o la `fijada` que pase el llamador).
+2. **Habilidades.** Las efectivas en el scope de la conexión (ADR-0118 §2, HU-AOS-16): si la
+   conexión tiene instalaciones propias vivas (`pack_installations`, scope `connection`),
+   SOLO esas, sin merge; si no, las habilitadas del negocio (`enabled_business_packs` del v2
+   activo). Una instalación de conexión de un pack que el negocio no tiene habilitado hace
+   fallar el build (`instalacion_sin_habilitar`: en la parte 1 de la HU la activación del
+   código, la config y las tools siguen colgando de `spec.packs`). Las de la plataforma con su
+   versión exacta, registrada en `pack_versions` con el mismo `manifest_hash` y no retirada; los
+   plugins del negocio solo por nombre.
+3. **Procedimientos.** Cada `ProcedureRef` de las versiones `agentspec/3` resuelve a una
+   versión exacta (`core/releases/procedimientos.py`): los abiertos (`=0.0.0`) contra los que
+   se derivan del flujo (core y packs del binario + las secciones del negocio congeladas) y los
+   rangos contra los procedimientos que publica la versión congelada de cada habilidad efectiva
+   (el manifiesto del binario, cuyo hash ya se comprobó contra `pack_versions`). Lo resuelto
+   queda en `components[].procedures`. Un ref que no resuelve, o cuya habilidad (o una que
+   requiere) no está en el scope, hace fallar el build (fail-closed).
+4. **Textos del negocio.** Overrides de playbooks de la allowlist (`TENANTS_ROOT/<slug>/playbooks`)
+   y las secciones crudas de su `flow.json`. Fail-closed: un override que no se puede leer o
+   pasa 8 KiB, o un `flow.json` roto, hacen fallar el build (la release es inmutable; el loop
+   legacy, en cambio, cae al default en silencio).
+5. **AppSettings que entran al prompt** (`assistant_name`, `business_description`, `language`,
+   `brand_voice`), con los mismos respaldos que el loop si el negocio no tiene fila.
+
+Idempotente: el mismo `manifest_hash` en la conexión devuelve la release existente. El
+manifiesto se arma FUERA del lock; la fila de la conexión se bloquea solo para comparar el hash,
+numerar (max + 1) e insertar (así un rollback, que bloquea la misma fila, no espera a un build
+que lee disco). La release no se activa sola (`promocion.promover`).
+
+Corre dentro del `tenant_scope` del negocio (RLS) y además filtra por `tenant_id`.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+import os
+import re
+import uuid
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+from sqlalchemy import text
+
+from core.db.session import get_session
+from core.releases import manifiesto as man
+from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
+
+log = get_logger(__name__)
+
+_PLAYBOOK_SEGURO = re.compile(r"^[a-zA-Z0-9_-]{1,80}$")
+
+
+class ErrorDelBuild(RuntimeError):
+    """La release no se puede construir. El mensaje lleva rutas, nombres y conteos, nunca
+    valores de secretos ni textos del negocio."""
+
+    def __init__(self, codigo: str, mensaje: str, detalle: list[str] | None = None) -> None:
+        super().__init__(mensaje)
+        self.codigo = codigo
+        self.detalle = detalle or []
+
+
+class ConexionNoEncontrada(LookupError):
+    pass
+
+
+@dataclass(frozen=True)
+class ResultadoBuild:
+    release_id: uuid.UUID
+    number: int
+    manifest_hash: str
+    creada: bool
+    avisos: list[str] = field(default_factory=list)
+
+
+def _exigir_scope(tenant_id: uuid.UUID) -> None:
+    if get_current_tenant_id() != tenant_id:
+        raise PermissionError("releases: fuera del tenant_scope del negocio")
+
+
+def _modulos(modules: Iterable[Any] | None) -> list[Any]:
+    from core.plugin_manager import plugin_manager
+
+    return list(modules if modules is not None else plugin_manager.list_modules())
+
+
+async def _conexion_conversacional(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT ct.produces_conversations FROM channel_connections cc "
+                    "LEFT JOIN connection_types ct ON ct.id = cc.type_id "
+                    "WHERE cc.tenant_id = :t AND cc.id = :c AND cc.deleted_at IS NULL"
+                ),
+                {"t": tenant_id, "c": connection_id},
+            )
+        ).first()
+    if fila is None:
+        raise ConexionNoEncontrada(str(connection_id))
+    if not fila[0]:
+        raise ErrorDelBuild("conexion_no_conversacional", "Las integraciones no tienen release.")
+
+
+# ------------------------------------------------------------------ 1. agentes
+
+@dataclass(frozen=True)
+class _Instancia:
+    componente: man.Componente
+    contenido: dict[str, Any]
+    # ADR-0195: flujo propio del agente congelado en su versión (None = release anterior).
+    flow: dict[str, Any] | None = None
+
+
+async def _componentes(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    fijadas: dict[uuid.UUID, uuid.UUID],
+    catalogo: Any,
+) -> list[_Instancia]:
+    from core.agents.contrato_v3 import revisar_spec
+
+    async with get_session() as session:
+        instancias = (
+            await session.execute(
+                text(
+                    "SELECT ai.id, ai.agent_id, a.key, ai.role, ai.is_default FROM agent_instances ai "
+                    "JOIN agents a ON a.tenant_id = ai.tenant_id AND a.id = ai.agent_id "
+                    "WHERE ai.tenant_id = :t AND ai.connection_id = :c AND ai.deleted_at IS NULL "
+                    "AND ai.enabled AND a.deleted_at IS NULL ORDER BY ai.id"
+                ),
+                {"t": tenant_id, "c": connection_id},
+            )
+        ).all()
+        if not any(rol == "core" for _i, _a, _k, rol, _d in instancias):
+            raise ErrorDelBuild("sin_coordinador", "La conexión no tiene Coordinador.")
+        # ADR-0192 §2: sin un especialista habilitado por defecto no hay release (ni a medias).
+        if not any(rol == "specialist" and defecto for _i, _a, _k, rol, defecto in instancias):
+            raise ErrorDelBuild("sin_especialista", "La conexión no tiene un agente por defecto que atienda.")
+        # ADR-0190 §5: ids de las habilidades ACTIVAS instaladas en cada agente (solo la referencia, nunca config).
+        habilidades_por_agente: dict[uuid.UUID, list[str]] = {}
+        for agente_id, pack_id in (
+            await session.execute(
+                text(
+                    "SELECT agent_id, pack_id FROM pack_installations WHERE tenant_id = :t AND scope = 'agent' "
+                    "AND status = 'active' AND deleted_at IS NULL AND agent_id = ANY(cast(:a AS uuid[])) "
+                    "ORDER BY pack_id"
+                ),
+                {"t": tenant_id, "a": [str(a) for _i, a, _k, _r, _d in instancias]},
+            )
+        ).all():
+            habilidades_por_agente.setdefault(agente_id, []).append(str(pack_id))
+        salida: list[_Instancia] = []
+        problemas: list[str] = []
+        for iid, aid, key, rol, por_defecto in instancias:
+            version = (
+                await session.execute(
+                    text(
+                        "SELECT id, version, content_hash, contract, content, flow, flow_hash, schedule "
+                        "FROM agent_versions "
+                        "WHERE tenant_id = :t AND agent_id = :a "
+                        "AND (cast(:v AS uuid) IS NULL OR id = cast(:v AS uuid)) "
+                        "ORDER BY version DESC LIMIT 1"
+                    ),
+                    {"t": tenant_id, "a": aid, "v": fijadas.get(aid)},
+                )
+            ).first()
+            if version is None:
+                raise ErrorDelBuild(
+                    "agente_sin_version", f"El agente '{key}' no tiene versión publicada."
+                )
+            vid, numero, huella, contrato, contenido, flujo, huella_flujo, horario = version
+            for issue in revisar_spec(contenido, catalogo, contrato):
+                problemas.append(f"{key}: {issue.path} ({issue.code})")
+            salida.append(
+                _Instancia(
+                    man.Componente(
+                        instance_id=str(iid),
+                        agent_id=str(aid),
+                        agent_key=key,
+                        role=rol,
+                        agent_version_id=str(vid),
+                        version=int(numero),
+                        content_hash=huella,
+                        contract=contrato,
+                        is_default=bool(por_defecto),
+                        skills=(
+                            tuple(habilidades_por_agente[aid]) if aid in habilidades_por_agente and rol != "core" else None
+                        ),
+                        flow=flujo,
+                        flow_hash=huella_flujo,
+                        schedule=horario if rol != "core" else None,
+                    ),
+                    contenido,
+                    flujo,
+                )
+            )
+    if problemas:
+        raise ErrorDelBuild(
+            "contrato_invalido", "Una versión no pasa el contrato con este binario.", problemas[:10]
+        )
+    return salida
+
+
+# ------------------------------------------------------------------ 2. habilidades
+async def _efectivas(tenant_id: uuid.UUID, connection_id: uuid.UUID, del_negocio: set[str]) -> set[str]:
+    """Packs efectivos en el scope de la conexión (ADR-0118 §2): sus instalaciones propias si las
+    tiene (reemplazo entero), si no las del negocio. Fail-closed si una instalación de conexión
+    no está habilitada en el negocio (parte 1 de HU-AOS-16)."""
+    from core.agents.instalaciones import instaladas_en_conexion
+
+    propias = await instaladas_en_conexion(tenant_id, connection_id)
+    if not propias:
+        return set(del_negocio)
+    sin_habilitar = sorted(p for p in propias if p not in del_negocio)
+    if sin_habilitar:
+        raise ErrorDelBuild(
+            "instalacion_sin_habilitar",
+            "Una habilidad instalada en la conexión no está habilitada en el negocio.",
+            [f"{p}: habilítala en el negocio o quita la instalación de la conexión" for p in sin_habilitar],
+        )
+    return set(propias)
+
+
+async def habilidades_efectivas(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> set[str]:
+    """Habilidades que un build usaría hoy: las del scope de la conexión (`_efectivas`) o, sin
+    conexión, las habilitadas del negocio. Lectura pura; `ErrorDelBuild` si una instalación de
+    conexión no está habilitada en el negocio (el mismo fail-closed del build)."""
+    from core.agents.spec import enabled_business_packs, leer_spec_activo
+
+    _exigir_scope(tenant_id)
+    leido = await leer_spec_activo(tenant_id)
+    del_negocio = set(enabled_business_packs(leido[1])) if leido else set()
+    if connection_id is None:
+        return del_negocio
+    return await _efectivas(tenant_id, connection_id, del_negocio)
+
+
+def _publicados(pack: Any) -> list[Any]:
+    """Los `procedure/1` del manifiesto de la versión del pack (los mismos bytes que registra
+    `pack_versions`, ya comprobado el hash), validados; uno inválido se salta con log."""
+    from core.kernel.procedures import validar
+
+    salida: list[Any] = []
+    for crudo in pack.manifest.get("provides", {}).get("procedures", []):
+        proc, _problemas = validar(crudo)
+        if proc is None:
+            log.warning("release_build_procedimiento_invalido", pack_id=pack.pack_id, version=pack.version)
+            continue
+        salida.append(proc)
+    return salida
+
+
+async def _habilidades(
+    tenant_id: uuid.UUID, packs: set[str], modules: list[Any]
+) -> tuple[list[man.Habilidad], list[str], list[Any]]:
+    from core.releases.packs import manifiesto_de_pack
+
+    por_id = {str(m.id): m for m in modules}
+    async with get_session() as session:
+        duenos: dict[str, uuid.UUID | None] = {
+            str(f[0]): f[1]
+            for f in (
+                await session.execute(
+                    text("SELECT id, owner_tenant_id FROM plugins WHERE id = ANY(:ids)"),
+                    {"ids": sorted(packs)},
+                )
+            ).all()
+        }
+        habilidades: list[man.Habilidad] = []
+        del_negocio: list[str] = []
+        publicados: list[Any] = []
+        problemas: list[str] = []
+        for pid in sorted(packs):
+            if pid not in duenos:
+                problemas.append(f"{pid}: no está registrado")
+                continue
+            dueno = duenos[pid]
+            if dueno is not None:
+                if dueno == tenant_id:
+                    del_negocio.append(pid)
+                else:
+                    # El mismo mensaje que un plugin inexistente: no revela plugins de otro negocio.
+                    log.warning("release_build_foreign_plugin", pack_id=pid)
+                    problemas.append(f"{pid}: no está registrado")
+                continue
+            modulo = por_id.get(pid)
+            if modulo is None:
+                problemas.append(f"{pid}: el binario no la trae")
+                continue
+            pack = manifiesto_de_pack(modulo)
+            registrada = (
+                await session.execute(
+                    text(
+                        "SELECT manifest_hash, yanked FROM pack_versions WHERE pack_id = :p AND version = :v"
+                    ),
+                    {"p": pid, "v": pack.version},
+                )
+            ).first()
+            if registrada is None:
+                problemas.append(
+                    f"{pid} {pack.version}: sin registrar en pack_versions (agent-core db sync-packs)"
+                )
+            elif registrada[0] != pack.manifest_hash:
+                problemas.append(
+                    f"{pid} {pack.version}: el contenido del binario no es el registrado"
+                )
+            elif registrada[1]:
+                problemas.append(f"{pid} {pack.version}: versión retirada (yanked)")
+            else:
+                habilidades.append(man.Habilidad(pid, pack.version, pack.manifest_hash))
+                publicados.extend(_publicados(pack))
+    if problemas:
+        raise ErrorDelBuild(
+            "habilidad_no_disponible", "Una habilidad no tiene versión utilizable.", problemas
+        )
+    return habilidades, del_negocio, publicados
+
+
+def _resolver_componentes(
+    instancias: list[_Instancia],
+    *,
+    derivados: set[str],
+    publicados: list[Any],
+    habilidades: set[str],
+    derivados_por_agente: Mapping[str, set[str]] | None = None,
+) -> list[man.Componente]:
+    """Los componentes con sus `ProcedureRef` resueltos a versión exacta (fail-closed)."""
+    from core.releases.procedimientos import publicados_por_id, resolver_refs
+
+    por_id = publicados_por_id(publicados)
+    salida: list[man.Componente] = []
+    faltan: list[str] = []
+    for inst in instancias:
+        refs = inst.contenido.get("procedures")
+        if inst.componente.contract != "agentspec/3" or not isinstance(refs, list):
+            salida.append(inst.componente)  # el KernelSpec tiene `procedures` de otra forma
+            continue
+        abiertos = (derivados_por_agente or {}).get(inst.componente.agent_key, derivados)
+        resueltos, problemas = resolver_refs(refs, abiertos=abiertos, publicados=por_id, habilidades=habilidades)
+        faltan.extend(f"{inst.componente.agent_key}: {p}" for p in problemas)
+        salida.append(
+            dataclasses.replace(inst.componente, procedures=tuple((r.id, r.version) for r in resueltos))
+        )
+    if faltan:
+        raise ErrorDelBuild(
+            "procedimiento_sin_resolver", "Un procedimiento de un agente no resuelve.", sorted(set(faltan))[:10]
+        )
+    return salida
+
+
+def revisar_ruteo(instancias: list[_Instancia], componentes: list[man.Componente]) -> list[str]:
+    """Referencias del `routing` del KernelSpec contra la release (HU-AOS-17, ADR-0138): cada
+    `rules[].agent` es la key de un especialista de la conexión y cada `rules[].start` lo declara
+    algún especialista. `defaultAgent` no se exige (el lector tolerante lo fija en `general` y el
+    dueño puede quitar al General; `is_default` de la instancia gana, adenda HU-AOS-16 de
+    ADR-0117). Un `routing` que no valida lo rechaza antes el contrato."""
+    especialistas = {c.agent_key: c for c in componentes if c.role == "specialist"}
+    declarados = {pid for c in especialistas.values() for pid, _v in c.procedures}
+    problemas: list[str] = []
+    for inst in instancias:
+        if inst.componente.role != "core":
+            continue
+        routing = inst.contenido.get("routing")
+        reglas = routing.get("rules") if isinstance(routing, dict) else None
+        for regla in reglas if isinstance(reglas, list) else []:
+            if not isinstance(regla, dict):
+                continue
+            rid = str(regla.get("id"))[:40]
+            agente, start = regla.get("agent"), regla.get("start")
+            if isinstance(agente, str) and agente not in especialistas:
+                problemas.append(f"{rid}: el agente '{agente[:40]}' no es especialista de la conexión")
+            if isinstance(start, str) and start not in declarados:
+                problemas.append(f"{rid}: ningún especialista declara '{start[:80]}'")
+    return problemas
+
+
+def revisar_a2a(
+    instancias: list[_Instancia], componentes: list[man.Componente], grafo: Mapping[str, Any] | None
+) -> list[str]:
+    """Enlaces A2A contra los límites del KernelSpec del Coordinador (adenda HU-AOS-18 de
+    ADR-0116 §3): un enlace solo puede bajarlos. Solo se revisan los enlaces con los dos agentes en
+    la conexión; los demás quedan inertes (ni error ni revisión)."""
+    from agentcore_contracts.kernelspec import A2ALimits
+    from pydantic import ValidationError
+
+    if not grafo:
+        return []
+    core = next((i for i in instancias if i.componente.role == "core"), None)
+    crudo = core.contenido.get("a2a") if core is not None else None
+    try:
+        limites = A2ALimits.model_validate(crudo if isinstance(crudo, Mapping) else {})
+    except ValidationError:
+        return ["el bloque a2a del Coordinador no valida"]
+    claves = {c.agent_id: c.agent_key for c in componentes}
+    problemas: list[str] = []
+    for enlace in grafo.get("links") or []:
+        origen, destino = claves.get(str(enlace.get("from_agent_id"))), claves.get(str(enlace.get("to_agent_id")))
+        if origen is None or destino is None:
+            continue
+        par = f"{origen[:40]}→{destino[:40]}"
+        if int(enlace.get("max_depth", 0)) > limites.maxDepth:
+            problemas.append(f"{par}: max_depth {enlace.get('max_depth')} > {limites.maxDepth} del Coordinador")
+        if float(enlace.get("budget_usd", 0)) > limites.turnBudgetUsd:
+            problemas.append(f"{par}: budget_usd {enlace.get('budget_usd')} > {limites.turnBudgetUsd} del turno")
+        if int(enlace.get("budget_tokens", 0)) > limites.turnBudgetTokens:
+            problemas.append(f"{par}: budget_tokens {enlace.get('budget_tokens')} > {limites.turnBudgetTokens} del turno")
+    return problemas
+
+
+async def _grafo_a2a(tenant_id: uuid.UUID) -> dict[str, Any] | None:
+    from core.agents import grafo_a2a
+
+    version = await grafo_a2a.vigente(tenant_id)
+    return grafo_a2a.para_el_manifiesto(version) if version is not None else None
+
+
+# ------------------------------------------------------------------ 4-5. textos y AppSettings
+def _overrides(slug: str | None, nombres: Iterable[str]) -> dict[str, str]:
+    from core.agents.playbooks import MAX_SIZE_BYTES
+    from core.onboarding import tenant_dir
+
+    if not slug:
+        return {}
+    from core.onboarding import _validate_slug
+
+    _validate_slug(slug)
+    carpeta = tenant_dir(slug) / "playbooks"
+    salida: dict[str, str] = {}
+    problemas: list[str] = []
+    for nombre in sorted(set(nombres)):
+        if not _PLAYBOOK_SEGURO.fullmatch(nombre):
+            continue
+        archivo = carpeta / f"{nombre}.md"
+        if not archivo.exists():
+            continue
+        try:
+            if not archivo.resolve().is_relative_to(carpeta.resolve()):
+                problemas.append(f"{nombre}: apunta fuera de la carpeta del negocio")
+                continue
+            if archivo.stat().st_size > MAX_SIZE_BYTES:
+                problemas.append(f"{nombre}: pasa {MAX_SIZE_BYTES // 1024} KiB")
+                continue
+            texto = archivo.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            problemas.append(f"{nombre}: no se puede leer")
+            continue
+        if len(texto.encode("utf-8")) > MAX_SIZE_BYTES:
+            problemas.append(f"{nombre}: pasa {MAX_SIZE_BYTES // 1024} KiB")
+            continue
+        salida[nombre] = texto
+    if problemas:
+        raise ErrorDelBuild(
+            "override_invalido",
+            "Un override de playbook del negocio no se puede congelar.",
+            problemas,
+        )
+    return salida
+
+
+async def _app_settings(tenant_id: uuid.UUID) -> dict[str, str | None]:
+    from core.config import get_settings
+
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT assistant_name, business_description, language, brand_voice FROM app_settings "
+                    "WHERE tenant_id = :t AND deleted_at IS NULL"
+                ),
+                {"t": tenant_id},
+            )
+        ).first()
+    if fila is None:  # los mismos respaldos que el loop
+        return {
+            "assistant_name": get_settings().app_name,
+            "business_description": "",
+            "language": "es",
+            "brand_voice": "",
+        }
+    return {
+        "assistant_name": fila[0],
+        "business_description": fila[1],
+        "language": fila[2],
+        "brand_voice": fila[3],
+    }
+
+
+def _built_with() -> dict[str, str]:
+    import agentcore_contracts
+
+    import core
+
+    return {
+        "git_sha": (os.environ.get("SOURCE_COMMIT") or "")[:40],
+        "contracts": str(agentcore_contracts.__version__),
+        "core": str(core.__version__),
+    }
+
+
+# ------------------------------------------------------------------ build
+async def armar_manifiesto(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    *,
+    modules: Iterable[Any] | None = None,
+    fijadas: dict[uuid.UUID, uuid.UUID] | None = None,
+) -> dict[str, Any]:
+    """El manifiesto que construiría `construir`, sin escribir la release. `fijadas`:
+    `{agent_id: version_id}` que se congelan en lugar de la última versión publicada."""
+    from core.kernel.procedures import catalogo_de_acciones
+
+    _exigir_scope(tenant_id)
+    await _conexion_conversacional(tenant_id, connection_id)
+    modulos = _modulos(modules)
+    catalogo = catalogo_de_acciones(modulos)
+    instancias = await _componentes(tenant_id, connection_id, fijadas or {}, catalogo)
+    return await armar_con_instancias(tenant_id, connection_id, instancias, modulos)
+
+
+async def armar_con_instancias(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, instancias: list[_Instancia], modulos: list[Any]
+) -> dict[str, Any]:
+    """Pasos 2 a 5 del build con los agentes ya leídos. También lo usa la prueba del borrador
+    (`core.releases.efimera`, adenda HU-AOS-72 de ADR-0191), que arma las instancias en memoria."""
+    from core.agents.flow import read_tenant_flow_raw
+    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    from core.releases.cargar import derivar_procedimientos
+    from core.shared.tenant import tenant_slug
+
+    _exigir_scope(tenant_id)
+    leido = await leer_spec_activo(tenant_id)
+    del_negocio = set(enabled_business_packs(leido[1])) if leido else set()
+    allowlist: set[str] = {p.name for p in leido[1].playbooks} if leido else set()
+    del leido
+    for inst in instancias:
+        for ref in inst.contenido.get("playbooks") or []:
+            if isinstance(ref, dict) and isinstance(ref.get("name"), str):
+                allowlist.add(ref["name"])
+    packs = await _efectivas(tenant_id, connection_id, del_negocio)
+    habilidades, plugins_del_negocio, publicados = await _habilidades(tenant_id, packs, modulos)
+
+    slug = await tenant_slug(tenant_id)
+    try:
+        flujo = read_tenant_flow_raw(slug) if slug else None
+    except ValueError as exc:
+        raise ErrorDelBuild("flujo_invalido", str(exc)) from None
+    skills = [h.pack_id for h in habilidades]
+    derivados = set(derivar_procedimientos(skills, flujo))
+    # ADR-0195: cada agente deriva sus procedimientos abiertos de su propio flujo; los que no
+    # tienen flujo (versiones anteriores) siguen con los del negocio.
+    derivados_por_agente = {
+        inst.componente.agent_key: set(derivar_procedimientos(skills, inst.flow))
+        for inst in instancias
+        if inst.flow is not None
+    }
+    componentes = _resolver_componentes(
+        instancias,
+        derivados=derivados,
+        publicados=publicados,
+        habilidades={h.pack_id for h in habilidades} | set(plugins_del_negocio),
+        derivados_por_agente=derivados_por_agente,
+    )
+    ruteo = revisar_ruteo(instancias, componentes)
+    if ruteo:
+        raise ErrorDelBuild("ruteo_invalido", "Una regla de enrutamiento no apunta a la release.", ruteo[:10])
+    grafo = await _grafo_a2a(tenant_id)
+    a2a = revisar_a2a(instancias, componentes, grafo)
+    if a2a:
+        raise ErrorDelBuild("a2a_invalido", "Un permiso entre agentes pide más que el Coordinador.", a2a[:10])
+    return man.armar(
+        componentes=componentes,
+        habilidades=habilidades,
+        plugins_del_negocio=plugins_del_negocio,
+        overrides=_overrides(slug, allowlist),
+        flujo_del_negocio=flujo,
+        app_settings=await _app_settings(tenant_id),
+        built_with=_built_with(),
+        a2a_graph=grafo,
+    )
+
+
+async def construir(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    *,
+    actor: str,
+    created_by: uuid.UUID | None = None,
+    origin: str = "owner",
+    notas: str = "",
+    modules: Iterable[Any] | None = None,
+    fijadas: dict[uuid.UUID, uuid.UUID] | None = None,
+) -> ResultadoBuild:
+    """Construye (o devuelve, si ya existe con el mismo hash) la release candidata."""
+    if origin not in ("owner", "platform"):
+        raise ValueError(f"origin inválido: {origin}")
+    manifest = await armar_manifiesto(
+        tenant_id, connection_id, modules=modules, fijadas=fijadas
+    )
+    huella = man.hash_de(manifest)
+    async with get_session() as session:
+        bloqueada = (
+            await session.execute(
+                text(
+                    "SELECT id FROM channel_connections WHERE tenant_id = :t AND id = :c AND deleted_at IS NULL "
+                    "FOR UPDATE"
+                ),
+                {"t": tenant_id, "c": connection_id},
+            )
+        ).scalar_one_or_none()
+        if bloqueada is None:
+            raise ConexionNoEncontrada(str(connection_id))
+        existente = (
+            await session.execute(
+                text(
+                    "SELECT id, number FROM connection_releases "
+                    "WHERE tenant_id = :t AND connection_id = :c AND manifest_hash = :h"
+                ),
+                {"t": tenant_id, "c": connection_id, "h": huella},
+            )
+        ).first()
+        if existente is not None:
+            return ResultadoBuild(existente[0], existente[1], huella, creada=False)
+        numero = (
+            await session.execute(
+                text(
+                    "SELECT coalesce(max(number), 0) + 1 FROM connection_releases WHERE tenant_id = :t AND connection_id = :c"
+                ),
+                {"t": tenant_id, "c": connection_id},
+            )
+        ).scalar_one()
+        release_id = uuid.uuid4()
+        await session.execute(
+            text(
+                "INSERT INTO connection_releases (id, tenant_id, connection_id, number, origin, manifest, "
+                "manifest_hash, created_by, graph_version_id) "
+                "VALUES (:id, :t, :c, :n, :o, cast(:m as jsonb), :h, :by, :g)"
+            ),
+            {
+                "id": release_id,
+                "t": tenant_id,
+                "c": connection_id,
+                "n": numero,
+                "o": origin,
+                "m": json.dumps(manifest, ensure_ascii=False),
+                "h": huella,
+                "by": created_by,
+                # Desde el manifiesto, no "la última versión": una publicación entre el armado y
+                # este INSERT los desalinearía.
+                "g": (manifest.get("a2a_graph") or {}).get("version_id"),
+            },
+        )
+        for comp in manifest["components"]:
+            await session.execute(
+                text(
+                    "INSERT INTO release_components (tenant_id, connection_id, release_id, agent_instance_id, "
+                    "agent_id, agent_version_id) VALUES (:t, :c, :r, :i, :a, :v)"
+                ),
+                {
+                    "t": tenant_id,
+                    "c": connection_id,
+                    "r": release_id,
+                    "i": uuid.UUID(comp["instance_id"]),
+                    "a": uuid.UUID(comp["agent_id"]),
+                    "v": uuid.UUID(comp["agent_version_id"]),
+                },
+            )
+        await registrar_evento(
+            session,
+            tenant_id,
+            connection_id,
+            release_id,
+            "built",
+            actor,
+            {"origin": origin, "manifest_hash": huella, "number": numero, "notes": notas[:500]},
+        )
+    log.info("release_built", connection_id=str(connection_id), number=numero, origin=origin)
+    return ResultadoBuild(release_id, numero, huella, creada=True)
+
+
+async def registrar_evento(
+    session: Any,
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    release_id: uuid.UUID,
+    tipo: str,
+    actor: str,
+    data: dict[str, Any] | None = None,
+) -> None:
+    await session.execute(
+        text(
+            # `clock_timestamp()` y no el `now()` del default: la transacción empieza antes del
+            # FOR UPDATE, y el «último evento de ciclo de vida» se ordena por `created_at`
+            # (un `invalid` escrito tras esperar el candado debe quedar después, HU-AOS-27).
+            "INSERT INTO release_events (tenant_id, connection_id, release_id, type, data, actor, created_at) "
+            "VALUES (:t, :c, :r, :tipo, cast(:d as jsonb), :actor, clock_timestamp())"
+        ),
+        {
+            "t": tenant_id,
+            "c": connection_id,
+            "r": release_id,
+            "tipo": tipo,
+            "d": json.dumps(data or {}, ensure_ascii=False, default=str),
+            "actor": actor[:120],
+        },
+    )
+
+
+__all__ = [
+    "ConexionNoEncontrada",
+    "ErrorDelBuild",
+    "ResultadoBuild",
+    "armar_manifiesto",
+    "construir",
+    "habilidades_efectivas",
+    "registrar_evento",
+]

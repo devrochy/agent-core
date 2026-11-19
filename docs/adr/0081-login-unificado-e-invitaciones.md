@@ -2,6 +2,7 @@
 
 - **Estado:** aceptado
 - **Fecha:** 2026-09-29
+- **Modificado por:** ADR-0174 §2 (la exención de owner y master del vínculo de dispositivo pasa a política por negocio y rol; solo el master de plataforma queda exento).
 - **Modifica:** ADR-0057, ADR-0059, ADR-0062, ADR-0065, ADR-0066, ADR-0077 (superficie de autenticación de la API de campo y membresía multi-negocio).
 
 ## Contexto
@@ -74,7 +75,7 @@ Eso deja cuatro problemas abiertos que este ADR resuelve:
 
 - Nueva tabla de sistema **`tenant_invitations`** (sin RLS, patrón `tenant_user`,
   ADR-0012): el invitado debe poder ver la invitación **antes** de tener acceso al tenant.
-  Acceso por funciones/métodos SECURITY DEFINER.
+  Acceso por consultas directas de `app_runtime` filtradas por el principal (corregido 2026-10-26: no existen funciones SECURITY DEFINER para esta tabla).
 - Alta de colaborador/gestor:
   - **Identidad nueva** (email/usuario no existe) → se crea `Admin` y se vincula directo
     (comportamiento actual).

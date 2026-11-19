@@ -27,8 +27,9 @@ COMPOSE_SERVICES = ("postgres", "redis", "core-api", "celery-worker", "celery-be
 LLM_DEFAULTS: dict[str, dict[str, str]] = {
     "deepseek": {
         "base_url": "https://api.deepseek.com",
-        "model": "deepseek-chat",
-        "reasoning_model": "deepseek-reasoner",
+        "model": "deepseek-flash",
+        "reasoning_model": "deepseek-flash",
+        "fallback_model": "gpt-4o-mini",
     },
     "openai": {
         "base_url": "https://api.openai.com",

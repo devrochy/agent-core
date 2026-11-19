@@ -104,3 +104,39 @@ def test_setup_url_por_setup_kind_y_disponibilidad():
     assert setup_url(wa) == "/admin/conexiones/wizard/whatsapp/elegir-entorno"
     assert setup_url(cal) == "/admin/plugins/pack_calendar/oauth"
     assert setup_url(off) == ""
+
+
+def test_webchat_es_conversacional_y_no_aparece_en_el_selector():
+    """El chat web es conexión (ADR-0115 §4) pero se configura en Configuración → Chat web."""
+    webchat = get_connection_type("webchat")
+    assert webchat is not None
+    assert (webchat.category, webchat.channel, webchat.provider) == (CATEGORY_COMMUNICATION, "web", "web")
+    assert webchat.produces_conversations is True
+    assert webchat.external_id_key == ""  # la clave la genera el servidor, no el formulario
+    en_selector = {t.id for grupo in types_by_category() for t in grupo["items"]}
+    assert "webchat" not in en_selector and "whatsapp_meta" in en_selector
+
+
+def test_messenger_e_instagram_estan_disponibles():
+    # Messenger (HU-CHAN-01) e Instagram con Facebook Login (HU-CHAN-04) tienen alta y salida.
+    for tipo_id in ("messenger_meta", "instagram_meta"):
+        tipo = get_connection_type(tipo_id)
+        assert tipo is not None and tipo.available is True, tipo_id
+
+
+def test_todo_canal_de_mensajeria_de_meta_disponible_tiene_adaptador_de_salida():
+    """Un tipo disponible sin adaptador crearía conexiones que no pueden responder."""
+    from core.gateway.channels.registry import CANALES_DE_MENSAJERIA_META, outbound_adapter_for
+
+    for tipo in CONNECTION_TYPES:
+        if tipo.available and tipo.provider == "meta" and tipo.channel in CANALES_DE_MENSAJERIA_META:
+            assert outbound_adapter_for(tipo.provider, tipo.channel) is not None, tipo.id
+
+
+def test_playground_es_interna_no_conversacional_y_fuera_del_selector():
+    tipo = get_connection_type("playground")
+    assert tipo is not None
+    # No es un canal de clientes: no entra en backfills, releases ni migración a v3.
+    assert tipo.produces_conversations is False
+    assert tipo.en_selector is False and tipo.credentials_schema == {}
+    assert tipo.id not in {t.id for g in types_by_category() for t in g["items"] if t.en_selector}

@@ -24,6 +24,11 @@ class SessionContext:
     connection_id: uuid.UUID
     connection_external_id: str
     status: str
+    # Dato DURABLE de que la sesión ya se vinculó alguna vez y conserva
+    # credenciales (`last_connected_at` o `jid`, más `creds_encrypted`): a
+    # diferencia de `status`, no cambia por un error o un reinicio. El manager
+    # lo usa para no tratar como "nunca vinculada" una sesión que sí lo estuvo.
+    linked_before: bool = False
 
 
 class SessionRegistry(Protocol):
@@ -34,8 +39,21 @@ class SessionRegistry(Protocol):
         tenant_id: uuid.UUID,
         new_status: str,
         *,
+        connection_id: uuid.UUID | None = None,
         detail: str | None = None,
         jid: str | None = None,
+    ) -> None: ...
+
+    async def set_identity(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        connection_id: uuid.UUID | None = None,
+        jid: str | None = None,
+        phone: str | None = None,
+        push_name: str | None = None,
+        business_name: str | None = None,
+        platform: str | None = None,
     ) -> None: ...
 
     async def tenants_with_jid(self, jid: str) -> list[uuid.UUID]: ...
@@ -82,6 +100,10 @@ class DbSessionRegistry:
                     connection_id=wa_session.connection_id,
                     connection_external_id=connection.external_id,
                     status=wa_session.status,
+                    linked_before=(
+                        wa_session.last_connected_at is not None or bool(wa_session.jid)
+                    )
+                    and wa_session.creds_encrypted is not None,
                 )
                 for wa_session, connection in rows
                 if wa_session.connection_id is not None
@@ -93,17 +115,26 @@ class DbSessionRegistry:
         tenant_id: uuid.UUID,
         new_status: str,
         *,
+        connection_id: uuid.UUID | None = None,
         detail: str | None = None,
         jid: str | None = None,
     ) -> None:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
+                filters = [
+                    WaWebSession.tenant_id == tenant_id,
+                    WaWebSession.deleted_at.is_(None),
+                ]
+                # Con dos sesiones por tenant (una huérfana de una conexión
+                # borrada), escribir en la primera dejaba el estado real en la
+                # fila equivocada y el panel no veía `connected`/`jid`.
+                if connection_id is not None:
+                    filters.append(WaWebSession.connection_id == connection_id)
                 row = (
                     await session.execute(
-                        select(WaWebSession).where(
-                            WaWebSession.tenant_id == tenant_id,
-                            WaWebSession.deleted_at.is_(None),
-                        )
+                        select(WaWebSession)
+                        .where(*filters)
+                        .order_by(WaWebSession.created_at)
                     )
                 ).scalars().first()
                 if row is None:
@@ -114,16 +145,74 @@ class DbSessionRegistry:
                 if jid is not None:
                     row.jid = jid
                 if new_status == status.CONNECTED:
-                    row.last_connected_at = utcnow()
+                    ahora = utcnow()
+                    # Primera vinculación: se conserva al reconectar. Un reset
+                    # o un logout la limpian para que la próxima sea nueva.
+                    if row.linked_at is None:
+                        row.linked_at = ahora
+                    row.last_connected_at = ahora
                     row.last_error = None
+                elif new_status == status.LOGGED_OUT:
+                    # La sesión ya no existe: no mostrar identidad ni fecha de
+                    # vínculo viejas. `last_connected_at` queda como historial
+                    # (es lo que usa `linked_before` para no borrar credenciales
+                    # de una sesión que sí estuvo vinculada).
+                    row.jid = None
+                    row.phone = None
+                    row.push_name = None
+                    row.business_name = None
+                    row.platform = None
+                    row.linked_at = None
+                    row.updated_at = utcnow()
                 else:
                     row.updated_at = utcnow()
 
-    async def tenants_with_jid(self, jid: str) -> list[uuid.UUID]:
-        """Tenants que tienen una sesión con ese `jid` (para detectar duplicados).
+    async def set_identity(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        connection_id: uuid.UUID | None = None,
+        jid: str | None = None,
+        phone: str | None = None,
+        push_name: str | None = None,
+        business_name: str | None = None,
+        platform: str | None = None,
+    ) -> None:
+        """Guarda los datos del dispositivo vinculado sin pisar los conocidos con vacíos."""
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                filters = [
+                    WaWebSession.tenant_id == tenant_id,
+                    WaWebSession.deleted_at.is_(None),
+                ]
+                if connection_id is not None:
+                    filters.append(WaWebSession.connection_id == connection_id)
+                row = (
+                    await session.execute(
+                        select(WaWebSession).where(*filters).order_by(WaWebSession.created_at)
+                    )
+                ).scalars().first()
+                if row is None:
+                    return
+                if jid:
+                    row.jid = jid
+                if phone:
+                    row.phone = phone
+                if push_name:
+                    row.push_name = push_name
+                if business_name:
+                    row.business_name = business_name
+                if platform:
+                    row.platform = platform
+                row.updated_at = utcnow()
 
-        Cross-tenant bajo RLS: itera `tenants` y scopea cada consulta, igual que
-        `active_sessions`.
+    async def tenants_with_jid(self, jid: str) -> list[uuid.UUID]:
+        """Tenants con una sesión VIVA vinculada a ese `jid` (duplicados).
+
+        Una sesión `logged_out` ya no compite por el número: si se cuenta, el
+        conector alerta «número en más de un negocio» en cada reinicio por una
+        fila que ya no tiene credenciales. Cross-tenant bajo RLS: itera
+        `tenants` y scopea cada consulta, igual que `active_sessions`.
         """
         if not jid:
             return []
@@ -141,6 +230,7 @@ class DbSessionRegistry:
                                 WaWebSession.tenant_id == tenant_id,
                                 WaWebSession.jid == jid,
                                 WaWebSession.deleted_at.is_(None),
+                                WaWebSession.status != status.LOGGED_OUT,
                             )
                         )
                     ).scalars().first()

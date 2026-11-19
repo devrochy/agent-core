@@ -13,16 +13,33 @@ from __future__ import annotations
 
 import base64
 import io
+import uuid
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from core.shared.exceptions import BusinessError
 
-class PaymentCapabilityError(Exception):
+
+class PaymentCapabilityError(BusinessError):
     """Rechazo de NEGOCIO de una capacidad (monto mínimo, config faltante).
 
-    El consumidor (p. ej. cobranza) lo muestra como mensaje accionable; NO es una
-    falla del sistema.
+    Subclase de `BusinessError` (HU-ARCH-18): el host la convierte en resultado
+    controlado y el pack de pagos NO se auto-deshabilita. El consumidor (p. ej.
+    cobranza) la muestra como mensaje accionable.
+
+    `code` dice por qué (constantes de abajo, adenda 2026-10-10 de ADR-0067): el
+    consumidor decide con él sin importar el pack de pagos (invariante nº5). Sin
+    código, el consumidor no debe suponer el motivo.
     """
+
+
+# Vocabulario de `PaymentCapabilityError.code`.
+MONTO_BAJO_MINIMO = "monto_bajo_minimo"  # la pasarela no cobra montos tan bajos
+SIN_PASARELA = "sin_pasarela"  # el negocio no configuró la pasarela
+YA_PAGADO = "ya_pagado"  # la referencia ya tiene un pago aprobado
+EN_REVISION = "en_revision"  # llegó un pago por otro monto: lo revisa el negocio
+MONTO_NO_COINCIDE = "monto_no_coincide"  # la referencia tiene un link vigente por otro monto
+NO_DISPONIBLE = "no_disponible"  # la pasarela rechazó o falló al crear el link; reintentar
 
 
 @dataclass(frozen=True)
@@ -53,9 +70,16 @@ class PaymentCapability(Protocol):
         ...
 
     async def create_link(
-        self, *, reference: str, amount: float, description: str = "", method: str | None = None
+        self,
+        *,
+        reference: str,
+        amount: float,
+        description: str = "",
+        method: str | None = None,
+        agent_id: uuid.UUID | None = None,
     ) -> PaymentLink:
-        """Crea un link de pago correlacionado con `reference` (del caller)."""
+        """Crea un link de pago correlacionado con `reference` (del caller). Con `agent_id` (ADR-0190 §7) cobra con
+        la cuenta del agente que lo pide; sin él, con la del negocio."""
         ...
 
 
@@ -82,6 +106,38 @@ class PaymentRegistry:
 
 
 payment_registry = PaymentRegistry()
+
+
+async def cuenta_existe(cuenta_id: uuid.UUID) -> bool:
+    """¿Alguna capacidad registrada tiene esa cuenta viva en el negocio actual? (ADR-0190 §6). Operación opcional:
+    el core no importa el pack de pagos, pregunta a quien la implemente."""
+    for capability in payment_registry.all():
+        operacion = getattr(capability, "cuenta_existe", None)
+        if operacion is not None and await operacion(cuenta_id):
+            return True
+    return False
+
+
+async def procesar_evento(capability: PaymentCapability, payload: dict) -> str | None:
+    """Operación opcional de la capacidad (HU-SH-04, ADR-0123, riesgo R-05): aplicar un evento
+    de la pasarela que llegó por otra URL. La capacidad verifica la firma con SUS credenciales.
+    None si la capacidad no la implementa."""
+    metodo = getattr(capability, "procesar_evento", None)
+    if metodo is None:
+        return None
+    return str(await metodo(payload))
+
+
+async def monto_minimo(capability: PaymentCapability | None) -> float | None:
+    """Monto mínimo por cobro que declara la capacidad para el tenant activo (operación opcional,
+    mismo molde que `procesar_evento`). Lo fija la pasarela y depende del ambiente (Wompi: 150.000 COP
+    en sandbox, 1.500 en producción), así que ni comercio ni suscripciones lo guardan: lo preguntan.
+    `None` si no hay capacidad o no lo declara."""
+    metodo = getattr(capability, "monto_minimo", None)
+    if metodo is None:
+        return None
+    valor = await metodo()
+    return None if valor is None else float(valor)
 
 
 def qr_png_data_uri(payload: str) -> str | None:

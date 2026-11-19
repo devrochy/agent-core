@@ -9,6 +9,8 @@ política anti-baneo del tenant.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -17,6 +19,7 @@ from core.db.models import ChannelConnection, WaWebSession, utcnow
 from core.db.session import get_session
 from core.shared.crypto import get_secret_box
 from core.shared.logger import get_logger
+from core.shared.tenant import tenant_scope
 from core.waweb import handoff
 from core.waweb.policy import RISK_ACK_VERSION, WaWebPolicy, load_policy
 
@@ -28,17 +31,72 @@ WAWEB_CATEGORY = "comunicacion"
 WAWEB_LABEL = "WhatsApp (vínculo por QR)"
 
 
+@dataclass(frozen=True)
+class WaWebIdentity:
+    """Identidad visible de una sesión `waweb` (la que pinta el panel y la app)."""
+
+    jid: str | None = None
+    phone: str | None = None
+    push_name: str | None = None
+    business_name: str | None = None
+    platform: str | None = None
+    linked_at: datetime | None = None
+    last_connected_at: datetime | None = None
+
+    @property
+    def display_name(self) -> str | None:
+        return self.push_name or self.business_name
+
+
+def _identity_de(row: WaWebSession) -> WaWebIdentity:
+    return WaWebIdentity(
+        jid=row.jid,
+        phone=row.phone,
+        push_name=row.push_name,
+        business_name=row.business_name,
+        platform=row.platform,
+        linked_at=row.linked_at,
+        last_connected_at=row.last_connected_at,
+    )
+
+
+async def identities_by_connection(
+    tenant_id: uuid.UUID, connection_ids: list[uuid.UUID] | None = None
+) -> dict[uuid.UUID, WaWebIdentity]:
+    """Identidad `waweb` por `connection_id` (una consulta, sin N+1)."""
+    if connection_ids is not None and not connection_ids:
+        return {}
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            query = select(WaWebSession).where(
+                WaWebSession.tenant_id == tenant_id,
+                WaWebSession.deleted_at.is_(None),
+                WaWebSession.connection_id.is_not(None),
+            )
+            if connection_ids is not None:
+                query = query.where(WaWebSession.connection_id.in_(connection_ids))
+            rows = (await session.execute(query)).scalars().all()
+    return {
+        row.connection_id: _identity_de(row)
+        for row in rows
+        if row.connection_id is not None
+    }
+
+
 async def get_active_connection(tenant_id: uuid.UUID) -> ChannelConnection | None:
     async with get_session() as session:
         return (
             await session.execute(
-                select(ChannelConnection).where(
+                select(ChannelConnection)
+                .where(
                     ChannelConnection.tenant_id == tenant_id,
                     ChannelConnection.provider == WAWEB_PROVIDER,
                     ChannelConnection.deleted_at.is_(None),
                 )
+                .order_by(ChannelConnection.created_at)
+                .limit(1)
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
 
 
 async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
@@ -47,96 +105,145 @@ async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
     `credentials_encrypted` guarda `{connection_id}` (no hay secreto de red
     todavía): es lo que permite que `resolve_credentials` devuelva el provider
     `waweb` y el adaptador sepa qué sesión usar.
+
+    Unicidad: el `external_id` es `waweb:<tenant_id>` (estable). Si existe una
+    fila —viva o borrada lógicamente— se REUSA (reactivándola), nunca se crea
+    otra: dos conexiones con el mismo `external_id` confunden al connector y
+    dejan el QR sin mostrarse (incidente 2026-10-04).
     """
-    existing = await get_active_connection(tenant_id)
-    if existing is not None:
-        if not existing.active:
-            # Reactivar en vez de crear otra (evita choque con el índice único
-            # (tenant_id, provider, external_id)).
-            async with get_session() as session:
-                row = await session.get(ChannelConnection, existing.id)
-                if row is not None:
-                    row.active = True
+    external_id = f"waweb:{tenant_id}"
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            existing = (
+                await session.execute(
+                    select(ChannelConnection)
+                    .where(
+                        ChannelConnection.tenant_id == tenant_id,
+                        ChannelConnection.provider == WAWEB_PROVIDER,
+                        ChannelConnection.external_id == external_id,
+                    )
+                    .order_by(ChannelConnection.deleted_at.is_(None).desc())
+                    .limit(1)
+                )
+            ).scalars().first()
+            if existing is not None:
+                changed = False
+                revivida = existing.deleted_at is not None
+                if revivida:
+                    existing.deleted_at = None
+                    changed = True
+                if not existing.active:
+                    existing.active = True
+                    changed = True
+                if changed:
                     await session.flush()
-                    return row
-        return existing
-    async with get_session() as session:
-        connection = ChannelConnection(
-            tenant_id=tenant_id,
-            channel="whatsapp",
-            provider=WAWEB_PROVIDER,
-            type_id=WAWEB_TYPE_ID,
-            category=WAWEB_CATEGORY,
-            label=WAWEB_LABEL,
-            # `external_id` estable y único por tenant: es la clave que el
-            # consumer usa para resolver la conexión del inbound
-            # (`ChannelConnection.external_id == connection_external_id`).
-            external_id=f"waweb:{tenant_id}",
-            active=True,
-            is_primary=False,
-        )
-        session.add(connection)
-        await session.flush()
-        connection.credentials_encrypted = get_secret_box().encrypt_json(
-            {"connection_id": str(connection.id)}
-        )
-        return connection
+                if revivida:
+                    await _instancias_de_la_nueva(session, tenant_id, existing.id)
+                return existing
+
+        async with get_session() as session:
+            connection = ChannelConnection(
+                tenant_id=tenant_id,
+                channel="whatsapp",
+                provider=WAWEB_PROVIDER,
+                type_id=WAWEB_TYPE_ID,
+                category=WAWEB_CATEGORY,
+                label=WAWEB_LABEL,
+                # `external_id` estable y único por tenant: es la clave que el
+                # consumer usa para resolver la conexión del inbound
+                # (`ChannelConnection.external_id == connection_external_id`).
+                external_id=external_id,
+                active=True,
+                is_primary=False,
+            )
+            session.add(connection)
+            await session.flush()
+            connection.credentials_encrypted = get_secret_box().encrypt_json(
+                {"connection_id": str(connection.id)}
+            )
+            await _instancias_de_la_nueva(session, tenant_id, connection.id)
+            return connection
+
+
+async def _instancias_de_la_nueva(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
+    """Coordinador y General de la conexión `waweb` nueva o revivida, si el negocio ya tiene sus
+    agentes (HU-AOS-13/HU-AOS-11; en un SAVEPOINT: un error no tumba el alta)."""
+    from core.agents.instancias import instancias_de_conexion_nueva
+
+    await instancias_de_conexion_nueva(session, tenant_id, connection_id)
 
 
 async def get_or_create_session(
     tenant_id: uuid.UUID, connection: ChannelConnection | None = None
 ) -> tuple[ChannelConnection, WaWebSession]:
     conn = connection or await get_or_create_connection(tenant_id)
-    async with get_session() as session:
-        existing = (
-            await session.execute(
-                select(WaWebSession).where(
-                    WaWebSession.tenant_id == tenant_id,
-                    WaWebSession.connection_id == conn.id,
-                    WaWebSession.deleted_at.is_(None),
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            existing = (
+                await session.execute(
+                    select(WaWebSession).where(
+                        WaWebSession.tenant_id == tenant_id,
+                        WaWebSession.connection_id == conn.id,
+                        WaWebSession.deleted_at.is_(None),
+                    )
+                    .order_by(WaWebSession.created_at)
+                    .limit(1)
                 )
+            ).scalars().first()
+            if existing is not None:
+                return conn, existing
+            wa_session = WaWebSession(
+                tenant_id=tenant_id, connection_id=conn.id, status="pending_qr"
             )
-        ).scalar_one_or_none()
-        if existing is not None:
-            return conn, existing
-        wa_session = WaWebSession(
-            tenant_id=tenant_id, connection_id=conn.id, status="pending_qr"
-        )
-        session.add(wa_session)
-        await session.flush()
-        return conn, wa_session
+            session.add(wa_session)
+            await session.flush()
+            return conn, wa_session
 
 
 async def accept_risk(tenant_id: uuid.UUID, admin_id: uuid.UUID | None) -> WaWebSession:
     """Registra la aceptación del aviso de riesgo antes de mostrar el QR."""
     _conn, wa_session = await get_or_create_session(tenant_id)
-    async with get_session() as session:
-        row = await session.get(WaWebSession, wa_session.id)
-        if row is None or row.tenant_id != tenant_id:
-            raise ValueError("Sesión waweb no encontrada")
-        row.risk_ack_at = utcnow()
-        row.risk_ack_by = admin_id
-        row.risk_ack_version = RISK_ACK_VERSION
-        if not row.status or row.status == "error":
-            row.status = "pending_qr"
-        await session.flush()
-        return row
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            row = await session.get(WaWebSession, wa_session.id)
+            if row is None or row.tenant_id != tenant_id:
+                raise ValueError("Sesión waweb no encontrada")
+            row.risk_ack_at = utcnow()
+            row.risk_ack_by = admin_id
+            row.risk_ack_version = RISK_ACK_VERSION
+            if not row.status or row.status == "error":
+                row.status = "pending_qr"
+            await session.flush()
+            return row
 
 
 async def reset_session(tenant_id: uuid.UUID) -> WaWebSession:
-    """Borra la sesión vinculada y vuelve a `pending_qr` (para re-vincular)."""
+    """Borra la sesión vinculada y vuelve a `pending_qr` (para re-vincular).
+
+    Además de limpiar la fila y el QR, pide al connector que recicle el socket
+    (`request_reset`): con el socket viejo vivo, el manager no relee el estado y
+    el QR no se emitiría hasta el próximo backoff.
+    """
     _conn, wa_session = await get_or_create_session(tenant_id)
     await handoff.clear_qr(str(tenant_id))
-    async with get_session() as session:
-        row = await session.get(WaWebSession, wa_session.id)
-        if row is None or row.tenant_id != tenant_id:
-            raise ValueError("Sesión waweb no encontrada")
-        row.status = "pending_qr"
-        row.jid = None
-        row.creds_encrypted = None
-        row.last_error = None
-        await session.flush()
-        return row
+    await handoff.clear_ready(str(tenant_id))
+    await handoff.request_reset(str(tenant_id))
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            row = await session.get(WaWebSession, wa_session.id)
+            if row is None or row.tenant_id != tenant_id:
+                raise ValueError("Sesión waweb no encontrada")
+            row.status = "pending_qr"
+            row.jid = None
+            row.phone = None
+            row.push_name = None
+            row.business_name = None
+            row.platform = None
+            row.linked_at = None
+            row.creds_encrypted = None
+            row.last_error = None
+            await session.flush()
+            return row
 
 
 def _risk_ok(row: WaWebSession) -> bool:
@@ -153,6 +260,12 @@ async def session_view(tenant_id: uuid.UUID) -> dict[str, Any]:
         "connection_id": conn.id,
         "status": wa_session.status,
         "jid": wa_session.jid,
+        "phone": wa_session.phone,
+        "push_name": wa_session.push_name,
+        "business_name": wa_session.business_name,
+        "platform": wa_session.platform,
+        "linked_at": wa_session.linked_at,
+        "last_connected_at": wa_session.last_connected_at,
         "last_error": wa_session.last_error,
         "risk_ok": risk_ok,
         "risk_ack_at": wa_session.risk_ack_at,

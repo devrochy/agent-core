@@ -29,11 +29,19 @@ _OUTBOX_PREFIX = "waweb:outbox:"
 _REPLY_PREFIX = "waweb:reply:"
 _QR_PREFIX = "waweb:qr:"
 _READY_PREFIX = "waweb:ready:"
+_RESET_PREFIX = "waweb:reset:"
 READY_TTL_S = 120
 
 
 class WaWebError(Exception):
     """Falla de envío por el canal waweb (se reintenta como transitoria)."""
+
+
+class WaWebPolicyBlocked(WaWebError):
+    """Rechazo recuperable por la política anti-baneo (pausa o tope diario).
+
+    No es un fallo de envío: el mensaje sigue válido y el worker lo reprograma
+    para cuando el envío vuelva a estar permitido (ADR-0103)."""
 
 
 def outbox_key(tenant_id: str) -> str:
@@ -50,6 +58,10 @@ def qr_key(tenant_id: str) -> str:
 
 def ready_key(tenant_id: str) -> str:
     return f"{_READY_PREFIX}{tenant_id}"
+
+
+def reset_key(tenant_id: str) -> str:
+    return f"{_RESET_PREFIX}{tenant_id}"
 
 
 def _redis():  # type: ignore[no-untyped-def]
@@ -70,6 +82,7 @@ async def request_send(
     to: str,
     text: str,
     image_url: str | None = None,
+    audio_url: str | None = None,
 ) -> str:
     """Encola un envío y espera el wamid del connector.
 
@@ -84,7 +97,8 @@ async def request_send(
         "to": to,
         "text": text,
         "image_url": image_url or "",
-        "kind": "image" if image_url else "text",
+        "audio_url": audio_url or "",
+        "kind": "audio" if audio_url else ("image" if image_url else "text"),
     }
     if not await is_ready(tenant_id):
         # Fail-fast: sin sesión conectada, mejor reintentar (con backoff) que
@@ -102,12 +116,20 @@ async def request_send(
     except (TypeError, ValueError) as exc:
         raise WaWebError("Respuesta inválida del connector") from exc
     if not reply.get("ok"):
-        raise WaWebError(str(reply.get("error") or "el connector no pudo enviar"))
+        mensaje = str(reply.get("error") or "el connector no pudo enviar")
+        if reply.get("reason") == "policy":
+            raise WaWebPolicyBlocked(mensaje)
+        raise WaWebError(mensaje)
     return str(reply.get("wamid") or "")
 
 
-async def publish_qr(tenant_id: str, qr: str, ttl_s: int = 180) -> None:
-    """Publica el QR vigente para que el panel lo muestre (lo usa el connector)."""
+async def publish_qr(tenant_id: str, qr: str, ttl_s: int = 240) -> None:
+    """Publica el QR vigente para que el panel lo muestre (lo usa el connector).
+
+    El TTL cubre el vencimiento del QR (90 s) más la reconexión: si expira antes
+    de que el connector publique el siguiente, el panel muestra "esperando QR"
+    aunque el vínculo esté sano.
+    """
     await _redis().set(qr_key(tenant_id), qr, ex=ttl_s)
 
 
@@ -131,3 +153,20 @@ async def clear_ready(tenant_id: str) -> None:
 
 async def is_ready(tenant_id: str) -> bool:
     return bool(await _redis().get(ready_key(tenant_id)))
+
+
+async def request_reset(tenant_id: str, ttl_s: int = 300) -> None:
+    """Pide al connector que recicle la sesión (para re-emitir QR).
+
+    La escribe el panel (`reset_session`); el manager la consume, cierra el
+    socket sin persistir el directorio de trabajo y el siguiente ciclo de
+    `run_session` limpia credenciales (blob y `session.db` local) y publica un
+    QR nuevo, aunque la tarea hubiera arrancado con la sesión vinculada. Sin esta señal, un reset con el socket
+    vivo no surte efecto (incidente 2026-10-04: el panel no mostraba QR).
+    """
+    await _redis().set(reset_key(tenant_id), "1", ex=ttl_s)
+
+
+async def consume_reset(tenant_id: str) -> bool:
+    """True (y borra la señal) si el panel pidió reciclar esta sesión."""
+    return bool(await _redis().delete(reset_key(tenant_id)))

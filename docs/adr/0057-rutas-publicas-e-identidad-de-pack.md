@@ -2,6 +2,7 @@
 
 - **Estado:** aceptado
 - **Fecha:** 2026-09-24
+- **Nota de estado:** ADR-0193 (propuesto, 2026-11-13): el intake público de leads deja de ser una ruta de pack y lo sirve el core, con la ruta de `pack_commerce` como alias.
 
 ## Contexto
 

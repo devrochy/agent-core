@@ -38,7 +38,7 @@ async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) 
 
 
 async def _new_tenant():
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = _uniq("selector-canal")
     tid, _ = await onboard_tenant(
@@ -82,9 +82,12 @@ async def test_modal_agrupado_por_categoria_con_disponibles_y_proximamente(app_c
     assert 'href="/admin/conexiones/wizard/whatsapp/elegir-entorno"' in r.text
     assert 'href="/admin/conexiones/nuevo?type=email_smtp"' in r.text
     assert 'href="/admin/plugins/pack_calendar/oauth"' in r.text
-    # No disponibles (Instagram, Messenger, Twilio, Plivo).
-    assert r.text.count("Próximamente") == 4
-    assert r.text.count('aria-disabled="true"') == 4
+    # No disponibles (Twilio, Plivo).
+    assert r.text.count("Próximamente") == 2
+    # Messenger, Instagram y Telegram (ADR-0199) se conectan solo en el panel nuevo: su tarjeta no lleva a un enlace
+    # vacío.
+    assert r.text.count("Solo en el panel nuevo") == 3
+    assert r.text.count('aria-disabled="true"') == 5
 
 
 async def test_formulario_generico_guarda_conexion_de_correo(app_client):

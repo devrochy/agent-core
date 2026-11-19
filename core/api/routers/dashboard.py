@@ -19,6 +19,7 @@ from core.admin.plan_view import dashboard_billing_summary
 from core.agents.spec import count_tenant_packs, load_active_spec
 from core.api.deps import Principal, require
 from core.api.schemas import UsageMetric
+from core.billing.tipos_de_uso import EVAL
 from core.config import get_settings
 from core.db.models import (
     AppSettings,
@@ -29,7 +30,7 @@ from core.db.models import (
     UsageLedger,
 )
 from core.db.session import get_session
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
 
 router = APIRouter(prefix="/admin", tags=["admin · dashboard"])
 
@@ -57,6 +58,9 @@ class RecentConversation(BaseModel):
     customer_name: str | None
     external_id: str | None
     status: str
+    # Opcionales: las apps viejas no los leen; el Resumen los usa para el avatar y el «hace X».
+    channel: str | None = None
+    started_at: datetime | None = None
 
 
 class DashboardResponse(BaseModel):
@@ -91,6 +95,12 @@ async def get_dashboard(
                 select(func.count(Message.id)).where(
                     Message.tenant_id == tenant_id,
                     Message.created_at >= week_ago,
+                    # Sin los del playground, como `conversations_7d`.
+                    ~Message.conversation_id.in_(
+                        select(Conversation.id).where(
+                            Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
+                        )
+                    ),
                 )
             )
         ).scalar() or 0
@@ -107,6 +117,8 @@ async def get_dashboard(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
                     UsageLedger.tenant_id == tenant_id,
                     UsageLedger.created_at >= month_ago,
+                    UsageLedger.kind != EVAL,
+                    no_es_prueba(tenant_id, UsageLedger.conversation_id),
                 )
             )
         ).scalar() or 0
@@ -154,6 +166,8 @@ async def get_dashboard(
                 customer_name=cust.name,
                 external_id=cust.external_id,
                 status=conv.status,
+                channel=conv.channel,
+                started_at=conv.started_at,
             )
             for conv, cust in recent_rows
         ],

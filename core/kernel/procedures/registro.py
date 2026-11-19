@@ -1,0 +1,168 @@
+"""Procedimientos disponibles en runtime (HU-AOS-05, ADR-0113 §1).
+
+Los procedimientos los publica cada habilidad al activarse (`MCPHost.register_procedures`) y
+sus *resolvers* con `MCPHost.register_resolver`. Este módulo es el único lector del motor:
+
+- `disponibles(enabled, disabled)`: los de los packs habilitados y sanos del negocio cuyo
+  `requires` esté entero habilitado (fail-closed: si falta una habilidad, no se ofrece).
+- Un procedimiento que no pasa el linter contra el catálogo del binario no se usa (log, una vez
+  por proceso). El CI ya corre `revisar`; esto es defensa en profundidad.
+- `definicion(id, version)`: la definición EXACTA que gobierna una tarea. Si la versión de una
+  tarea abierta ya no está en el binario (un deploy subió la versión), devuelve None: el motor no
+  gobierna esa tarea (queda el flujo v2 de respaldo) hasta la revalidación de HU-AOS-14.
+
+Con una release en el turno (HU-AOS-16, adenda de ADR-0118) la fuente es
+la release: `disponibles` devuelve los procedimientos PUBLICADOS que la versión del agente en
+foco declara (resueltos en el build y congelados en `pack_versions`; nunca los abiertos
+`0.0.0`), y `definicion` busca primero en la release y después en el binario. Con una release
+`release/1` (sin procedimientos por agente) o sin release (legacy) rige la regla transitoria:
+los del binario de los packs habilitados.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from collections import OrderedDict
+from collections.abc import Iterable, Mapping
+
+from agentcore_contracts import Procedure
+
+from core.kernel.procedures.catalogo import CORE_OWNER, catalogo_de_acciones
+from core.kernel.procedures.linter import lint
+from core.mcp.host import mcp_host
+from core.mcp.types import Resolver
+from core.shared.logger import get_logger
+
+log = get_logger(__name__)
+
+# (owner, id, versión, sha256 del JSON canónico) → resultado del linter, en LRU acotada. La clave
+# es el CONTENIDO, no `id()` del objeto: los abiertos `0.0.0` salen del `flow.json` de cada negocio
+# y se liberan con su release, y CPython reutiliza direcciones (un procedimiento de otro negocio
+# con el mismo id y versión heredaría el veredicto).
+_MAX_REVISADOS = 2048
+_revisados: OrderedDict[tuple[str, str, str, str], bool] = OrderedDict()
+
+
+def _clave(proc: Procedure) -> tuple[str, str, str, str]:
+    canonico = json.dumps(proc.model_dump(mode="json", by_alias=True), sort_keys=True, separators=(",", ":"))
+    return proc.owner, proc.id, proc.version, hashlib.sha256(canonico.encode()).hexdigest()
+
+
+def _todos() -> list[Procedure]:
+    return [p for lista in mcp_host.get_procedures().values() for p in lista]
+
+
+def _valido(proc: Procedure) -> bool:
+    clave = _clave(proc)
+    if clave in _revisados:
+        _revisados.move_to_end(clave)
+    else:
+        from core.plugin_manager import plugin_manager
+
+        problemas = lint(proc, catalogo_de_acciones(plugin_manager.list_modules()))
+        if problemas:
+            log.error(
+                "procedimiento_invalido_en_runtime",
+                procedure_id=proc.id,
+                version=proc.version,
+                codigos=sorted({p.code for p in problemas})[:10],
+            )
+        _revisados[clave] = not problemas
+        while len(_revisados) > _MAX_REVISADOS:
+            _revisados.popitem(last=False)
+    return _revisados[clave]
+
+
+def _de_la_release(disabled: Iterable[str]) -> dict[str, Procedure] | None:
+    """Los del agente en foco de la release del turno, o None si rige el binario."""
+    from core.shared import release_vigente
+
+    del_agente = release_vigente.procedimientos_del_agente()
+    if del_agente is None:
+        return None
+    rotos = set(disabled)
+    salida: dict[str, Procedure] = {}
+    for pid, proc in sorted(del_agente.items()):
+        # La salud del pack (ADR-0024) sigue en caliente: un pack roto para el negocio no ofrece.
+        if proc.owner in rotos or any(r in rotos for r in proc.requires):
+            continue
+        if _valido(proc):
+            salida[pid] = proc
+    return salida
+
+
+def disponibles(enabled: Iterable[str], disabled: Iterable[str] = ()) -> dict[str, Procedure]:
+    """Procedimientos que el agente puede usar en este turno, por id."""
+    de_la_release = _de_la_release(disabled)
+    if de_la_release is not None:
+        return de_la_release
+    habilitados = set(enabled) - set(disabled)
+    habilitados.add(CORE_OWNER)
+    salida: dict[str, Procedure] = {}
+    for plugin_id, lista in mcp_host.get_procedures().items():
+        if plugin_id not in habilitados:
+            continue
+        for proc in lista:
+            if all(r in habilitados for r in proc.requires) and _valido(proc):
+                salida[proc.id] = proc
+    return salida
+
+
+def definicion(procedure_id: str, version: str, congelados: Mapping[tuple[str, str], Procedure] | None = None) -> Procedure | None:
+    """Definición exacta de una tarea (id y versión): la de la release del turno si la congela
+    con esa versión, si no la del binario; None si ninguna la trae. Fuera del turno (la tarjeta
+    «En curso», HU-AOS-28) se pasan los `congelados` de la release de la conversación: la clave
+    es exacta, nunca por major."""
+    if congelados is not None:
+        proc = congelados.get((procedure_id, version))
+        if proc is not None:
+            return proc if _valido(proc) else None
+    else:
+        from core.shared import release_vigente
+
+        release = release_vigente.vigente()
+        if release is not None:
+            proc = release.procedimientos.get(procedure_id)
+            if proc is not None and proc.version == version:
+                return proc if _valido(proc) else None
+    for proc in _todos():
+        if proc.id == procedure_id and proc.version == version:
+            return proc if _valido(proc) else None
+    return None
+
+
+def gobernable(proc: Procedure, permitidos: Iterable[str]) -> bool:
+    """La habilidad del procedimiento (y todo su `requires`) está habilitada y sana en el negocio."""
+    habilitados = {*permitidos, CORE_OWNER}
+    return proc.owner in habilitados and all(r in habilitados for r in proc.requires)
+
+
+def resolver(nombre: str, permitidos: Iterable[str]) -> Resolver | None:
+    """El resolver, solo si su habilidad está habilitada y sana en el negocio."""
+    r = mcp_host.get_resolver(nombre)
+    return r if r is not None and r.plugin_id in {*permitidos, CORE_OWNER} else None
+
+
+async def packs_permitidos(tenant_id: uuid.UUID) -> set[str]:
+    """Packs habilitados y sanos del negocio (fuera del loop: consumer y worker)."""
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.plugin_manager import plugin_manager
+
+    spec = await load_active_spec(tenant_id)
+    return set(enabled_packs(spec)) - set(await plugin_manager.disabled_plugins_for_tenant(tenant_id))
+
+
+def con_evento(topic: str) -> Mapping[str, Procedure]:
+    """Procedimientos cuyo cierre declara el topic del outbox (`<dueño>.<topic>`)."""
+    return {
+        p.id: p
+        for p in _todos()
+        if p.completion is not None and any(e.split(".", 1)[1] == topic for e in p.completion.events)
+    }
+
+
+def con_cierre_por_evento() -> list[Procedure]:
+    """Procedimientos del binario que se cierran por un evento de dominio (`completion.events`)."""
+    return [p for p in _todos() if p.completion is not None and p.completion.events]

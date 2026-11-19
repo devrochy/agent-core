@@ -15,6 +15,14 @@ import time
 import uuid
 from typing import Any
 
+from sqlalchemy import select
+
+from core.admin.roles import actua_como_master, cuenta_habilitada
+from core.db.models import Admin, AdminPermission, TenantUser
+from core.db.session import get_owned, get_session
+from core.tenants import is_tenant_active
+from pack_cobranza.models import Gestor
+
 PLUGIN_ID = "pack_cobranza"
 
 
@@ -116,3 +124,110 @@ async def token_tenant(token: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
     if payload is None:
         return None
     return tenant_id, payload
+
+
+async def _vinculado(session: Any, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> bool:
+    """¿La cuenta sigue teniendo el negocio? Por `tenant_user` o, como la rama `global` de
+    `admin_tenants()` (0035/0088), por un permiso global (`admin_permissions.tenant_id` null),
+    que el login de campo trata como `master`. Tablas de sistema, sin RLS."""
+    row = (
+        await session.execute(
+            select(TenantUser.id).where(
+                TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin_id
+            )
+        )
+    ).scalar_one_or_none()
+    if row is not None:
+        return True
+    global_ = (
+        await session.execute(
+            select(AdminPermission.id)
+            .where(AdminPermission.admin_id == admin_id, AdminPermission.tenant_id.is_(None))
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    return global_ is not None
+
+
+def actor_del_token(payload: dict[str, Any]) -> str:
+    """Quién manda un evento offline: su cuenta o, sin cuenta, su dispositivo. El id del evento lo
+    genera cada app, así que solo es único por actor (agent-core#705)."""
+    if payload.get("admin_id"):
+        return str(payload["admin_id"])
+    return f"device:{payload['device_id']}" if payload.get("device_id") else ""
+
+
+async def _gestor_vigente(session: Any, gestor_id: Any) -> bool:
+    """¿El perfil de gestor del token sigue activo? Un token con rol `gestor` y sin `gestor_id` no ve
+    ninguna cartera (`_carteras_visibles`), así que no hay perfil que revisar."""
+    if not gestor_id:
+        return True
+    gestor = await get_owned(session, Gestor, uuid.UUID(str(gestor_id)))
+    return gestor is not None and gestor.deleted_at is None and gestor.estatus == "activo"
+
+
+async def acceso_de_campo(
+    authorization: str | None, *, sin_equipo_ok: bool = False
+) -> tuple[uuid.UUID, dict[str, Any]] | None:
+    """Único validador de los tokens de acceso de la app de campo (`api.py` y `api_gestor.py`).
+
+    Firma y vencimiento (`token_tenant`), y además, en CADA pedido (ADR-0134, ADR-0136):
+    - el refresh (30 días) y el token de membresía no sirven como acceso;
+    - el negocio sigue activo (suspenderlo corta la app en el siguiente pedido);
+    - si el token es de una cuenta (`admin_id`): la cuenta sigue habilitada (desactivarla o
+      apagar el rol tester corta la app) y sigue vinculada al negocio por `tenant_user`
+      (desvincularla también); el master y el tester habilitado no necesitan vínculo;
+    - si es de un gestor: su perfil sigue activo y sin borrar (desactivarlo corta la app, agent-core#705);
+    - si es de un gestor o del propietario: el equipo con el que entró (`did`) sigue activo (ADR-0174): bloquearlo corta la
+      sesión abierta con 403 `code` (`AccesoError`) en menos de 60 s. `sin_equipo_ok` deja pasar un token
+      sin `did` en las rutas por las que un equipo pide vincularse.
+    Los tokens de dispositivo (sin `admin_id`, `/auth/dispositivo`) dependen del negocio y, si llevan
+    `gestor_id`, también de que ese gestor siga activo.
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    auth = await token_tenant(authorization.split(" ", 1)[1].strip())
+    if auth is None:
+        return None
+    tenant_id, payload = auth
+    if payload.get("typ") in ("refresh", "membresia"):
+        return None
+    if not await is_tenant_active(tenant_id):
+        return None
+    admin_id = payload.get("admin_id")
+    if admin_id:
+        try:
+            admin_uuid = uuid.UUID(str(admin_id))
+        except (TypeError, ValueError):
+            return None
+        async with get_session() as session:
+            admin = await session.get(Admin, admin_uuid)
+            if not cuenta_habilitada(admin):
+                return None
+            if not actua_como_master(admin) and not await _vinculado(session, tenant_id, admin_uuid):
+                return None
+        rol_politica = {"gestor": "gestor", "propietario": "owner"}.get(str(payload.get("rol")))
+        if rol_politica and not actua_como_master(admin):
+            from core.access.sesion import exigir_equipo_vigente
+            from core.shared.tenant import tenant_scope
+
+            async with tenant_scope(tenant_id):
+                async with get_session() as session:
+                    if rol_politica == "gestor" and not await _gestor_vigente(session, payload.get("gestor_id")):
+                        return None
+                    await exigir_equipo_vigente(
+                        session,
+                        tenant_id,
+                        admin_uuid,
+                        payload.get("did"),
+                        sin_equipo_ok=sin_equipo_ok,
+                        rol=rol_politica,
+                    )
+    elif payload.get("gestor_id"):
+        from core.shared.tenant import tenant_scope
+
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                if not await _gestor_vigente(session, payload["gestor_id"]):
+                    return None
+    return auth

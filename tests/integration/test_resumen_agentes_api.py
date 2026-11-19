@@ -1,0 +1,390 @@
+"""Resumen por agente: `GET /admin/dashboard/agents` (ADR-0171).
+
+- **Contenido:** KPIs del negocio y de cada agente (7 d contra los 7 d previos, con delta) y, bajo
+  el agente, los módulos que gestiona; cada KPI con un destino semántico. Lo no atribuido es del
+  especialista por defecto; los módulos que ningún agente cubre van en `general.modulos_sin_agente`
+  (ADR-0192).
+- **Permisos (ADR-0136):** un KPI sin la sección que lo respalda se omite, no sale en cero.
+- **Aislamiento:** un negocio no ve la actividad de otro.
+- **Fallo aislado:** un módulo que lanza no tumba el resto.
+- **Proveedores reales:** cada pack calcula sus KPIs sobre un negocio sin datos sin romperse.
+
+Sin LLM: los turnos se siembran en `usage_ledger` como los escribe el loop.
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from _api_helpers import api_headers
+from _ayudas_sql import _sql
+from test_agent_data_api import (
+    _agente,
+    _colaborador,
+    _conexion,
+    _conversacion,
+    _instancia,
+    _tarea,
+    _version,
+)
+from test_agentes_versionados import PASSWORD
+from test_byok_produccion import _negocio
+
+pytestmark = [
+    pytest.mark.aislamiento,  # KPIs por agente entre negocios y permisos (ADR-0120)
+    pytest.mark.asyncio(loop_scope="session"),
+    pytest.mark.skipif(
+        os.environ.get("AGENT_CORE_INTEGRATION") != "1",
+        reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
+    ),
+]
+
+_URL = "/api/v1/admin/dashboard/agents"
+_PACKS = {"pack_commerce", "pack_calendar", "pack_cobranza", "pack_subscriptions"}
+
+
+@pytest.fixture(autouse=True)
+def _packs_habilitados(monkeypatch) -> None:
+    """El spec de un negocio nuevo no trae estos packs; los módulos dependen de que estén activos."""
+
+    async def _todos() -> set[str]:
+        return set(_PACKS)
+
+    monkeypatch.setattr("core.metricas.resumen_agentes._habilitados", _todos)
+
+
+async def _turno_hace(tid, conv, iid, cid, dias: float, costo: float = 0.01) -> None:
+    await _sql(
+        tid,
+        "insert into usage_ledger (id, tenant_id, conversation_id, model, input_tokens, output_tokens, "
+        "cost_usd, connection_id, agent_instance_id, created_at) "
+        "values (:id, :t, :c, 'fake', 10, 5, :costo, :conn, :i, :cuando)",
+        id=uuid.uuid4(),
+        t=tid,
+        c=conv,
+        conn=cid,
+        i=iid,
+        costo=costo,
+        cuando=datetime.now(UTC) - timedelta(days=dias),
+    )
+
+
+async def _pedido(tid, conv, cliente, *, estado: str, pago: str, total: float = 100.0) -> None:
+    seq = abs(hash(uuid.uuid4())) % 1_000_000
+    await _sql(
+        tid,
+        "insert into pack_commerce_orders (id, tenant_id, conversation_id, customer_id, idempotency_key, "
+        "order_seq, public_order_number, status, payment_status, total) "
+        "values (:id, :t, :c, :cli, :k, :s, :n, :st, :p, :tot)",
+        id=uuid.uuid4(),
+        t=tid,
+        c=conv,
+        cli=cliente,
+        k=uuid.uuid4().hex,
+        s=seq,
+        n=f"P-{seq}",
+        st=estado,
+        p=pago,
+        tot=total,
+    )
+
+
+async def _cliente_de(tid, conv) -> uuid.UUID:
+    return (await _sql(tid, "select customer_id from conversations where id = :c", c=conv))[0][0]
+
+
+async def _por_defecto(tid: uuid.UUID, cid: uuid.UUID) -> uuid.UUID:
+    """El especialista por defecto de la conexión (ADR-0192), sin actividad propia: absorbe lo no
+    atribuido y los módulos que ningún agente cubre."""
+    aid = await _agente(tid, "atencion")
+    await _version(tid, aid, 1)
+    await _sql(
+        tid,
+        "insert into agent_instances (id, tenant_id, connection_id, agent_id, role, is_default) "
+        "values (:id, :t, :c, :a, 'specialist', true)",
+        id=uuid.uuid4(), t=tid, c=cid, a=aid,
+    )
+    return aid
+
+
+async def _escenario() -> dict:
+    tid = await _negocio()
+    cid = await _conexion(tid)
+    ventas, agenda = await _agente(tid, "ventas"), await _agente(tid, "agenda")
+    i_ventas, i_agenda = await _instancia(tid, cid, ventas), await _instancia(tid, cid, agenda)
+    atencion = await _por_defecto(tid, cid)
+    c1 = await _conversacion(tid, cid, "Ana Compradora")
+    c2 = await _conversacion(tid, cid, "Beto Paciente")
+    # Ventas: 3 turnos en los últimos 7 d y 1 en los 7 previos. Agenda: 1 y 0.
+    for dias in (1, 2, 3, 9):
+        await _turno_hace(tid, c1, i_ventas, cid, dias)
+    await _turno_hace(tid, c2, i_agenda, cid, 1)
+    await _turno_hace(tid, c2, None, cid, 1)  # no atribuido: del especialista por defecto
+    await _tarea(tid, c1, i_ventas, cerrada=False)
+    await _tarea(tid, c2, i_agenda, cerrada=True)
+    cli = await _cliente_de(tid, c1)
+    await _pedido(tid, c1, cli, estado="abierto", pago="pagado", total=250.0)
+    await _pedido(tid, c1, cli, estado="entregado", pago="pagado", total=50.0)
+    await _pedido(tid, c1, cli, estado="cancelado", pago="pendiente", total=999.0)  # no cuenta
+    await _sql(
+        tid,
+        "insert into pack_calendar_appointments (id, tenant_id, start_at, end_at, status) "
+        "values (:id, :t, :s, :e, 'scheduled')",
+        id=uuid.uuid4(),
+        t=tid,
+        s=datetime.now(UTC) + timedelta(days=2),
+        e=datetime.now(UTC) + timedelta(days=2, hours=1),
+    )
+    return {"tid": tid, "ventas": ventas, "agenda": agenda, "atencion": atencion}
+
+
+def _kpis(bloque: dict) -> dict:
+    return {k["id"]: k for k in bloque["kpis"]}
+
+
+def _agente_por_key(datos: dict, key: str) -> dict:
+    return next(a for a in datos["agentes"] if a["key"] == key)
+
+
+async def test_kpis_del_negocio_de_cada_agente_y_de_su_modulo(app_client) -> None:
+    e = await _escenario()
+    h = await api_headers(app_client, e["tid"])
+    r = await app_client.get(_URL, headers=h)
+    assert r.status_code == 200, r.text
+    datos = r.json()
+    assert "runtime" not in datos  # todo negocio corre en el Agent OS (ADR-0191)
+
+    general = _kpis(datos["general"])
+    assert general["conversaciones"]["destino"] == {"ruta": "conversaciones", "params": {}}
+    assert general["escalaciones_pendientes"]["valor"] == 0
+    assert general["escalaciones_pendientes"]["polaridad"] == "up-bad"
+    assert general["costo_llm"]["unidad"] == "usd"
+
+    ventas = _agente_por_key(datos, "ventas")
+    assert ventas["ref"] == str(e["ventas"])
+    k = _kpis(ventas)
+    assert (k["turnos"]["valor"], k["turnos"]["previo"], k["turnos"]["delta_pct"]) == (3, 1, 200)
+    assert k["turnos"]["versus"] == "los 7 días anteriores"
+    assert k["turnos"]["destino"] == {
+        "ruta": "agente",
+        "params": {"ref": str(e["ventas"]), "pestana": "conversaciones"},
+    }
+    assert k["tareas_abiertas"]["valor"] == 1 and k["tareas_abiertas"]["previo"] is None
+    assert k["costo"]["valor"] == pytest.approx(0.03)
+    assert k["escalados"]["valor"] == 0  # v3: salen de turn_outcomes (ninguno en el escenario)
+
+    # El módulo es el del pack de la plantilla, completo: cuenta 2 pedidos (el cancelado no).
+    (modulo,) = ventas["modulos"]
+    assert (modulo["id"], modulo["nombre"], modulo["error"]) == ("pack_commerce", "Ventas", None)
+    m = _kpis(modulo)
+    assert m["pedidos"]["valor"] == 2
+    assert m["ventas_pagadas"]["valor"] == 300 and m["ventas_pagadas"]["unidad"] == "money"
+    assert m["por_despachar"]["valor"] == 1
+    assert m["pedidos"]["destino"]["ruta"] == "comercio.pedidos"
+
+    (agenda,) = _agente_por_key(datos, "agenda")["modulos"]
+    assert agenda["id"] == "pack_calendar"
+    assert _kpis(agenda)["citas_proximas"]["valor"] == 1
+
+    # El especialista por defecto absorbe lo no atribuido; los módulos sin agente van en el bloque del
+    # negocio (ADR-0192).
+    defecto = _agente_por_key(datos, "atencion")
+    assert defecto["ref"] == str(e["atencion"]) and _kpis(defecto)["turnos"]["valor"] == 1
+    assert defecto["modulos"] == []
+    assert {m["id"] for m in datos["general"]["modulos_sin_agente"]} == {"pack_cobranza", "pack_subscriptions"}
+    assert all(a["key"] != "general" for a in datos["agentes"])  # sin agente virtual
+
+
+async def test_ventana_de_7_dias_y_serie_diaria_por_agente(app_client) -> None:
+    e = await _escenario()
+    datos = (await app_client.get(_URL, headers=await api_headers(app_client, e["tid"]))).json()
+
+    assert datos["periodo"]["dias"] == 7
+    ventas = _agente_por_key(datos, "ventas")
+    assert len(ventas["serie"]) == 7
+    assert sum(p["turnos"] for p in ventas["serie"]) == 3
+    assert all(p["costo"] is not None for p in ventas["serie"])
+    assert ventas["ultima_actividad"] is not None
+    assert _kpis(ventas)["turnos"]["hint"] == "Últimos 7 días"
+
+    # El especialista por defecto suma lo no atribuido a su propia instancia.
+    defecto = _agente_por_key(datos, "atencion")
+    assert len(defecto["serie"]) == 7
+    assert sum(p["turnos"] for p in defecto["serie"]) == 1
+
+    # `general.serie` es el negocio entero: la suma de todos los agentes.
+    assert len(datos["general"]["serie"]) == 7
+    assert [p["fecha"] for p in datos["general"]["serie"]] == [p["fecha"] for p in ventas["serie"]]
+    for campo in ("turnos", "conversaciones"):
+        assert sum(p[campo] for p in datos["general"]["serie"]) == sum(
+            p[campo] for a in datos["agentes"] for p in a["serie"]
+        )
+    assert all(p["costo"] is not None for p in datos["general"]["serie"])
+
+
+async def test_ventanas_de_15_y_30_dias_cambian_kpis_textos_y_serie(app_client) -> None:
+    e = await _escenario()
+    h = await api_headers(app_client, e["tid"])
+
+    r15 = await app_client.get(f"{_URL}?dias=15", headers=h)
+    assert r15.status_code == 200, r15.text
+    datos15 = r15.json()
+    assert datos15["periodo"]["dias"] == 15
+    ventas15 = _agente_por_key(datos15, "ventas")
+    assert len(ventas15["serie"]) == 15
+    assert sum(p["turnos"] for p in ventas15["serie"]) == 4  # incluye el turno de hace 9 días
+    assert _kpis(ventas15)["turnos"]["hint"] == "Últimos 15 días"
+    assert _kpis(ventas15)["turnos"]["versus"] == "los 15 días anteriores"
+
+    assert len(datos15["general"]["serie"]) == 15
+    assert sum(p["turnos"] for p in datos15["general"]["serie"]) == sum(
+        p["turnos"] for a in datos15["agentes"] for p in a["serie"]
+    )
+
+    datos30 = (await app_client.get(f"{_URL}?dias=30", headers=h)).json()
+    assert datos30["periodo"]["dias"] == 30
+    assert len(_agente_por_key(datos30, "ventas")["serie"]) == 30
+    assert len(datos30["general"]["serie"]) == 30
+
+
+async def test_ventana_invalida_devuelve_422(app_client) -> None:
+    e = await _escenario()
+    r = await app_client.get(f"{_URL}?dias=8", headers=await api_headers(app_client, e["tid"]))
+    assert r.status_code == 422
+
+
+async def test_sin_permiso_de_costos_la_serie_no_expone_el_costo(app_client) -> None:
+    e = await _escenario()
+    h = await api_headers(
+        app_client, e["tid"], email=await _colaborador(e["tid"], ("costs",)), password=PASSWORD
+    )
+    datos = (await app_client.get(_URL, headers=h)).json()
+    assert all(p["costo"] is None for a in datos["agentes"] for p in a["serie"])
+    assert all(p["costo"] is None for p in datos["general"]["serie"])
+
+
+async def test_permisos_omiten_el_kpi_en_vez_de_mostrar_cero(app_client) -> None:
+    e = await _escenario()
+    tid = e["tid"]
+
+    sin_costos = await api_headers(
+        app_client, tid, email=await _colaborador(tid, ("costs",)), password=PASSWORD
+    )
+    datos = (await app_client.get(_URL, headers=sin_costos)).json()
+    assert "costo_llm" not in _kpis(datos["general"])
+    assert all("costo" not in _kpis(a) for a in datos["agentes"])
+    assert _kpis(_agente_por_key(datos, "ventas"))["turnos"]["valor"] == 3  # lo demás sigue
+
+    sin_agentes = await api_headers(
+        app_client, tid, email=await _colaborador(tid, ("agents",)), password=PASSWORD
+    )
+    datos = (await app_client.get(_URL, headers=sin_agentes)).json()
+    assert datos["agentes"] == []
+    assert datos["general"]["serie"] == []  # la serie sale de la sección `agents`
+    assert {"tasa_escalamiento", "consistencia"}.isdisjoint(_kpis(datos["general"]))
+    assert "conversaciones" in _kpis(datos["general"])
+
+    sin_ventas = await api_headers(
+        app_client, tid, email=await _colaborador(tid, ("pack_commerce",)), password=PASSWORD
+    )
+    datos = (await app_client.get(_URL, headers=sin_ventas)).json()
+    assert _agente_por_key(datos, "ventas")["modulos"] == []
+    assert [m["id"] for m in _agente_por_key(datos, "agenda")["modulos"]] == ["pack_calendar"]
+
+    sin_dashboard = await api_headers(
+        app_client, tid, email=await _colaborador(tid, ("dashboard",)), password=PASSWORD
+    )
+    assert (await app_client.get(_URL, headers=sin_dashboard)).status_code == 403
+
+
+async def test_un_negocio_no_ve_la_actividad_de_otro(app_client) -> None:
+    await _escenario()
+    otro = await _negocio()
+    datos = (await app_client.get(_URL, headers=await api_headers(app_client, otro))).json()
+    assert datos["agentes"] == []  # sin agentes propios ni virtuales: nada de A
+    assert _kpis(datos["general"])["conversaciones"]["valor"] == 0
+
+
+async def test_un_modulo_que_falla_no_tumba_el_resumen(app_client, monkeypatch) -> None:
+    from core.admin.resumen_registry import ResumenProvider, resumen_registry
+
+    async def _roto(_tid, _p):
+        raise RuntimeError("tabla del pack caída")
+
+    monkeypatch.setitem(
+        resumen_registry._providers,
+        "pack_commerce",
+        ResumenProvider("pack_commerce", "ventas", "Ventas", "pack_commerce", _roto),
+    )
+    e = await _escenario()
+    datos = (await app_client.get(_URL, headers=await api_headers(app_client, e["tid"]))).json()
+    ventas = _agente_por_key(datos, "ventas")
+    (modulo,) = ventas["modulos"]
+    assert modulo["kpis"] == [] and modulo["error"]
+    assert _kpis(ventas)["turnos"]["valor"] == 3
+    assert _kpis(_agente_por_key(datos, "agenda")["modulos"][0])["citas_proximas"]["valor"] == 1
+
+
+async def test_runtime_v3_cuenta_los_escalados_por_agente(app_client) -> None:
+    e = await _escenario()
+    tid = e["tid"]
+    cid = (
+        await _sql(
+            tid, "select connection_id from agent_instances where agent_id = :a", a=e["ventas"]
+        )
+    )[0][0]
+    iid = (await _sql(tid, "select id from agent_instances where agent_id = :a", a=e["ventas"]))[0][
+        0
+    ]
+    conv = (await _sql(tid, "select id from conversations where tenant_id = :t limit 1", t=tid))[0][
+        0
+    ]
+    for resultado in ("escalated", "replied"):
+        turno = uuid.uuid4()
+        await _sql(
+            tid,
+            "insert into core_decisions (id, tenant_id, conversation_id, outcome, latency_ms, connection_id, "
+            "active_instance_id) values (:id, :t, :c, 'routed', 10, :conn, :i)",
+            id=turno,
+            t=tid,
+            c=conv,
+            conn=cid,
+            i=iid,
+        )
+        await _sql(
+            tid,
+            "insert into turn_outcomes (turn_id, tenant_id, status, latency_ms, final_instance_id) "
+            "values (:id, :t, :s, 10, :i)",
+            id=turno,
+            t=tid,
+            s=resultado,
+            i=iid,
+        )
+    datos = (await app_client.get(_URL, headers=await api_headers(app_client, tid))).json()
+    esc = _kpis(_agente_por_key(datos, "ventas"))["escalados"]
+    assert (esc["valor"], esc["polaridad"]) == (1, "up-bad")
+    assert _kpis(_agente_por_key(datos, "agenda"))["escalados"]["valor"] == 0
+
+
+async def test_proveedores_reales_responden_sin_datos() -> None:
+    from core.admin.resumen_registry import resumen_registry
+    from core.metricas.resumen_agentes import periodo
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    p = periodo()
+    ids = {}
+    async with tenant_scope(tid):
+        for proveedor in resumen_registry.providers_for(None):
+            kpis = await proveedor.kpis(tid, p)
+            assert kpis and all(k.id and k.label for k in kpis), proveedor.plugin_id
+            ids[proveedor.agent_key] = proveedor.plugin_id
+    assert ids == {
+        "ventas": "pack_commerce",
+        "agenda": "pack_calendar",
+        "cobranza": "pack_cobranza",
+        "suscripciones": "pack_subscriptions",
+    }

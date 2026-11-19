@@ -90,7 +90,9 @@ async def test_send_one_no_op_si_mensaje_no_esta_en_queued(monkeypatch):
     assert result is None
 
 
-def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
+def _send_one_fixture(
+    monkeypatch, *, earliest=True, claim=True, adapter=None, channel="whatsapp", sender_type="agent", window=None
+):
     """Monta el FakeSession y mocks para `_send_one`; devuelve (msg, mocks)."""
     import uuid
     from datetime import datetime
@@ -104,8 +106,13 @@ def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
         id=uuid.uuid4(), tenant_id=tenant_id, status="queued",
         conversation_id=uuid.uuid4(), created_at=datetime.now(UTC),
         media_type=None, media_url=None, content="hola",
+        template_name=None, template_language=None, template_components=None, interactive=None,
+        sender_type=sender_type,
     )
-    conv = SimpleNamespace(connection_id=None, meta_connection_id=None, customer_id=uuid.uuid4())
+    conv = SimpleNamespace(
+        connection_id=None, meta_connection_id=None, customer_id=uuid.uuid4(), channel=channel,
+        service_window_expires_at=window,
+    )
     cust = SimpleNamespace(external_id="whatsapp:+573001234567")
 
     class FakeSession:
@@ -154,7 +161,7 @@ def _send_one_fixture(monkeypatch, *, earliest=True, claim=True, adapter=None):
     monkeypatch.setattr(mod, "_release_claim", fake_release)
     monkeypatch.setattr(mod, "_enqueue_next", fake_next)
     monkeypatch.setattr(mod, "resolve_credentials", fake_credentials)
-    monkeypatch.setattr(mod, "outbound_adapter_for", lambda provider: adapter)
+    monkeypatch.setattr(mod, "outbound_adapter_for", lambda provider, channel=None: adapter)
 
     return msg, tenant_id, calls
 
@@ -271,3 +278,280 @@ async def test_claim_outbound_setnx_excluye_segunda_tarea(monkeypatch):
     assert await _claim_outbound(mid, cid, tid) is False  # ya reclamado
     await _release_claim(mid, cid, tid)
     assert await _claim_outbound(mid, cid, tid) is True  # liberado -> reclama
+
+
+def test_policy_no_usa_el_backoff_normal_y_se_difiere():
+    """Un rechazo por política anti-baneo (tope/pausa de waweb) no es un
+    fallo de envío: nunca cae en fail_permanent (que dispara DLQ y escalación),
+    ni siquiera con los reintentos agotados."""
+    from core.gateway.meta_errors import GraphError
+    from core.tasks.outbound_send import decide_retry
+
+    exc = GraphError(
+        "envíos pausados o tope diario alcanzado", category="POLICY", is_transient=True
+    )
+    assert decide_retry(exc, attempts_made=0).action == "defer"
+    assert decide_retry(exc, attempts_made=MAX_ATTEMPTS).action == "defer"
+
+
+@pytest.mark.asyncio
+async def test_send_one_policy_bloqueado_deja_el_mensaje_en_cola(monkeypatch):
+    """Tope/pausa: el mensaje queda `queued` para reprogramarse y el error
+    viaja clasificado como POLICY, no como fallo transitorio."""
+    from types import SimpleNamespace
+
+    from core.gateway.meta_errors import GraphError
+    from core.tasks.outbound_send import _send_one
+    from core.waweb.handoff import WaWebPolicyBlocked
+
+    async def blocked(*a, **k):
+        raise WaWebPolicyBlocked("envíos pausados o tope diario alcanzado")
+
+    adapter = SimpleNamespace(send_text=blocked, send_image=blocked)
+    msg, tenant_id, calls = _send_one_fixture(monkeypatch, adapter=adapter)
+
+    result = await _send_one(msg.id, tenant_id)
+    assert isinstance(result, GraphError)
+    assert result.category == "POLICY"
+    assert msg.status == "queued"
+    assert calls["release"] == 1
+    assert calls["next"] == []
+
+
+@pytest.mark.asyncio
+async def test_handle_policy_defer_reprograma_con_eta(monkeypatch):
+    """El mensaje bloqueado se reprograma (misma tarea, nueva ETA) sin tocar
+    su estado ni escalar la conversación."""
+    import uuid
+    from datetime import datetime
+
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+
+    reprogramados = []
+
+    class FakeTask:
+        def apply_async(self, args, eta=None, **kw):
+            reprogramados.append({"args": args, "eta": eta})
+
+    fijo = datetime(2026, 10, 8, 0, 2, tzinfo=UTC)
+    monkeypatch.setattr(mod, "outbound_send_task", FakeTask())
+
+    async def fake_bump(_message_id):
+        return 1
+
+    async def fake_eta(_tenant_id):
+        return fijo
+
+    monkeypatch.setattr(mod, "_bump_policy_deferrals", fake_bump)
+    monkeypatch.setattr(mod, "_policy_eta", fake_eta)
+
+    msg_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    await mod._handle_policy_defer(
+        msg_id, tenant_id, GraphError("tope", category="POLICY", is_transient=True)
+    )
+
+    assert reprogramados == [{"args": [str(msg_id), str(tenant_id)], "eta": fijo}]
+
+
+@pytest.mark.asyncio
+async def test_handle_policy_defer_agotado_audita_y_no_reprograma(monkeypatch):
+    """Tras 24 h de bloqueo se deja constancia en auditoría del negocio y no
+    se siguen encolando tareas."""
+    import uuid
+
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+    from core.tasks.outbound_send import MAX_POLICY_DEFERRALS
+
+    reprogramados = []
+    auditorias = []
+
+    class FakeTask:
+        def apply_async(self, *a, **k):
+            reprogramados.append(1)
+
+    async def fake_bump(_message_id):
+        return MAX_POLICY_DEFERRALS + 1
+
+    async def fake_audit(**kw):
+        auditorias.append(kw)
+
+    monkeypatch.setattr(mod, "outbound_send_task", FakeTask())
+    monkeypatch.setattr(mod, "_bump_policy_deferrals", fake_bump)
+    monkeypatch.setattr(mod, "record_audit", fake_audit)
+
+    msg_id, tenant_id = uuid.uuid4(), uuid.uuid4()
+    await mod._handle_policy_defer(
+        msg_id, tenant_id, GraphError("tope", category="POLICY", is_transient=True)
+    )
+
+    assert reprogramados == []
+    assert auditorias[0]["action"] == "outbound_bloqueado_por_politica"
+
+
+@pytest.mark.asyncio
+async def test_send_one_plantilla_usa_send_template(monkeypatch):
+    """HU-ARCH-13: un outbound con `template_name` sale por `send_template` con
+    el payload ya resuelto, no como texto."""
+    from types import SimpleNamespace
+
+    from core.tasks.outbound_send import _send_one
+
+    enviados: list = []
+
+    async def _template(credentials, external_id, name, language, components):
+        enviados.append((external_id, name, language, components))
+        return "wamid-plantilla"
+
+    async def _no_texto(*a, **k):
+        raise AssertionError("una plantilla no sale como texto")
+
+    adapter = SimpleNamespace(send_text=_no_texto, send_image=_no_texto, send_template=_template)
+    msg, tenant_id, _calls = _send_one_fixture(monkeypatch, adapter=adapter)
+    msg.template_name = "aviso_cobro"
+    msg.template_language = "es"
+    msg.template_components = [{"type": "body", "parameters": [{"type": "text", "text": "Ana"}]}]
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert msg.status == "sent"
+    assert msg.external_message_id == "wamid-plantilla"
+    assert enviados == [
+        ("whatsapp:+573001234567", "aviso_cobro", "es", msg.template_components)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("sender_type", "humano"), [("agent", "false"), ("human", "true")])
+async def test_send_one_de_messenger_pasa_ventana_y_autoria_al_adaptador(monkeypatch, sender_type, humano):
+    """Messenger decide `RESPONSE` o `HUMAN_AGENT` con la ventana y la autoría del mensaje (ADR-0152);
+    el adaptador no ve la conversación ni el mensaje, así que viajan en las credenciales."""
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from core.tasks.outbound_send import _send_one
+
+    vence = datetime.now(UTC) - timedelta(days=1)
+    visto = {}
+
+    async def send_text(credentials, external_id, content):
+        visto.update(credentials)
+        return "mid-1"
+
+    adapter = SimpleNamespace(send_text=send_text)
+    msg, tenant_id, _calls = _send_one_fixture(
+        monkeypatch, adapter=adapter, channel="messenger", sender_type=sender_type, window=vence
+    )
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert visto["service_window_expires_at"] == vence.isoformat()
+    assert visto["human"] == humano
+    assert visto["access_token"] == "tok"  # lo demás de las credenciales no se pierde
+
+
+@pytest.mark.asyncio
+async def test_send_one_de_whatsapp_no_agrega_datos_de_messenger(monkeypatch):
+    from types import SimpleNamespace
+
+    from core.tasks.outbound_send import _send_one
+
+    visto = {}
+
+    async def send_text(credentials, external_id, content):
+        visto.update(credentials)
+        return "wamid-1"
+
+    msg, tenant_id, _calls = _send_one_fixture(monkeypatch, adapter=SimpleNamespace(send_text=send_text))
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert "human" not in visto and "service_window_expires_at" not in visto
+
+
+@pytest.mark.asyncio
+async def test_send_one_de_un_canal_sin_adaptador_falla_permanente_y_libera_el_claim(monkeypatch):
+    """Un canal de mensajería de Meta sin adaptador no cae al de WhatsApp ni reintenta."""
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+
+    msg, tenant_id, calls = _send_one_fixture(monkeypatch, channel="instagram")
+
+    def sin_adaptador(provider, channel=None):
+        raise KeyError(f"Sin adaptador de salida para {provider}/{channel}")
+
+    monkeypatch.setattr(mod, "outbound_adapter_for", sin_adaptador)
+
+    result = await mod._send_one(msg.id, tenant_id)
+
+    assert isinstance(result, GraphError) and result.category == "PERMANENT"
+    assert "meta/instagram" in str(result)
+    assert calls["release"] == 1 and calls["next"] == []
+
+
+@pytest.mark.asyncio
+async def test_send_one_audio_tts_sintetiza_y_envia_nota(monkeypatch):
+    from types import SimpleNamespace
+
+    from core.mcp.host import mcp_host
+    from core.mcp.types import VoiceSynthesis
+    from core.tasks.outbound_send import _send_one
+
+    async def _synth(_cid, texto):
+        assert texto == "hola en voz"
+        return VoiceSynthesis(audio_key="k", audio_url="https://api/files/a.ogg")
+
+    monkeypatch.setattr(mcp_host, "synthesize_voice", _synth)
+
+    enviados = {}
+
+    async def _send_audio(_credentials, external_id, audio_url):
+        enviados["audio"] = (external_id, audio_url)
+        return "wamid-audio"
+
+    adapter = SimpleNamespace(
+        send_text=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe ser texto")),
+        send_image=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe ser imagen")),
+        send_audio=_send_audio,
+    )
+    msg, tenant_id, _calls = _send_one_fixture(monkeypatch, adapter=adapter)
+    msg.media_type = "audio/tts"
+    msg.media_transcription = "hola en voz"
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert enviados["audio"] == ("whatsapp:+573001234567", "https://api/files/a.ogg")
+    assert msg.media_type == "audio/ogg"
+    assert msg.media_url == "https://api/files/a.ogg"
+    assert msg.status == "sent"
+    assert msg.external_message_id == "wamid-audio"
+
+
+@pytest.mark.asyncio
+async def test_send_one_audio_tts_sin_sintesis_cae_a_texto(monkeypatch):
+    from types import SimpleNamespace
+
+    from core.mcp.host import mcp_host
+    from core.tasks.outbound_send import _send_one
+
+    async def _sin_voz(_cid, _texto):
+        return None
+
+    monkeypatch.setattr(mcp_host, "synthesize_voice", _sin_voz)
+
+    enviados = {}
+
+    async def _send_text(_credentials, external_id, content):
+        enviados["texto"] = (external_id, content)
+        return "wamid-texto"
+
+    adapter = SimpleNamespace(
+        send_text=_send_text,
+        send_image=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe ser imagen")),
+        send_audio=lambda *a, **k: (_ for _ in ()).throw(AssertionError("no debe ser audio")),
+    )
+    msg, tenant_id, _calls = _send_one_fixture(monkeypatch, adapter=adapter)
+    msg.media_type = "audio/tts"
+    msg.media_transcription = "hola en voz"
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert enviados["texto"] == ("whatsapp:+573001234567", "hola en voz")
+    assert msg.media_type is None
+    assert msg.status == "sent"

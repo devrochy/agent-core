@@ -1,0 +1,488 @@
+"""Ledger del Coordinador: decisión y resultado de cada turno (HU-AOS-10, adenda de ADR-0112).
+
+Un **turno** es lo que el Coordinador hace con lo que entró: bloquearlo por una política,
+escalarlo o enrutarlo al hilo del agente. Deja dos filas append-only:
+
+- `core_decisions` (la cabecera, `id = turn_id`) **al decidir**, antes de cualquier efecto del
+  turno (respuesta fija, escalamiento, LLM). Las filas que el turno causa después
+  (`usage_ledger`, `audit_log`, `messages`) llevan su `turn_id` por el default de columna de
+  `core.shared.turno`, que solo se fija cuando la cabecera ya commiteó: sus FKs a
+  `core_decisions` son diferidas al COMMIT, pero cada `get_session()` es su propia transacción.
+- `turn_outcomes` al cerrar el turno, después de la entrega (`core.kernel.egress`).
+
+Dos INSERT por turno y ninguna lectura: la conexión sale del objeto `conversation` que el
+llamador ya tiene en memoria, los tokens y el costo del uso que ya se acumula para
+`usage_ledger`, las latencias de `perf_counter`.
+
+Best-effort mientras el runtime sea legacy: un fallo de escritura se loguea y el turno sigue
+igual (nunca cambia una respuesta). Desde `AOS_PROCEDURES` el design pide fail-closed (§5.3);
+eso llega con el motor de procedimientos.
+
+Trazas: el turno abre el span `kernel.turn` como span actual, así el hilo del agente
+(`turn`, `llm_call`), las acciones (`tool_execute`) y la salida (la tarea Celery
+`outbound_send`, por `core.observability.celery_trazas`) comparten `trace_id`. Con OTel apagado
+se adjunta un span no grabado cuyo `trace_id` es el `turn_id`: sin costo, y la correlación
+(logs, `core_decisions.trace_id`, `traceparent` de Celery) existe igual.
+
+`KERNEL_LEDGER_ENABLED=false` apaga todo esto (las columnas quedan en NULL).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import functools
+import json
+import secrets
+import time
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, nullcontext
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Any
+
+import structlog
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
+
+from core.config import get_settings
+from core.db.session import get_session
+from core.observability import metricas_negocio
+from core.observability.tracing import current_trace_id, get_tracer
+from core.shared import turno as turno_vigente
+from core.shared.logger import get_logger
+from core.shared.tenant import get_current_tenant_id
+
+log = get_logger(__name__)
+
+# Valores de los CHECK de 0069 (`core_decisions.blocked_by`, `turn_outcomes.status`).
+BLOQUEOS = frozenset(
+    {
+        "kill_switch",
+        "connection_paused",
+        "quota",
+        "budget",
+        "out_of_hours",
+        "escalated_conversation",
+        "escalation_keyword",
+    }
+)
+ESTADOS = frozenset({"replied", "neutral", "escalated", "silent", "failed"})
+# Tope de cada escritura del ledger: best-effort también en latencia (pool agotado o locks
+# no deben llevar el turno a `turn_timeout_s`). Un timeout cuenta como fallo de escritura.
+_TIMEOUT_ESCRITURA_S = 2.0
+
+
+@dataclass
+class Turno:
+    """Estado en memoria de un turno. Se escribe en dos filas; no se lee de la BD."""
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    t0: float
+    trace_id: str | None = None
+    conversation_id: uuid.UUID | None = None
+    canal: str | None = None  # `conversations.channel`: solo para la métrica de duración (ADR-0188)
+    inbound_message_ids: list[uuid.UUID] = field(default_factory=list)
+    decidido: bool = False
+    outcome: str | None = None
+    blocked_by: str | None = None
+    status: str | None = None
+    neutral: bool = False
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
+    verifier: list[dict[str, Any]] = field(default_factory=list)
+    verifier_retries: int = 0
+    # Release del turno (HU-AOS-14): NULL si el turno corrió sin release.
+    release_id: uuid.UUID | None = None
+    release_lane: str | None = None
+    # Agente que atiende y tarea en foco (HU-AOS-15): NULL con `legacy` o sin motor activo.
+    active_instance_id: uuid.UUID | None = None
+    focus_task_id: uuid.UUID | None = None
+    # Enrutamiento (HU-AOS-17). `route_source` es lo que pasó de verdad
+    # (en sombra, `default`); `shadow_route`, lo que el router habría hecho. Solo en turnos `routed`.
+    route_source: str | None = None
+    rule_id: str | None = None
+    candidates: list[dict[str, Any]] | None = None
+    confidence: float | None = None
+    shadow_route: dict[str, Any] | None = None
+    # HU-AOS-19: estado A2A del turno y handoff aceptado en la fase 1 (la fase 2 corre al cerrar
+    # el turno, `handoff.cerrar`). `final_instance_id`: el nuevo dueño si el cambio hizo commit.
+    a2a: Any = None
+    handoff: Any = None
+    final_instance_id: uuid.UUID | None = None
+    _token_vigente: Any = None
+
+    def ms(self) -> int:
+        return max(0, int((time.perf_counter() - self.t0) * 1000))
+
+
+_turno: ContextVar[Turno | None] = ContextVar("kernel_turno", default=None)
+
+
+def turno_actual() -> Turno | None:
+    """Turno abierto, solo si es del negocio en `tenant_scope`. Así un turno de otro negocio
+    anidado (hoy no hay ninguno) abre el suyo y nunca anota tokens, veredicto ni status en
+    el turno ajeno."""
+    turno = _turno.get()
+    if turno is None:
+        return None
+    actual = get_current_tenant_id()
+    return turno if actual is not None and actual == turno.tenant_id else None
+
+
+def _habilitado() -> bool:
+    return bool(get_settings().kernel_ledger_enabled)
+
+
+# ------------------------------------------------------------------ ciclo del turno
+def en_turno[**P, R](
+    fn: Callable[P, Awaitable[R]] | None = None, *, anota_resultado: bool = False
+) -> Any:
+    """Decorador: la función corre dentro de un turno del kernel. Reentrante: si ya hay un
+    turno abierto (el consumer abre uno y llama al loop), se usa ese y no se cierra aquí.
+
+    `anota_resultado`: la función devuelve el `TurnResult` del loop; su forma fija el status
+    del turno (`replied`, `escalated`, `neutral` o `silent`)."""
+
+    def decorar(f: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
+        @functools.wraps(f)
+        async def envoltorio(*args: P.args, **kwargs: P.kwargs) -> R:
+            if turno_actual() is not None or not _habilitado() or get_current_tenant_id() is None:
+                resultado = await f(*args, **kwargs)
+                if anota_resultado:
+                    anotar_resultado(resultado)
+                return resultado
+            async with _abrir_turno():
+                resultado = await f(*args, **kwargs)
+                if anota_resultado:
+                    anotar_resultado(resultado)
+                return resultado
+
+        return envoltorio
+
+    return decorar(fn) if fn is not None else decorar
+
+
+@asynccontextmanager
+async def _abrir_turno() -> AsyncIterator[Turno]:
+    tenant_id = get_current_tenant_id()
+    assert tenant_id is not None
+    turno = Turno(id=uuid.uuid4(), tenant_id=tenant_id, t0=time.perf_counter())
+    token = _turno.set(turno)
+    tracer = get_tracer()
+    try:
+        # Sin registrar la excepción en el span: su mensaje puede repetir datos del cliente
+        # (parámetros de SQLAlchemy) y saldría al exportador. Solo el tipo.
+        with tracer.start_as_current_span(
+            "kernel.turn", record_exception=False, set_status_on_exception=False
+        ) as span:
+            respaldo = (
+                nullcontext()
+                if span.get_span_context().is_valid
+                else trace.use_span(_span_de_respaldo(turno.id), end_on_exit=False)
+            )
+            with respaldo:
+                turno.trace_id = current_trace_id()
+                span.set_attribute("turn_id", str(turno.id))
+                span.set_attribute("tenant_id", str(tenant_id))
+                with structlog.contextvars.bound_contextvars(
+                    turn_id=str(turno.id), trace_id=turno.trace_id
+                ):
+                    try:
+                        yield turno
+                    except Exception as exc:
+                        # Solo `Exception`: una tarea cancelada no espera a la BD.
+                        span.set_attribute("error.type", type(exc).__name__)
+                        turno.status = "failed"
+                        await _cerrar_colaboracion(turno)
+                        await _registrar_resultado(turno)
+                        raise
+                    await _cerrar_colaboracion(turno)
+                    await _registrar_resultado(turno)
+                    span.set_attribute("outcome", turno.outcome or "")
+                    span.set_attribute("status", turno.status or "")
+    finally:
+        # Duración por canal y resultado (ADR-0188); sin cabecera, `sin_decision`.
+        metricas_negocio.turno(
+            turno.canal, turno.status if turno.decidido else "sin_decision", turno.ms() / 1000
+        )
+        # Blindado: si algún día se decide en otra task (otro contexto), `reset` lanzaría
+        # `ValueError`; eso no debe tapar el resultado del turno ni dejarlo pegado.
+        try:
+            if turno._token_vigente is not None:
+                turno_vigente.soltar(turno._token_vigente)
+        except ValueError:
+            log.warning("turno_vigente_reset_fuera_de_contexto")
+        finally:
+            try:
+                _turno.reset(token)
+            except ValueError:
+                log.warning("kernel_turno_reset_fuera_de_contexto")
+
+
+def _span_de_respaldo(turn_id: uuid.UUID) -> NonRecordingSpan:
+    """Span no grabado con `trace_id = turn_id` (OTel apagado): el tracer no-op lo hereda en
+    los spans hijos y el propagador W3C lo manda a Celery en `traceparent`."""
+    return NonRecordingSpan(
+        SpanContext(
+            trace_id=turn_id.int,
+            span_id=secrets.randbits(64) or 1,
+            is_remote=False,
+            trace_flags=TraceFlags(TraceFlags.DEFAULT),
+        )
+    )
+
+
+# ------------------------------------------------------------------ decisión
+async def decidir(
+    conversation: Any,
+    outcome: str,
+    *,
+    blocked_by: str | None = None,
+    route_source: str | None = None,
+    status: str | None = None,
+) -> None:
+    """Escribe la cabecera del turno (`core_decisions`). La primera decisión gana: llamadas
+    posteriores en el mismo turno no hacen nada. Sin turno abierto, no hace nada."""
+    turno = turno_actual()
+    if turno is None or turno.decidido or conversation is None:
+        return
+    if str(getattr(conversation, "tenant_id", None)) != str(turno.tenant_id):
+        return
+    turno.decidido = True
+    turno.outcome = outcome
+    turno.blocked_by = blocked_by
+    turno.conversation_id = conversation.id
+    canal = getattr(conversation, "channel", None)
+    turno.canal = canal if isinstance(canal, str) else None
+    if status is not None:
+        turno.status = status
+    # Las columnas del router solo valen en un turno enrutado (`ck_core_decisions_routed` y
+    # `ck_core_decisions_shadow`): un turno bloqueado después de enrutar no las lleva.
+    enrutado = outcome == "routed"
+    try:
+        async with asyncio.timeout(_TIMEOUT_ESCRITURA_S), get_session() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO core_decisions (id, tenant_id, connection_id, conversation_id, "
+                    "inbound_message_ids, outcome, blocked_by, route_source, latency_ms, trace_id, "
+                    "release_id, release_lane, active_instance_id, focus_task_id, rule_id, candidates, "
+                    "confidence, shadow_route) "
+                    "VALUES (:id, :tenant_id, :connection_id, :conversation_id, :inbound, :outcome, "
+                    ":blocked_by, :route_source, :latency_ms, :trace_id, :release_id, :release_lane, "
+                    ":active_instance_id, :focus_task_id, :rule_id, CAST(:candidates AS jsonb), "
+                    ":confidence, CAST(:shadow_route AS jsonb))"
+                ).bindparams(bindparam("inbound", type_=ARRAY(UUID(as_uuid=True)))),
+                {
+                    "id": turno.id,
+                    "tenant_id": turno.tenant_id,
+                    # Solo la conexión canónica (`channel_connections`); la de Embedded Signup
+                    # queda NULL hasta el backfill de HU-AOS-11 (válido según el DDL).
+                    "connection_id": getattr(conversation, "connection_id", None),
+                    "conversation_id": conversation.id,
+                    "inbound": list(turno.inbound_message_ids),
+                    "outcome": outcome,
+                    "blocked_by": blocked_by,
+                    "route_source": route_source,
+                    "latency_ms": turno.ms(),
+                    "trace_id": turno.trace_id,
+                    "release_id": turno.release_id,
+                    "release_lane": turno.release_lane,
+                    "active_instance_id": turno.active_instance_id,
+                    "focus_task_id": turno.focus_task_id,
+                    "rule_id": turno.rule_id if enrutado else None,
+                    "candidates": json.dumps(turno.candidates) if enrutado and turno.candidates is not None else None,
+                    "confidence": turno.confidence if enrutado else None,
+                    "shadow_route": json.dumps(turno.shadow_route) if enrutado and turno.shadow_route else None,
+                },
+            )
+    except Exception:
+        log.warning(
+            "core_decision_write_failed", outcome=outcome, blocked_by=blocked_by, exc_info=True
+        )
+        return
+    # Solo con la cabecera commiteada se propaga el `turn_id` (FKs diferidas al COMMIT).
+    turno._token_vigente = turno_vigente.fijar(
+        turno_vigente.TurnoVigente(
+            turn_id=turno.id, tenant_id=turno.tenant_id, trace_id=turno.trace_id
+        )
+    )
+
+
+async def enrutar(conversation: Any) -> None:
+    """El turno va al hilo del agente. Sin ruta (un turno que no enrutó): `default`; con ella, la
+    fuente que anotó `anotar_ruta` (HU-AOS-17)."""
+    turno = turno_actual()
+    fuente = turno.route_source if turno is not None and turno.route_source else "default"
+    await decidir(conversation, "routed", route_source=fuente)
+
+
+async def bloquear(conversation: Any, motivo: str, *, status: str | None = None) -> None:
+    """El turno se corta por una política, sin LLM."""
+    assert motivo in BLOQUEOS, motivo
+    outcome = "escalated" if motivo == "escalation_keyword" else "blocked"
+    await decidir(conversation, outcome, blocked_by=motivo, status=status)
+
+
+# ------------------------------------------------------------------ acumuladores del resultado
+def anotar_release(
+    release_id: uuid.UUID, lane: str, *, active_instance_id: uuid.UUID | None = None
+) -> None:
+    """Release, carril y agente que atiende (HU-AOS-14/15), antes de decidir:
+    `core_decisions.release_id` y `active_instance_id`."""
+    turno = turno_actual()
+    if turno is not None and not turno.decidido:
+        turno.release_id = release_id
+        turno.release_lane = lane
+        turno.active_instance_id = active_instance_id
+
+
+def anotar_ruta(ruta: Any, *, activa: bool) -> None:
+    """La ruta del router (HU-AOS-17), antes de decidir. Activa: su fuente, regla y confianza son
+    las del turno. Sombra: el turno sigue con `default` y la ruta va a `shadow_route`. Los
+    candidatos (lo que vio el router) van siempre."""
+    turno = turno_actual()
+    if turno is None or turno.decidido:
+        return
+    turno.candidates = [dict(c) for c in ruta.candidates]
+    if activa:
+        turno.route_source = ruta.source
+        turno.rule_id = ruta.rule_id
+        turno.confidence = ruta.confidence
+        turno.shadow_route = None
+    else:
+        turno.route_source = "default"
+        turno.rule_id = None
+        turno.confidence = None
+        turno.shadow_route = ruta.sombra()
+    # HU-AOS-20: lo que la pila habría abierto va en la clave `pila`, también con el ruteo activo.
+    pila = getattr(ruta, "pila_sombra", None)
+    if pila:
+        turno.shadow_route = {**(turno.shadow_route or {}), "pila": pila}
+
+
+def anotar_foco(task_id: uuid.UUID | None) -> None:
+    """Tarea en foco al empezar el turno (HU-AOS-15): `core_decisions.focus_task_id`."""
+    turno = turno_actual()
+    if turno is not None and not turno.decidido:
+        turno.focus_task_id = task_id
+
+
+def anotar_entrada(message_id: uuid.UUID | None) -> None:
+    """Id del mensaje entrante que abrió el turno (`core_decisions.inbound_message_ids`)."""
+    turno = turno_actual()
+    if turno is not None and isinstance(message_id, uuid.UUID) and not turno.decidido:
+        turno.inbound_message_ids.append(message_id)
+
+
+def anotar_uso(input_tokens: int, output_tokens: int, cost_usd: float) -> None:
+    turno = turno_actual()
+    if turno is not None:
+        turno.tokens_in += max(0, int(input_tokens))
+        turno.tokens_out += max(0, int(output_tokens))
+        turno.cost_usd += max(0.0, float(cost_usd))
+
+
+def anotar_veredicto(verifier: list[dict[str, Any]], reintentos: int) -> None:
+    turno = turno_actual()
+    if turno is not None:
+        turno.verifier = verifier
+        turno.verifier_retries = max(0, reintentos)
+
+
+def marcar_neutral() -> None:
+    """Respuesta neutral del guardrail (ADR-0092)."""
+    turno = turno_actual()
+    if turno is not None:
+        turno.neutral = True
+
+
+def marcar_escalado() -> None:
+    turno = turno_actual()
+    if turno is not None:
+        turno.status = "escalated"
+
+
+def anotar_resultado(resultado: Any) -> None:
+    """Status del turno desde el `TurnResult` del loop (`None` = no respondió)."""
+    turno = turno_actual()
+    if turno is None:
+        return
+    if resultado is None:
+        status = "silent"
+    elif getattr(resultado, "escalated", False):
+        status = "escalated"
+    elif turno.neutral:
+        status = "neutral"
+    elif getattr(resultado, "text", ""):
+        status = "replied"
+    else:
+        status = "silent"
+    turno.status = status
+
+
+async def _cerrar_colaboracion(turno: Turno) -> None:
+    """Fase 2 del handoff y cierre de la conversación A2A del turno (HU-AOS-19). Nunca lanza."""
+    if turno.handoff is None and turno.a2a is None:
+        return
+    from core.kernel import handoff
+
+    turno.final_instance_id = await handoff.cerrar(turno)
+
+
+def anotar_a2a(estado: Any) -> None:
+    """El estado A2A del turno (lo cierra `_cerrar_colaboracion`)."""
+    turno = turno_actual()
+    if turno is not None:
+        turno.a2a = estado
+
+
+def anotar_handoff(pendiente: Any) -> bool:
+    """Handoff aceptado en la fase 1. False si no hay turno abierto (sin turno no hay fase 2: el
+    motor no promete nada)."""
+    turno = turno_actual()
+    if turno is None or turno.handoff is not None:
+        return False
+    turno.handoff = pendiente
+    return True
+
+
+def handoff_pendiente() -> bool:
+    turno = turno_actual()
+    return turno is not None and turno.handoff is not None
+
+
+async def _registrar_resultado(turno: Turno) -> None:
+    if not turno.decidido or turno._token_vigente is None:
+        return  # sin cabecera no hay resultado (la FK no es diferida)
+    status = turno.status if turno.status in ESTADOS else "silent"
+    turno.status = status
+    try:
+        async with asyncio.timeout(_TIMEOUT_ESCRITURA_S), get_session() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO turn_outcomes (turn_id, tenant_id, status, verifier, verifier_retries, "
+                    "tokens_in, tokens_out, cost_usd, latency_ms, final_instance_id) VALUES (:turn_id, "
+                    ":tenant_id, :status, CAST(:verifier AS jsonb), :retries, :tokens_in, :tokens_out, "
+                    ":cost_usd, :latency_ms, :final_instance_id)"
+                ),
+                {
+                    "turn_id": turno.id,
+                    "tenant_id": turno.tenant_id,
+                    "status": status,
+                    "verifier": json.dumps(turno.verifier),
+                    "retries": min(turno.verifier_retries, 32767),
+                    "tokens_in": turno.tokens_in,
+                    "tokens_out": turno.tokens_out,
+                    "cost_usd": round(turno.cost_usd, 6),
+                    "latency_ms": turno.ms(),
+                    # Con un handoff aplicado (HU-AOS-19), el nuevo dueño; si no, el que atendió.
+                    "final_instance_id": turno.final_instance_id or turno.active_instance_id,
+                },
+            )
+    except Exception:
+        log.warning("turn_outcome_write_failed", status=status, exc_info=True)

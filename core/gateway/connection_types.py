@@ -8,8 +8,8 @@ el panel y las FKs lo consulten. Mismo patrón que `core/billing/plans.py`.
 `credentials_schema` es un JSON Schema: lo renderiza el FormEngine del panel
 (`core/admin/form_generator.py`) y lo usa `save_connection` para validar/normalizar.
 
-Este catálogo describe **presentación y credenciales** de cada tipo. Los adaptadores
-de canal siguen viviendo en `agent_core.channels` (ADR-0052); acá no hay routing.
+Este catálogo describe **presentación, credenciales y capacidades de envío** (`CAPACIDADES_POR_TIPO`) de cada
+tipo. Los adaptadores de canal siguen viviendo en `agent_core.channels` (ADR-0052); acá no hay routing.
 """
 
 from __future__ import annotations
@@ -58,6 +58,13 @@ class ConnectionType:
     available: bool = True
     setup_kind: str = SETUP_MANUAL
     sort_order: int = 0
+    # Aparece en el selector de alta del panel. `webchat` no (ADR-0115, adenda de la segunda
+    # parte de HU-AOS-11): el widget se configura en Configuración → Chat web, que crea su
+    # conexión; la consola de conexiones es HU-AOS-23.
+    en_selector: bool = True
+    # Canal que se abre por negocio (`core.gateway.twilio.bandera`, ADR-0186 §12): con `available=False`, el
+    # tipo solo está disponible en el catálogo de los negocios que tienen la bandera encendida.
+    bandera_negocio: str = ""
 
 
 _META_SCHEMA: dict[str, Any] = {
@@ -83,13 +90,22 @@ _META_SCHEMA: dict[str, Any] = {
             "writeOnly": True,
         },
     },
+    # HU-ARCH-05: sin `app_secret` el webhook no puede verificar la firma y el
+    # alta se rechaza (fail-closed). Vienen del wizard de Embedded Signup.
+    "required": ["phone_number_id", "app_secret"],
 }
 
 _EMAIL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "host": {"type": "string", "title": "Servidor SMTP", "description": "ej. smtp.gmail.com"},
-        "port": {"type": "integer", "title": "Puerto", "default": 587, "minimum": 1, "maximum": 65535},
+        "port": {
+            "type": "integer",
+            "title": "Puerto",
+            "default": 587,
+            "minimum": 1,
+            "maximum": 65535,
+        },
         "username": {"type": "string", "title": "Usuario SMTP"},
         "password": {
             "type": "string",
@@ -114,6 +130,43 @@ _CALENDAR_SCHEMA: dict[str, Any] = {
 }
 
 # Debe coincidir con el seed de la migración `0038`.
+_TWILIO_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "account_sid": {"type": "string", "title": "Account SID", "pattern": "^AC[0-9a-f]{32}$"},
+        "auth_token": {
+            "type": "string",
+            "title": "Auth Token",
+            "format": "password",
+            "writeOnly": True,
+        },
+        "sender_e164": {
+            "type": "string",
+            "title": "Número de WhatsApp",
+            "pattern": "^\\+[1-9]\\d{6,14}$",
+        },
+    },
+    "required": ["account_sid", "auth_token", "sender_e164"],
+}
+
+# El alta (`core.gateway.telegram`) arma las claves: el token que pega el negocio, el `bot_id` que devuelve `getMe` (no
+# es secreto; es la clave de ruteo y de «un bot, un negocio») y el secreto aleatorio del webhook.
+_TELEGRAM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "bot_id": {"type": "string", "title": "ID del bot", "pattern": "^[1-9][0-9]{0,19}$"},
+        "bot_token": {
+            "type": "string",
+            "title": "Token del bot",
+            "format": "password",
+            "writeOnly": True,
+        },
+        "webhook_secret": {"type": "string", "format": "password", "writeOnly": True},
+    },
+    "required": ["bot_token", "bot_id"],
+}
+
+
 CONNECTION_TYPES: tuple[ConnectionType, ...] = (
     ConnectionType(
         id="whatsapp_meta",
@@ -155,7 +208,7 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         description="Mensajes directos vía Meta",
         external_id_key="account_id",
         produces_conversations=True,
-        available=False,
+        available=True,
         setup_kind=SETUP_WIZARD,
         sort_order=20,
     ),
@@ -169,7 +222,7 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         description="Página de Facebook vía Meta",
         external_id_key="page_id",
         produces_conversations=True,
-        available=False,
+        available=True,
         setup_kind=SETUP_WIZARD,
         sort_order=30,
     ),
@@ -181,10 +234,34 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         provider="twilio",
         icon="bi-whatsapp",
         description="vía Twilio",
+        # Lo arma el alta guiada (`core.gateway.twilio.alta`, ADR-0186 §3), no el formulario manual: el negocio
+        # pega el Account SID y el Auth Token y elige el número de la lista que trae Twilio. El esquema existe
+        # para que `normalize_credentials` conserve estas claves; `sender_e164` es la clave de ruteo.
+        credentials_schema=_TWILIO_SCHEMA,
+        external_id_key="sender_e164",
         produces_conversations=True,
         available=False,
-        setup_kind=SETUP_MANUAL,
+        bandera_negocio="whatsapp_twilio",
+        setup_kind=SETUP_WIZARD,
         sort_order=31,
+    ),
+    ConnectionType(
+        # Telegram con bot propio por negocio (ADR-0199, D-74). Lo arma el alta guiada (`core.gateway.telegram`): el
+        # negocio pega el token de @BotFather y `external_id` es el `bot_id` que devuelve `getMe` (no sale del token).
+        # Para todos los negocios, sin `bandera_negocio`; solo lo cierra su kill-switch de entorno (`core.gateway.telegram.habilitado`).
+        id="telegram",
+        category=CATEGORY_COMMUNICATION,
+        channel="telegram",
+        label="Telegram",
+        provider="telegram",
+        icon="bi-telegram",
+        description="Bot propio de Telegram",
+        credentials_schema=_TELEGRAM_SCHEMA,
+        external_id_key="bot_id",
+        produces_conversations=True,
+        available=True,
+        setup_kind=SETUP_WIZARD,
+        sort_order=33,
     ),
     ConnectionType(
         id="whatsapp_plivo",
@@ -198,6 +275,44 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
         available=False,
         setup_kind=SETUP_MANUAL,
         sort_order=32,
+    ),
+    ConnectionType(
+        # Chat web embebible como conexión (ADR-0115 §4). `external_id` es la clave pública del
+        # widget, aleatoria y generada por el servidor (`chat_web_conexion.nueva_clave`): no la
+        # da el negocio, por eso no hay `external_id_key` ni credenciales en el formulario. El
+        # secreto de Turnstile va en `credentials_encrypted` y los dominios en `settings`.
+        id="webchat",
+        category=CATEGORY_COMMUNICATION,
+        channel="web",
+        label="Chat web",
+        provider="web",
+        icon="bi-chat-dots",
+        description="Widget de chat para tu sitio web",
+        produces_conversations=True,
+        available=True,
+        setup_kind=SETUP_WIZARD,
+        setup_path="/admin/configuracion",
+        sort_order=35,
+        en_selector=False,
+    ),
+    ConnectionType(
+        # Conexión interna del Centro de pruebas (ADR-0115, adenda 2026-10-24): cada negocio tiene
+        # una, creada al primer uso, para que la conversación de prueba también tenga
+        # `connection_id` (el contract lo vuelve obligatorio). No es un canal: no produce
+        # conversaciones de clientes (no entra en backfills, releases ni migración a v3), no tiene
+        # credenciales ni se ve en el panel de conexiones.
+        id="playground",
+        category=CATEGORY_COMMUNICATION,
+        channel="test",
+        label="Centro de pruebas",
+        provider="internal",
+        icon="bi-bug",
+        description="Conexión interna del Centro de pruebas",
+        produces_conversations=False,
+        available=True,
+        setup_kind=SETUP_WIZARD,
+        sort_order=36,
+        en_selector=False,
     ),
     ConnectionType(
         id="email_smtp",
@@ -235,6 +350,148 @@ CONNECTION_TYPES: tuple[ConnectionType, ...] = (
 BY_ID: dict[str, ConnectionType] = {t.id: t for t in CONNECTION_TYPES}
 
 WHATSAPP_META = "whatsapp_meta"
+MESSENGER_META = "messenger_meta"
+INSTAGRAM_META = "instagram_meta"
+WHATSAPP_TWILIO = "whatsapp_twilio"
+TELEGRAM = "telegram"
+WEBCHAT = "webchat"
+PLAYGROUND = "playground"
+
+
+# --------------------------------------------------------------------------- capacidades por canal
+# SPEC-40 / pista C1: UNA tabla de lo que cada tipo de conexión admite al enviar un mensaje con opciones. Antes las
+# reglas vivían en tres `if channel == ...` (`kernel/opciones/envio.py`, `gateway/sender.py`,
+# `orchestrator/opciones_toque.py`); ahora esos sitios (y el catálogo de mensajes) preguntan aquí. C1 NO cambia
+# comportamiento: la tabla reproduce lo que esos `if` ya hacían.
+@dataclass(frozen=True)
+class CapacidadesCanal:
+    """Qué admite un canal/proveedor. Todo en False = solo texto."""
+
+    # Botones de respuesta rápida (`interactive.type == "button"`).
+    botones: bool = False
+    # Lista de opciones (`interactive.type == "list"`).
+    lista: bool = False
+    # Plantilla aprobada por el proveedor: sirve para escribir fuera de la ventana de atención.
+    plantilla_aprobada: bool = False
+    # El canal tiene ventana de 24 h para texto libre/interactivos Y plantilla para salir de ella (WhatsApp Meta).
+    # Messenger e Instagram tienen su ventana de 24 h SIN plantillas y aquí figuran en False: la regla vigente para
+    # ellos es `sender.validate_service_window` (y `avisos_canal.CON_VENTANA` en los avisos por evento).
+    ventana_24h: bool = False
+    # El canal interpreta la respuesta «1» / el título de una opción como un toque (menú numerado, pista C2):
+    # el consumer la resuelve ANTES del LLM (`kernel/opciones/respuesta_texto.py`, ADR-0172 adenda C2). Solo los
+    # canales de texto donde el cliente contesta con un mensaje corto; el correo no (el cuerpo trae citado y firma).
+    respuesta_numerica: bool = False
+    # El adaptador de salida sabe mandar una nota de voz (`send_audio`, ADR-0197). La política de voz de `pack-voice`
+    # elige voz en cualquier conexión con esta capacidad, sin atarse a un proveedor.
+    voz: bool = False
+    # Botón que le pide al cliente compartir su teléfono (`interactive.type == "contacto"`, ADR-0199 §10). Lo usa la
+    # tool del core `pedir_telefono`; solo Telegram lo tiene (`request_contact` del teclado de respuesta).
+    pedir_contacto: bool = False
+
+    def admite(self, tipo_interactivo: object) -> bool:
+        """¿Admite este `interactive.type` (`button` | `list` | `contacto`)?"""
+        if tipo_interactivo == "button":
+            return self.botones
+        if tipo_interactivo == "list":
+            return self.lista
+        if tipo_interactivo == "contacto":
+            return self.pedir_contacto
+        return False
+
+
+SOLO_TEXTO = CapacidadesCanal()
+# Solo texto, pero el menú numerado se contesta con «1» o con el título (pista C2).
+TEXTO_CON_MENU = CapacidadesCanal(respuesta_numerica=True)
+
+# Por `ConnectionType.id`. Un tipo de conexión con canal que falte aquí hace fallar
+# `tests/test_capacidades_canal.py`: un canal nuevo declara sus capacidades a propósito, no por omisión.
+CAPACIDADES_POR_TIPO: dict[str, CapacidadesCanal] = {
+    # WhatsApp Cloud: botones y lista dentro de la ventana de 24 h; fuera, plantilla aprobada (QUICK_REPLY).
+    "whatsapp_meta": CapacidadesCanal(
+        botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True
+    ),
+    # Por QR (neonize): solo texto entrante y saliente, sin plantillas ni ventana (ADR-0103).
+    "whatsapp_waweb": CapacidadesCanal(respuesta_numerica=True, voz=True),
+    # WhatsApp vía Twilio (ADR-0186): botones y lista dentro de la ventana de 24 h como Content `twilio/quick-reply` y
+    # `twilio/list-picker` (PR-7i); fuera, plantilla aprobada de la Content API (PR-7a). Las opciones directas fuera de
+    # la ventana buscan la contraparte de Meta, que una conversación de Twilio no tiene: no sale nada (`sin_plantilla`).
+    "whatsapp_twilio": CapacidadesCanal(
+        botones=True, lista=True, plantilla_aprobada=True, ventana_24h=True
+    ),
+    # Telegram (ADR-0199): botones y lista como teclado inline (una fila por opción; la lista no se degrada en el
+    # adaptador, adenda §9 del ADR-0186). Sin ventana ni plantillas: Telegram no las tiene. Es el único que pide el
+    # teléfono con un botón (`request_contact`, ADR-0199 §10).
+    "telegram": CapacidadesCanal(botones=True, lista=True, voz=True, pedir_contacto=True),
+    "whatsapp_plivo": SOLO_TEXTO,
+    "instagram_meta": TEXTO_CON_MENU,
+    "messenger_meta": TEXTO_CON_MENU,
+    "webchat": TEXTO_CON_MENU,
+    "email_smtp": SOLO_TEXTO,
+    # Playground (canal `test`, SPEC-40 B1): el navegador pinta los botones; sin proveedor, ventana ni plantilla.
+    # `lista=True` porque hoy acepta lo mismo que Meta (`interactivo_valido`); el panel (B2) decide cómo lo pinta.
+    "playground": CapacidadesCanal(botones=True, lista=True),
+}
+
+
+def _tipos_del_canal(channel: str) -> list[ConnectionType]:
+    return [t for t in CONNECTION_TYPES if channel and t.channel == channel]
+
+
+def capacidades_de(channel: str, provider: str | None = "") -> CapacidadesCanal:
+    """Capacidades de un `(canal, proveedor)`: el tipo de conexión que los declara, o, si el proveedor no se
+    conoce o no está en el catálogo, las que comparten TODOS los tipos del canal (p. ej. `instagram` sin
+    proveedor, `test`). Si el canal tiene proveedores con capacidades distintas (`whatsapp`) y el proveedor no
+    es uno conocido, o el canal no existe, solo texto: lo seguro es no ofrecer lo que no se sabe que existe."""
+    tipos = _tipos_del_canal(channel)
+    for t in tipos:
+        if provider and t.provider == provider:
+            return CAPACIDADES_POR_TIPO[t.id]
+    distintas = {CAPACIDADES_POR_TIPO[t.id] for t in tipos}
+    return next(iter(distintas)) if len(distintas) == 1 else SOLO_TEXTO
+
+
+def tipo_de_conexion(channel: str, provider: str | None = "") -> str | None:
+    """`ConnectionType.id` de un `(canal, proveedor)`, o None si no se puede saber: el proveedor coincide con el de
+    un tipo del canal, o el canal tiene un solo tipo (`web`, `messenger`, `instagram`). WhatsApp sin un proveedor
+    conocido es None (hay varios tipos). Es la clave de los textos por canal de los avisos (ADR-0178 D2)."""
+    tipos = _tipos_del_canal(channel)
+    for t in tipos:
+        if provider and t.provider == provider:
+            return t.id
+    return tipos[0].id if len(tipos) == 1 else None
+
+
+def capacidades_del_canal(channel: str) -> CapacidadesCanal:
+    """Lo MÁXIMO que admite el canal con cualquiera de sus proveedores (O lógico). Es el filtro previo a conocer
+    el proveedor (resolverlo cuesta una consulta); la decisión final es `capacidades_de(canal, proveedor)`. Un
+    canal desconocido es solo texto."""
+    tipos = _tipos_del_canal(channel)
+    return CapacidadesCanal(
+        **{
+            campo: any(getattr(CAPACIDADES_POR_TIPO[t.id], campo) for t in tipos)
+            for campo in CapacidadesCanal.__dataclass_fields__
+        }
+    )
+
+
+def canales_con(capacidad: str) -> list[str]:
+    """Canales de CLIENTES (conversaciones reales, no el playground) que tienen esta capacidad en algún
+    proveedor, en el orden del catálogo. Lo usa el catálogo de mensajes para `canales_soportados`."""
+    if capacidad not in CapacidadesCanal.__dataclass_fields__:
+        raise ValueError(f"capacidad desconocida: {capacidad}")
+    canales: list[str] = []
+    for t in connection_types():
+        if (
+            t.channel
+            and t.produces_conversations
+            # Un tipo oculto para todos (sin bandera por negocio, como Telegram hasta el PR core 4, ADR-0199) todavía
+            # no recibe conversaciones: el catálogo de mensajes no lo ofrece.
+            and (t.available or t.bandera_negocio)
+            and getattr(CAPACIDADES_POR_TIPO[t.id], capacidad)
+        ):
+            if t.channel not in canales:
+                canales.append(t.channel)
+    return canales
 
 
 def get_connection_type(type_id: str) -> ConnectionType | None:
@@ -269,11 +526,29 @@ def types_by_category(include_unavailable: bool = True) -> list[dict[str, Any]]:
         items = [
             t
             for t in connection_types()
-            if t.category == cat and (include_unavailable or t.available)
+            if t.category == cat and t.en_selector and (include_unavailable or t.available)
         ]
         if items:
             groups.append({"category": cat, "label": CATEGORY_LABELS[cat], "items": items})
     return groups
+
+
+def disponible_para(ctype: ConnectionType, tenant_settings: object) -> bool:
+    """¿El tipo está disponible para este negocio? Los tipos con `bandera_negocio` lo están solo con su bandera
+    encendida en `tenants.settings` (ADR-0186 §12); los demás, según `available`. Telegram, además, solo con su
+    kill-switch encendido (ADR-0199): se mira ANTES de `available` para que encender el tipo no lo salte."""
+    if ctype.id == TELEGRAM:
+        from core.gateway.telegram.habilitado import habilitado
+
+        if not habilitado():
+            return False
+    if ctype.available:
+        return True
+    if not ctype.bandera_negocio:
+        return False
+    from core.gateway.twilio.bandera import habilitado_desde
+
+    return habilitado_desde(tenant_settings, ctype.bandera_negocio)
 
 
 def setup_url(ctype: ConnectionType) -> str:
@@ -390,13 +665,18 @@ __all__ = [
     "CATEGORY_LABELS",
     "CATEGORY_ORDER",
     "CONNECTION_TYPES",
+    "PLAYGROUND",
     "SETUP_MANUAL",
     "SETUP_WIZARD",
+    "TELEGRAM",
+    "WEBCHAT",
     "WHATSAPP_META",
+    "WHATSAPP_TWILIO",
     "ConnectionType",
     "available_types",
     "available_types_by_category",
     "connection_types",
+    "disponible_para",
     "external_id_for",
     "get_connection_type",
     "messaging_type_ids",

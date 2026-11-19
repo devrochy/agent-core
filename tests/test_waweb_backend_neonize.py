@@ -1,0 +1,435 @@
+"""`NeonizeSocket` serializa las llamadas al puente Go de Neonize.
+
+Regresión real (2026-09-30): con dos negocios vinculando a la vez en el mismo
+conector, Neonize reventaba el proceso con `fatal error: concurrent map writes`
+(data race del lado Go) y el contenedor entraba en bucle de reinicios: ningún
+negocio llegaba a ver el QR.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+from core.waweb import backend_neonize
+
+
+class _EventRegistrar:
+    def __init__(self) -> None:
+        self.registros: list[tuple[object, object]] = []
+
+    def __call__(self, tipo: object):
+        def _wrap(fn):
+            self.registros.append((tipo, fn))
+            return fn
+
+        return _wrap
+
+    def qr(self, fn):
+        return fn
+
+
+class FakeClient:
+    """Cliente falso que detecta solapamiento en la zona crítica."""
+
+    vivos = 0
+    max_concurrentes = 0
+
+    def __init__(self, _ruta: str) -> None:
+        FakeClient.vivos += 1
+        FakeClient.max_concurrentes = max(FakeClient.max_concurrentes, FakeClient.vivos)
+        self.event = _EventRegistrar()
+
+    async def connect(self) -> None:
+        await asyncio.sleep(0.05)
+        FakeClient.vivos -= 1
+
+    async def idle(self) -> None:
+        await asyncio.sleep(3600)
+
+    async def download_any(self, _message: object) -> bytes:
+        return self.download_bytes
+
+    async def build_audio_message(self, file: str, ptt: bool = False) -> object:
+        # Como neonize 0.10: el mimetype sale de libmagic, sin `codecs=opus`.
+        audio = types.SimpleNamespace(mimetype="audio/ogg", PTT=ptt, archivo=file)
+        return types.SimpleNamespace(audioMessage=audio)
+
+    async def send_message(self, _jid: str, _message: object) -> object:
+        audio = getattr(_message, "audioMessage", None)
+        if audio is not None:
+            self.audio_enviado = (_jid, audio.archivo, audio.PTT, audio.mimetype)
+            return types.SimpleNamespace(ID="WA-AUDIO")
+        return types.SimpleNamespace(ID="WAMID-1")
+
+    async def send_image(self, _jid: str, _file: str, caption: str | None = None) -> object:
+        self.imagen_enviada = (_jid, _file, caption)
+        return types.SimpleNamespace(ID="WA-IMAGE")
+
+    async def disconnect(self) -> None:
+        return None
+
+    download_bytes = b"datos"
+
+    # Como en `neonize.aioze` 0.5.2: las propiedades devuelven una corutina
+    # (`asyncio.to_thread` sobre el puente Go), no un bool.
+    conectado = True
+    autenticado = True
+
+    demora_s = 0.0
+
+    @property
+    def is_connected(self):
+        async def _valor() -> bool:
+            await asyncio.sleep(self.demora_s)
+            return self.conectado
+
+        return _valor()
+
+    @property
+    def is_logged_in(self):
+        async def _valor() -> bool:
+            return self.autenticado
+
+        return _valor()
+
+
+@pytest.fixture(autouse=True)
+def _fake_neonize(monkeypatch: pytest.MonkeyPatch) -> None:
+    ev = types.SimpleNamespace(
+        ConnectedEv=object(),
+        PairStatusEv=object(),
+        DisconnectedEv=object(),
+        LoggedOutEv=object(),
+        TemporaryBanEv=object(),
+        ConnectFailureEv=object(),
+        MessageEv=object(),
+    )
+    monkeypatch.setattr(backend_neonize, "_import_neonize", lambda: (FakeClient, ev))
+    FakeClient.ev = ev  # type: ignore[attr-defined]
+    FakeClient.download_bytes = b"datos"
+    modulo_jid = types.ModuleType("neonize.utils.jid")
+    modulo_jid.jid_is_lid = lambda _jid: False  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "neonize.utils.jid", modulo_jid)
+
+    modulo_proto = types.ModuleType("neonize.proto.waE2E.WAWebProtobufsE2E_pb2")
+
+    class _Message:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+    modulo_proto.Message = _Message  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "neonize.proto.waE2E.WAWebProtobufsE2E_pb2", modulo_proto)
+
+    FakeClient.vivos = 0
+    FakeClient.max_concurrentes = 0
+
+
+async def _noop(*_a: object, **_k: object) -> None:
+    return None
+
+
+async def test_dos_vinculaciones_a_la_vez_no_solapan_el_puente(tmp_path: Path) -> None:
+    primera = backend_neonize.NeonizeSocket()
+    segunda = backend_neonize.NeonizeSocket()
+
+    await asyncio.gather(
+        primera.connect(
+            session_dir=tmp_path / "a", on_qr=_noop, on_status=_noop, on_message=_noop
+        ),
+        segunda.connect(
+            session_dir=tmp_path / "b", on_qr=_noop, on_status=_noop, on_message=_noop
+        ),
+    )
+
+    assert FakeClient.max_concurrentes == 1, "el puente Go nunca debe usarse en paralelo"
+
+    await primera.disconnect()
+    await segunda.disconnect()
+
+
+async def test_send_serializado_y_devuelve_wamid(tmp_path: Path) -> None:
+    socket = backend_neonize.NeonizeSocket()
+    await socket.connect(session_dir=tmp_path / "c", on_qr=_noop, on_status=_noop, on_message=_noop)
+
+    wamid = await socket.send(to="57300", text="hola")
+
+    assert wamid == "WAMID-1"
+    await socket.disconnect()
+
+
+async def _conectado(tmp_path: Path) -> backend_neonize.NeonizeSocket:
+    socket = backend_neonize.NeonizeSocket()
+    await socket.connect(session_dir=tmp_path / "v", on_qr=_noop, on_status=_noop, on_message=_noop)
+    return socket
+
+
+async def test_alive_espera_las_propiedades_del_cliente(tmp_path: Path) -> None:
+    """`is_connected` es una corutina en aioze: sin `await` daría siempre True."""
+    socket = await _conectado(tmp_path)
+    assert await socket.alive() is True
+
+    socket._client.conectado = False
+    assert await socket.alive() is False
+
+    socket._client.conectado = True
+    socket._client.autenticado = False
+    assert await socket.alive() is False
+    await socket.disconnect()
+
+
+async def test_alive_sin_cliente_o_con_idle_terminado_es_false(tmp_path: Path) -> None:
+    assert await backend_neonize.NeonizeSocket().alive() is False
+
+    socket = await _conectado(tmp_path)
+    socket._idle_task.cancel()
+    await asyncio.sleep(0)
+    assert await socket.alive() is False
+    await socket.disconnect()
+
+
+async def test_alive_con_puente_ocupado_no_declara_muerto(tmp_path: Path) -> None:
+    """Esperar el lock (otro tenant usando el puente) no es evidencia de muerte."""
+    socket = await _conectado(tmp_path)
+    socket._client.conectado = False
+    socket.alive_timeout_s = 0.05
+
+    async with backend_neonize._BRIDGE_LOCK:
+        assert await socket.alive() is True
+    await socket.disconnect()
+
+
+async def test_alive_no_cancela_una_llamada_al_puente_en_curso(tmp_path: Path) -> None:
+    """El tope solo aplica a esperar el lock: una llamada lenta a Go no se corta
+    (cortarla soltaría el lock con el hilo aún dentro del puente)."""
+    socket = await _conectado(tmp_path)
+    socket._client.conectado = False
+    socket._client.demora_s = 0.1
+    socket.alive_timeout_s = 0.02
+
+    assert await socket.alive() is False
+    assert not backend_neonize._BRIDGE_LOCK.locked()
+    await socket.disconnect()
+
+
+class _JID:
+    def __init__(self, user: str, server: str = "s.whatsapp.net") -> None:
+        self.User = user
+        self.Server = server
+
+    def __str__(self) -> str:  # así lo serializa protobuf, no como el JID real
+        return f'User: "{self.User}"'
+
+
+class _Pair:
+    def __init__(self) -> None:
+        self.ID = _JID("573005550103")
+        self.BusinessName = "Panadería Ana"
+        self.Platform = "android"
+        self.Error = ""
+
+
+class _Device:
+    def __init__(self) -> None:
+        self.JID = _JID("573005550103")
+        self.PushName = "Ana"
+        self.BussinessName = "Panadería Ana"
+        self.Platform = "android"
+
+
+def test_identidad_del_pair_no_usa_str_del_proto() -> None:
+    identidad = backend_neonize._identity_from_pair(_Pair())
+
+    assert identidad.jid == "573005550103@s.whatsapp.net"
+    assert identidad.phone == "573005550103"
+    assert identidad.business_name == "Panadería Ana"
+    assert identidad.platform == "android"
+
+
+def test_identidad_del_device_trae_push_name_y_negocio() -> None:
+    identidad = backend_neonize._identity_from_device(_Device())
+
+    assert identidad.jid == "573005550103@s.whatsapp.net"
+    assert identidad.phone == "573005550103"
+    assert identidad.push_name == "Ana"
+    assert identidad.business_name == "Panadería Ana"
+
+
+def test_merge_identidad_conserva_lo_conocido_y_completa_lo_nuevo() -> None:
+    pair = backend_neonize._identity_from_pair(_Pair())
+    device = backend_neonize._identity_from_device(_Device())
+    merged = backend_neonize._merge_identity(pair, device)
+
+    assert merged.jid == "573005550103@s.whatsapp.net"
+    assert merged.push_name == "Ana"
+    assert merged.business_name == "Panadería Ana"
+
+
+def test_jid_de_lid_no_se_expone_como_telefono() -> None:
+    lid = _JID("123456789012345", "lid")
+
+    assert backend_neonize._jid_full(lid) == "123456789012345@lid"
+    assert backend_neonize._jid_phone(lid) is None
+
+
+async def test_identity_lee_client_me_sin_llamar_al_puente() -> None:
+    class Cliente:
+        me = _Device()
+
+    socket = backend_neonize.NeonizeSocket()
+    socket._client = Cliente()
+
+    identidad = await socket.identity()
+
+    assert identidad is not None
+    assert identidad.phone == "573005550103"
+    assert identidad.push_name == "Ana"
+
+
+class _Source:
+    IsFromMe = False
+    IsGroup = False
+    Sender = _JID("573001112233")
+    SenderAlt = None
+
+
+class _Info:
+    ID = "W-AUDIO"
+    Pushname = "Ana"
+    MessageSource = _Source()
+
+
+class _Evento:
+    Info = _Info()
+
+    def __init__(self, message: object) -> None:
+        self.Message = message
+
+
+class _Msg:
+    """Mensaje proto falso: `HasField` como el real y atributos por campo."""
+
+    def __init__(self, **campos: object) -> None:
+        self._campos = campos
+
+    def HasField(self, nombre: str) -> bool:
+        return nombre in self._campos
+
+    def __getattr__(self, nombre: str) -> object:
+        try:
+            return self._campos[nombre]
+        except KeyError:
+            raise AttributeError(nombre) from None
+
+
+class _Audio:
+    mimetype = "audio/ogg; codecs=opus"
+    fileLength = 5
+    seconds = 2
+    PTT = True
+
+
+class _Imagen:
+    mimetype = "image/jpeg"
+    fileLength = 5
+    caption = "¿Tienen este?"
+
+
+async def _socket_con_mensajes(
+    tmp_path: Path, capturados: list[backend_neonize.InboundEvent]
+) -> tuple[backend_neonize.NeonizeSocket, object]:
+    socket = backend_neonize.NeonizeSocket()
+
+    async def _on_message(event: backend_neonize.InboundEvent) -> None:
+        capturados.append(event)
+
+    await socket.connect(
+        session_dir=tmp_path / "m", on_qr=_noop, on_status=_noop, on_message=_on_message
+    )
+    handler = next(
+        fn for tipo, fn in socket._client.event.registros if tipo is FakeClient.ev.MessageEv
+    )
+    return socket, handler
+
+
+async def test_audio_entrante_sin_texto_se_publica_con_media(tmp_path: Path) -> None:
+    capturados: list[backend_neonize.InboundEvent] = []
+    socket, handler = await _socket_con_mensajes(tmp_path, capturados)
+    try:
+        await handler(None, _Evento(_Msg(audioMessage=_Audio())))
+    finally:
+        await socket.disconnect()
+
+    assert len(capturados) == 1
+    evento = capturados[0]
+    assert evento.text == ""
+    assert evento.media[0]["type"] == "audio/ogg"
+    assert evento.media[0]["data"] == b"datos"
+    assert evento.media[0]["ptt"] is True
+    assert evento.media[0]["seconds"] == 2
+
+
+async def test_imagen_entrante_usa_el_caption_como_texto(tmp_path: Path) -> None:
+    capturados: list[backend_neonize.InboundEvent] = []
+    socket, handler = await _socket_con_mensajes(tmp_path, capturados)
+    try:
+        await handler(None, _Evento(_Msg(imageMessage=_Imagen())))
+    finally:
+        await socket.disconnect()
+
+    evento = capturados[0]
+    assert evento.text == "¿Tienen este?"
+    assert evento.media[0]["type"] == "image/jpeg"
+    assert evento.media[0]["data"] == b"datos"
+
+
+async def test_media_que_no_se_descarga_se_publica_para_la_respuesta_fija(
+    tmp_path: Path,
+) -> None:
+    capturados: list[backend_neonize.InboundEvent] = []
+    socket, handler = await _socket_con_mensajes(tmp_path, capturados)
+    socket._client.download_bytes = b""
+    try:
+        await handler(None, _Evento(_Msg(audioMessage=_Audio())))
+    finally:
+        await socket.disconnect()
+
+    assert capturados[0].media[0]["error"] == "empty"
+
+
+async def test_send_audio_usa_ptt_y_devuelve_wamid(tmp_path: Path) -> None:
+    socket = backend_neonize.NeonizeSocket()
+    await socket.connect(session_dir=tmp_path / "a", on_qr=_noop, on_status=_noop, on_message=_noop)
+
+    wamid = await socket.send_audio(to="57300", audio_url="https://api/files/audio.ogg")
+
+    assert wamid == "WA-AUDIO"
+    # La nota de voz sale con el mimetype que WhatsApp reproduce, no el `audio/ogg` de libmagic.
+    assert socket._client.audio_enviado == (
+        "57300@s.whatsapp.net",
+        "https://api/files/audio.ogg",
+        True,
+        "audio/ogg; codecs=opus",
+    )
+    await socket.disconnect()
+
+
+async def test_send_image_envia_imagen_nativa(tmp_path: Path) -> None:
+    socket = backend_neonize.NeonizeSocket()
+    await socket.connect(session_dir=tmp_path / "i", on_qr=_noop, on_status=_noop, on_message=_noop)
+
+    wamid = await socket.send_image(
+        to="57300", image_url="https://api/files/foto.jpg", caption="mirá"
+    )
+
+    assert wamid == "WA-IMAGE"
+    assert socket._client.imagen_enviada == (
+        "57300@s.whatsapp.net",
+        "https://api/files/foto.jpg",
+        "mirá",
+    )
+    await socket.disconnect()

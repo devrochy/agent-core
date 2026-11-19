@@ -17,7 +17,6 @@ from sqlalchemy import func, select
 
 from core.db.session import get_owned, get_session
 from core.payments import PaymentCapabilityError, payment_registry, qr_png_data_uri
-from core.shared.events import ON_PAYMENT_CONFIRMED, event_bus
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
 from pack_cobranza.config import CobranzaConfig
@@ -80,20 +79,55 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
     tenant_id = get_current_tenant_id()
     if tenant_id is None or not reference:
         return
+    from core.agents.spec import enabled_packs, load_active_spec
+
     async with tenant_scope(tenant_id):
+        # Guard de enablement: este handler está suscrito de forma global (event
+        # bus), pero SOLO debe procesar pagos de tenants con cobranza activa.
+        spec = await load_active_spec(tenant_id)
+        if "pack_cobranza" not in enabled_packs(spec):
+            return
         async with get_session() as session:
-            link = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tenant_id, LinkPago.referencia == reference, LinkPago.deleted_at.is_(None)))).scalar_one_or_none()
+            link = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tenant_id, LinkPago.referencia == reference))).scalar_one_or_none()
             if link is None or link.cuota_id is None or link.estado == "usado":
                 return
             cuota = await get_owned(session, Cuota, link.cuota_id)
             if cuota is None:
                 return
-            prestamo = await get_owned(session, Prestamo, cuota.prestamo_id)
+            # La cuota puede ser de un préstamo O de una suscripción (sin préstamo,
+            # ADR-0082): el pago se cuelga del préstamo solo si existe (HU-SUB-02).
+            prestamo = (
+                await get_owned(session, Prestamo, cuota.prestamo_id)
+                if cuota.prestamo_id is not None
+                else None
+            )
             valor = Decimal(str(amount)) if amount is not None else Decimal(link.monto or 0)
+
+            # Pago previo de la cuota (abonos anteriores) -- para saber si este
+            # pago la deja saldada o es parcial (HU-SUB-02).
+            pagado_antes = Decimal(
+                (
+                    await session.execute(
+                        select(func.coalesce(func.sum(Pago.valor), 0)).where(
+                            Pago.tenant_id == tenant_id,
+                            Pago.cuota_id == cuota.id,
+                            Pago.deleted_at.is_(None),
+                        )
+                    )
+                ).scalar_one()
+                or 0
+            )
+            esperado = Decimal(cuota.valor_esperado or 0)
+            cliente_id = link.cliente_id or (prestamo.cliente_id if prestamo else None)
+            if cliente_id is None:
+                # Sin cliente resoluble no se puede registrar el pago (NOT NULL).
+                log.warning("cobranza_pago_sin_cliente", reference=reference, cuota_id=str(cuota.id))
+                return
+
             session.add(
                 Pago(
                     tenant_id=tenant_id,
-                    cliente_id=link.cliente_id or (prestamo.cliente_id if prestamo else uuid.uuid4()),
+                    cliente_id=cliente_id,
                     prestamo_id=cuota.prestamo_id,
                     cuota_id=cuota.id,
                     valor=valor,
@@ -102,7 +136,11 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
                     idempotency_key=f"link-{reference}",
                 )
             )
-            cuota.estatus = "pagada"
+            # Saldada solo si el acumulado cubre el valor esperado; si no, sigue
+            # pendiente y queda como abono.
+            saldada = (pagado_antes + valor) >= esperado
+            if saldada:
+                cuota.estatus = "pagada"
             cartera_id = prestamo.cartera_id if prestamo else None
             if prestamo is not None:
                 prestamo.saldo = prestamo.saldo - valor
@@ -114,19 +152,19 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
             session.add(
                 AuditoriaCartera(
                     tenant_id=tenant_id, entidad="pago", entidad_id=cuota.id, operacion="crear",
-                    valores_despues={"valor": float(valor), "metodo": "en_linea", "referencia": reference},
+                    valores_despues={
+                        "valor": float(valor), "metodo": "en_linea", "referencia": reference,
+                        "saldada": saldada, "pagado_antes": float(pagado_antes), "esperado": float(esperado),
+                    },
                     actor_rol="pasarela", motivo="Pago en línea confirmado",
                 )
             )
     log.info("cobranza_pago_en_linea", reference=reference)
 
 
-def suscribir() -> None:
-    """Suscribe el pack a las confirmaciones de pago del core (ADR-0067)."""
-    event_bus.subscribe(ON_PAYMENT_CONFIRMED, _on_payment_confirmed)
-
-
-async def crear_link_para_cuota(cuota: Cuota, cfg: CobranzaConfig) -> dict[str, Any]:
+async def crear_link_para_cuota(
+    cuota: Cuota, cfg: CobranzaConfig, *, cliente_id: uuid.UUID | None = None
+) -> dict[str, Any]:
     """Crea (o reutiliza) el link/QR de una cuota. Devuelve el payload para la app."""
     tid = get_current_tenant_id()
     async with get_session() as session:
@@ -138,13 +176,25 @@ async def crear_link_para_cuota(cuota: Cuota, cfg: CobranzaConfig) -> dict[str, 
         return datos_informativos(cfg, monto)
 
     reference = f"cob-{cuota.id}"
-    link = await cap.create_link(reference=reference, amount=monto, description=f"Cuota {cuota.numero_cuota}")
+    try:
+        link = await cap.create_link(reference=reference, amount=monto, description=f"Cuota {cuota.numero_cuota}")
+    except PaymentCapabilityError:
+        # Rechazo de NEGOCIO (p. ej. monto bajo el mínimo): resultado controlado,
+        # el pack SIGUE habilitado (HU-ARCH-18). Se cae a la cuenta informativa.
+        log.warning("cobranza_link_rechazado", cuota_id=str(cuota.id), monto=monto)
+        return {
+            "modo": "monto_bajo_minimo",
+            "monto": monto,
+            "mensaje": "El pago en línea no está disponible para este monto; usá otro medio.",
+        }
     async with get_session() as session:
         existente = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tid, LinkPago.referencia == link.reference))).scalar_one_or_none()
         if existente is None:
-            session.add(LinkPago(tenant_id=tid, cuota_id=cuota.id, prestamo_id=cuota.prestamo_id, referencia=link.reference, url=link.url or "", monto=saldo))
+            session.add(LinkPago(tenant_id=tid, cuota_id=cuota.id, prestamo_id=cuota.prestamo_id, cliente_id=cliente_id, referencia=link.reference, url=link.url or "", monto=saldo))
         elif link.url:
             existente.url = link.url
+            if cliente_id is not None and existente.cliente_id is None:
+                existente.cliente_id = cliente_id
     return {
         "modo": "online",
         "monto": monto,
@@ -155,4 +205,4 @@ async def crear_link_para_cuota(cuota: Cuota, cfg: CobranzaConfig) -> dict[str, 
     }
 
 
-__all__ = ["PaymentCapabilityError", "capability_del_tenant", "config_del_tenant", "crear_link_para_cuota", "datos_informativos", "suscribir"]
+__all__ = ["PaymentCapabilityError", "capability_del_tenant", "config_del_tenant", "crear_link_para_cuota", "datos_informativos"]

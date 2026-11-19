@@ -1,0 +1,27 @@
+{
+  "contract": "agentspec/3",
+  "description": "Vende los planes del negocio: informa precios, cotiza, crea el pedido y envía el link de pago.",
+  "persona": { "inheritConnectionVoice": true, "maxLength": 500, "forbiddenPhrases": [] },
+  "model": { "primary": "deepseek-flash", "fallback": "gpt-4o-mini", "router": null, "temperature": 0.3 },
+  "playbooks": [ { "name": "ventas", "pack": "pack_commerce" } ],
+  "procedures": [
+    { "id": "pack_commerce.contratar_plan", "version": "^1.0",
+      "overrides": { "examples": [ "quiero pasarme a premium", "me interesa el plan anual" ] } },
+    { "id": "pack_commerce.consultar_planes", "version": "^1.0" }
+  ],
+  "exposes": {
+    "procedures": [ "pack_commerce.contratar_plan" ],
+    "consultas": [ { "id": "ventas.pedido_abierto",
+                     "outputSchema": { "type": "object", "properties": { "pedido_id": { "type": "string" }, "estado": { "type": "string" } } } } ]
+  },
+  "memory": { "shortTermTurns": 30, "readScopes": [ "customer", "connection", "tenant" ], "writeNamespaces": [ "ventas", "perfil" ] },
+  "tools": [ { "tool": "consultar_inventario", "enabled": true, "scopes": [] } ],
+  "guardrails": [ { "name": "sin_promesas", "kind": "forbidden_phrase", "phrases": [ "te lo garantizo" ], "action": "retry" } ],
+  "declarativeTools": [
+    { "name": "consultar_envio", "description": "Estado de una guía de envío", "method": "GET",
+      "url": "https://api.transportadora.co/v1/guias/{guia}", "allowedDomains": [ "api.transportadora.co" ],
+      "headers": { "Authorization": { "secret": "transportadora_token" } },
+      "parameters": { "type": "object", "properties": { "guia": { "type": "string" } }, "required": [ "guia" ] } }
+  ],
+  "policies": { "maxToolCallsPerTurn": 10 }
+}

@@ -71,7 +71,15 @@ def test_skill_expone_tools_de_cliente() -> None:
         "cob_estado_cuenta",
         "cob_evaluar_negociacion",
         "cob_registrar_promesa_pago",
+        "cob_registrar_promesa_saldo",  # solo la ofrece el procedimiento `promesa_de_pago` (HU-AOS-08)
+        "cob_opciones_promesa",  # ídem: alcance de la promesa (HU-AOS-08, decisión del 2026-10-11)
         "cob_registrar_abono",
+        "cob_consultar_suscripcion",
+        "cob_crear_suscripcion",
+        "cob_pausar_suscripcion",
+        "cob_cancelar_suscripcion",
+        "cob_renovar_suscripcion",
+        "cob_link_suscripcion",
     }
     # Las operaciones de administración NO deben estar en el asistente.
     assert "cob_registrar_gasto" not in names
@@ -155,7 +163,6 @@ def test_rbac_subsecciones_por_path() -> None:
         "/cobranza/carteras": "pack_cobranza:carteras",
         "/cobranza/carteras/123/config": "pack_cobranza:carteras",
         "/cobranza/clientes/abc": "pack_cobranza:clientes",
-        "/cobranza/cobros/generar": "pack_cobranza:cobros",
         "/cobranza/reglas": "pack_cobranza:reglas",
         "/cobranza/monitoreo": "pack_cobranza:monitoreo",
         "/cobranza/reportes": "pack_cobranza:reportes",
@@ -163,8 +170,6 @@ def test_rbac_subsecciones_por_path() -> None:
         "/cobranza/promesas": "pack_cobranza:promesas",
         "/cobranza/promesas/abc/estado": "pack_cobranza:promesas",
         "/cobranza/auditoria": "pack_cobranza:auditoria",
-        "/cobranza/propietario": "pack_cobranza:propietario",
-        "/cobranza/propietario/mensaje": "pack_cobranza:propietario",
         "/cobranza/carteras/abc/caja": "pack_cobranza:carteras",
         "/cobranza/carteras/abc/trayecto/optimizar": "pack_cobranza:carteras",
         "/cobranza/carteras/abc/cierre": "pack_cobranza:carteras",
@@ -176,13 +181,47 @@ def test_rbac_subsecciones_por_path() -> None:
         assert req is not None and req[0] == esperado, path
 
 
+def test_cobros_conserva_su_subseccion_rbac_sin_menu() -> None:
+    """Se retiró «Cobros al propietario», pero `pack_cobranza:cobros` guarda «Pagos»."""
+    from pack_cobranza.module import CobranzaModule
+
+    from core.admin.permissions import pack_section_keys
+
+    modulo = CobranzaModule()
+    assert "pack_cobranza:cobros" in pack_section_keys([modulo])
+    assert all(i["section_key"] != "pack_cobranza:cobros" for i in modulo.admin_menu)
+
+
+def test_cobros_al_propietario_ya_no_expone_rutas() -> None:
+    from pack_cobranza.admin_api import router
+
+    rutas = {getattr(r, "path", "") for r in router.routes}
+    assert not [r for r in rutas if "owner-charges" in r]
+    assert "/api/v1/pack/cobranza/payments" in rutas
+
+
 def test_lead_provider_registra_columnas() -> None:
     import pack_cobranza.providers  # noqa: F401
 
-    from core.admin.lead_registry import lead_registry
+    from core.admin.lead_registry import SIEMPRE, lead_registry
 
-    cols = [c.key for c in lead_registry.columns_for({"pack_cobranza"})]
-    assert cols == ["saldo", "mora", "riesgo"]
+    # Las del provider `leads` del core también salen siempre (ADR-0193, `lead_registry.SIEMPRE`), pero ningún otro
+    # pack se cuela; las del pack son exactamente estas.
+    providers = lead_registry.providers_for({"pack_cobranza"})
+    assert {p.plugin_id for p in providers} <= {"pack_cobranza", *SIEMPRE}
+    [cobranza] = [p for p in providers if p.plugin_id == "pack_cobranza"]
+    cols = [c.key for c in cobranza.columns]
+    assert cols == [
+        "cartera",
+        "saldo",
+        "mora",
+        "riesgo",
+        "estatus",
+        "cuotas_vencidas",
+        "proxima_cuota",
+        "promesa",
+        "ultimo_pago",
+    ]
 
 
 def test_api_gestor_rutas_f1() -> None:

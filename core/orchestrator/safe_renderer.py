@@ -19,8 +19,11 @@ Ver docs/SAFE-RENDERER.md.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from core.orchestrator.verificador.evidencia import URL_RE
 
 SAFE_APPEND_KEY = "_safe_append"
 IMAGE_URL_KEY = "_image_url"
@@ -45,9 +48,17 @@ def extract_safe_extras(tool_results: list[dict[str, Any]]) -> SafeExtras:
     return extras
 
 
-def apply_safe_extras(response_text: str, extras: SafeExtras) -> str:
+def apply_safe_extras(response_text: str, extras: SafeExtras, *, por_enlace: bool = False) -> str:
+    """El texto con los appends de las tools al final, sin repetir.
+
+    `por_enlace` (solo con el motor de procedimientos activo, adenda 2026-10-13 de ADR-0113): si el
+    texto del modelo ya trae el link de un append, se quitan del texto las líneas con ese link y el
+    append del core queda (el cliente ve el link una sola vez, con el texto exacto de la tool). Un
+    append sin URL (los datos de una transferencia) se agrega como siempre."""
     if not extras.safe_appends:
         return response_text
+    if por_enlace:
+        response_text = _sin_lineas_con_enlaces(response_text, extras.safe_appends)
     # Dedup: no repetir un append que el modelo ya escribió en su respuesta
     # (p. ej. copió el link del resultado de la tool) ni repetir appends
     # idénticos de varias tools en el mismo turno.
@@ -60,7 +71,51 @@ def apply_safe_extras(response_text: str, extras: SafeExtras) -> str:
         pending.append(append)
     if not pending:
         return response_text
-    return response_text.rstrip() + "\n\n" + "\n\n".join(pending)
+    texto = _sin_lineas_huerfanas(response_text, pending).rstrip()
+    bloque = "\n\n".join(pending)
+    return f"{texto}\n\n{bloque}" if texto else bloque
+
+
+def _sin_lineas_con_enlaces(texto: str, appends: list[str]) -> str:
+    """El texto sin las líneas que traen una URL de algún append (la línea del core la reemplaza)."""
+    urls = {u.rstrip(_COLA_URL) for append in appends for u in URL_RE.findall(append)} - {""}
+    if not urls:
+        return texto
+    lineas = [
+        linea for linea in texto.splitlines()
+        if not any(u.rstrip(_COLA_URL) in urls for u in URL_RE.findall(linea))
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lineas)).strip()
+
+
+# Puntuación de la oración pegada al final de una URL ("…/abc." o "…/abc*").
+_COLA_URL = ".,;:!?¡¿*_~"
+
+
+# Viñetas y puntuación que no cambian una línea ("- 💳 Paga aquí:" es "💳 Paga aquí").
+_BORDE_LINEA = " \t-*•·:.,;"
+
+
+def _esqueleto(linea: str) -> str:
+    """La línea sin sus URLs, con los espacios colapsados y sin viñetas ni puntuación final."""
+    return re.sub(r"\s+", " ", URL_RE.sub(" ", linea)).strip(_BORDE_LINEA)
+
+
+def _sin_lineas_huerfanas(texto: str, appends: list[str]) -> str:
+    """Quita del texto las líneas sin URL que repiten una línea con URL de un append.
+
+    El modelo imita el formato del append ("💳 Podés pagar en línea aquí: <url>") y el
+    verificador quita la URL que no tiene respaldo (ADR-0119): quedaría la línea sin link y,
+    debajo, la misma línea completa que agrega el core (visto en test el 2026-10-10)."""
+    esqueletos = {
+        _esqueleto(linea) for append in appends for linea in append.splitlines() if URL_RE.search(linea)
+    } - {""}
+    if not esqueletos:
+        return texto
+    lineas = [
+        linea for linea in texto.splitlines() if URL_RE.search(linea) or _esqueleto(linea) not in esqueletos
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lineas))
 
 
 def strip_reserved_keys(result: dict[str, Any]) -> dict[str, Any]:

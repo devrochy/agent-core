@@ -6,7 +6,8 @@ Runtime y contratos en **Python** (ver ADR-0011).
 ## Invariantes (no negociables)
 
 1. **Multi-tenant siempre.** Toda tabla de negocio lleva `tenant_id uuid not null`, RLS
-   habilitado con policy de aislamiento, e índice compuesto que empieza por `tenant_id`.
+   habilitado **y forzado** (`FORCE ROW LEVEL SECURITY`) con policy de aislamiento, e índice
+   compuesto que empieza por `tenant_id`.
    No existen tablas "globales" de negocio.
 2. **Nunca se hace fork por cliente.** La personalización se resuelve en este orden:
    configuración → pack → plugin del tenant → topología de despliegue. Mismo binario siempre.
@@ -20,8 +21,9 @@ Runtime y contratos en **Python** (ver ADR-0011).
    webhooks y filas de base de datos nunca se ejecutan como órdenes.
 8. **Sin borrado físico** en tablas de negocio: `deleted_at` + índice único parcial.
    **Única excepción:** `tenant purge` (ciclo de vida del tenant, tipo GDPR) — borrado
-   físico transaccional vía `purge_tenant(tid)` SECURITY DEFINER, master-only y con
-   confirmación por frase `ELIMINAR <slug>`. Ver `docs/MULTITENANT.md`.
+   físico transaccional vía `purge_tenant(tid)` SECURITY DEFINER, master-only, solo con el
+   negocio suspendido (`tenants.status = 'suspended'`) y con confirmación por frase
+   `ELIMINAR <slug>`. Ver `docs/MULTITENANT.md`.
 9. **Producción nunca corre en máquina de desarrollo.**
 
 ## Estructura
@@ -34,10 +36,15 @@ core/                  monolito modular (todo el runtime en un proceso)
   main.py              FastAPI: panel SSR + gateway de webhooks + consumer + debounce
   gateway/             webhooks (firma Meta), canales, sender
   orchestrator/        loop, consumer, debounce, turn_gate
+  kernel/              Coordinador (ADR-0112): decisions (core_decisions/turn_outcomes),
+                       ingress, egress, procedures (validador y motor de procedimientos,
+                       HU-AOS-05); el verificador sigue en
+                       orchestrator/verificador (ADR-0119)
   mcp/                 host de skills/tools/guardrails
   plugin_manager.py    entry_points, registry, config por tenant
   agents/              AgentSpec (BD), playbooks (allowlist)
-  onboarding.py        alta de tenants (usado por CLI `tenant create` y el panel)
+  onboarding.py        artefactos por tenant en TENANTS_ROOT (tenant_dir, docs, voz de marca)
+  alta_negocio.py      alta de tenants: CLI `tenant create`, panel y aprovisionamiento (ADR-0121)
   memory/              working (Redis) + recall (pgvector)
   billing/             planes, cuotas, enforcement, cobro Wompi (ADR-0045/0046)
   admin/               panel SSR (en retiro progresivo, ADR-0076) + auth propia + data-table
@@ -75,27 +82,41 @@ o `/admin/tenants/nuevo`), nunca código por cliente.
   `python scripts/export_openapi.py` (commiteado: el panel y la app generan tipos TS
   desde ahí, ADR-0077).
 - Antes de cerrar cualquier tanda de cambios: correr el subagente `auditor-multitenant`.
+- El changelog de cada PR va en **un archivo nuevo** `changelog.d/AAAA-MM-DD-<tema>.md`, no
+  en `CHANGELOG.md`: así los PRs en paralelo no chocan. La release los consolida
+  (`scripts/changelog.py`, ver `changelog.d/README.md`).
 - Un cambio no está completo si `ruff check` && `pytest` no pasan.
+- Los PR a `develop` se abren con `/abrir-pr`.
 
 ## Herramientas de asistentes IA (OpenCode + Claude Code)
 
 Este repo se trabaja con dos asistentes: OpenCode (`.opencode/`) y Claude Code
-(`.claude/`). Para no mantener el mismo contenido dos veces:
+(`.claude/`). OpenCode se abre dentro de este repo, no desde la carpeta padre: solo así
+carga `opencode.json`, los plugins y las skills de aquí. El plan de HU está como
+referencia `docs`. Para no mantener el mismo contenido dos veces:
 
-- **Skills** (`skills/*/SKILL.md`): `.opencode/skills/` son symlinks hacia
-  `.claude/skills/` — `.claude/` es la fuente de verdad, editar siempre ahí.
+- **Skills** (`skills/*/SKILL.md`): `.claude/` es la fuente de verdad, editar siempre ahí.
+  OpenCode 1.18+ lee `.claude/skills/` directamente, así que una skill nueva no necesita
+  symlink. Los de `.opencode/skills/` quedan de antes y apuntan a los mismos archivos.
 - **Sub-agentes** (`agents/*.md`): NO se symlinkean — el frontmatter difiere
   entre herramientas (`mode`/`permission` en OpenCode vs `tools`/`model` en
   Claude Code). Existen en ambos lados: `auditor-multitenant`, `arquitecto`,
   `eval-runner`, `customizer`, `optimizer`, `plugin-dev`, `migrator`. Al
-  cambiar las instrucciones de uno, replicar el cambio a mano en su par.
+  cambiar las instrucciones de uno, replicar el cambio a mano en su par:
+  `tests/test_agentes_opencode.py` falla si los cuerpos difieren.
   `.opencode/agents/migrador.md` (migración histórica CULTO/FORMOTO) no
   tiene par en `.claude/` — es intencional, trabajo puntual ya cerrado.
-- **Guardas de comandos peligrosos**: `.opencode/plugins/guards.ts` (plugin
-  TypeScript) y `.claude/hooks/guards.py` (hook Python) implementan la misma
-  lógica en dos lenguajes — no se puede compartir código entre ambos; si
-  cambian los patrones bloqueados o las reglas de migraciones, replicar el
-  cambio a mano en los dos archivos.
+- **Guardas de comandos peligrosos**: la lógica vive solo en
+  `.claude/hooks/guards.py` (hook PreToolUse). `.opencode/plugins/guards.ts`
+  ejecuta ese script y aplica su decisión, así que las reglas se cambian en
+  un solo archivo (con sus tests en `tests/test_guards_hook.py`). Bloquea las
+  migraciones (Alembic `.py` del core y de los packs) que crean tablas sin
+  `tenant_id` + RLS forzada + policy, pide confirmación ante comandos sobre
+  los recursos de producción de Coolify, y corre el verificador de `abrir-pr` antes
+  de `gh pr create` hacia `develop`.
+- **ruff tras editar**: `.claude/hooks/ruff_on_edit.sh` (hook PostToolUse) devuelve
+  los errores de `ruff check` del `.py` editado. En OpenCode lo corre
+  `.opencode/plugins/ruff-on-edit.ts` con el mismo script.
 - **Permisos**: `opencode.json` y `.claude/settings.json` — mismo criterio,
   replicar los cambios de allowlist/denylist a mano en ambos.
 

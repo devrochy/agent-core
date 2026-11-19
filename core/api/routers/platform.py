@@ -1,4 +1,4 @@
-"""Plataforma (master): `GET /api/v1/admin/platform/tenants`.
+"""Plataforma (master): `GET /api/v1/admin/platform/tenants` y la App de Meta.
 
 Listado **de todos** los tenants para gestión de plataforma, con su plan. Solo
 para el admin `master`. Paginado (la vista SSR recorre todos y calcula el plan de
@@ -9,16 +9,19 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy import func, or_, select
 
 from core.admin.plan_view import subscription_overview_or_none
+from core.admin.roles import actua_como_master, es_master, es_tester
 from core.api.deps import Principal, get_principal
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
+from core.api.routers.plantillas_opciones import OpcionesErrorOut
+from core.api.schemas import ReadinessRun, readiness_run_out
 from core.db.models import Tenant
 from core.db.session import get_session
 
@@ -26,7 +29,8 @@ router = APIRouter(prefix="/admin/platform", tags=["admin · plataforma"])
 
 
 def _require_master(principal: Principal) -> None:
-    if principal.admin.role != "master":
+    # Master, o tester en test (ADR-0134): operar negocios no es gestionar cuentas.
+    if not actua_como_master(principal.admin):
         raise ApiError.forbidden("Solo el admin de plataforma puede gestionar negocios.")
 
 
@@ -93,22 +97,37 @@ class TenantCreate(BaseModel):
     packs: list[str] = []
     escalation_triggers: list[str] = []
     admin_email: str = ""
-    admin_password: str = ""
+    # Ya no se define una contraseña al crear el negocio (ADR-0175): el dueño la define con el
+    # enlace que le llega por correo. Se conserva el campo para dar un error claro (400) a quien
+    # todavía lo mande; vacío es válido.
+    admin_password: str = Field(default="", json_schema_extra={"deprecated": True})
 
 
 class TenantPlanUpdate(BaseModel):
     plan_id: str
-    extend_days: int = 0
+    # Días que se suman al período; negativo no tiene sentido (422).
+    extend_days: int = Field(default=0, ge=0, le=3660)
 
 
 class PurgeRequest(BaseModel):
     confirm_phrase: str
 
 
+class TenantOwnerInvitation(BaseModel):
+    """Qué pasó con el acceso del dueño (ADR-0175). Nunca lleva el enlace ni el token."""
+
+    estado: Literal["enviado", "sin_smtp", "fallido", "ya_emitida", "ya_es_miembro"]
+    # `enlace`: define su contraseña con el enlace del correo; `app`: acepta la invitación en la app.
+    tipo: Literal["enlace", "app"]
+    expires_at: datetime | None = None
+
+
 class TenantCreated(BaseModel):
     tenant_id: uuid.UUID
     slug: str
     steps: list[str]
+    # None si no se pasó `admin_email`.
+    invitation: TenantOwnerInvitation | None = None
 
 
 @router.post("/tenants", response_model=TenantCreated, status_code=201)
@@ -116,21 +135,65 @@ async def create_tenant(
     payload: TenantCreate,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> TenantCreated:
-    """Alta de un negocio (master): tenant + asistente + cuenta admin opcional."""
+    """Alta de un negocio (master): tenant + asistente + acceso del dueño por correo.
+
+    Con `admin_email` la cuenta del dueño nace sin contraseña y le llega un enlace de un solo
+    uso para definirla (ADR-0175). Si el correo no sale, el negocio se crea igual y la
+    respuesta lo dice (`invitation.estado`); se reenvía con `owner-invitation/resend`."""
     _require_master(principal)
 
     # Import local: la lógica de alta vive en el core; el slug se normaliza igual.
+    from sqlalchemy.exc import IntegrityError
+
     from core.admin.views import _slugify
-    from core.onboarding import onboard_tenant
+    from core.alta_acceso import (
+        AccesoRechazado,
+        asegurar_cuenta_sin_contrasena,
+        correo_valido,
+        emitir_y_enviar_acceso,
+        motivo_para_no_dar_acceso,
+    )
+    from core.alta_negocio import onboard_tenant
+    from core.onboarding import _validate_slug
 
     slug = payload.slug.strip() or _slugify(payload.name)
     if not payload.name.strip() or not slug:
         raise ApiError.bad_request("Nombre y slug son obligatorios.")
+    if payload.admin_password:
+        raise ApiError.bad_request(
+            "El acceso del dueño llega por correo: ya no se define una contraseña al crear el negocio.",
+            "admin_password_no_soportado",
+        )
     admin_email = payload.admin_email.strip().lower()
-    if admin_email and len(payload.admin_password) < 8:
-        raise ApiError.bad_request("La contraseña del administrador necesita 8+ caracteres.")
+    try:
+        _validate_slug(slug)
+    except ValueError as exc:
+        raise ApiError.bad_request(str(exc)[:180], "invalid_tenant") from exc
+    if es_tester(principal.admin):
+        from core.alta_negocio import motivo_para_rechazar_alta_de_tester
+
+        motivo = await motivo_para_rechazar_alta_de_tester(slug, admin_email or None)
+        if motivo:
+            raise ApiError(409, "conflict", motivo)
+    admin_id: uuid.UUID | None = None
+    if admin_email:
+        # Antes de crear nada: un correo que no se puede invitar no deja un negocio sin dueño.
+        motivo = await motivo_para_no_dar_acceso(admin_email)
+        if motivo:
+            raise ApiError(409, "owner_email_rejected", motivo[:1].upper() + motivo[1:] + ".")
+        # La forma se valida después: una cuenta que ya existe (p. ej. `admin@local`) no pasa por acá.
+        if correo_valido(admin_email) is None:
+            raise ApiError.bad_request("El correo del dueño no es válido.", "invalid_owner_email")
+        admin_id, creada = await asegurar_cuenta_sin_contrasena(admin_email)
+        if not creada and es_tester(principal.admin):
+            # El pre-check de arriba es previo a crear la cuenta: se repite sobre el resultado.
+            raise ApiError(
+                409, "conflict", "Ese correo ya tiene una cuenta. Un tester solo da de alta negocios con una cuenta nueva."
+            )
 
     try:
+        # Sin `admin_email`: el dueño NO se vincula acá. Entra por la invitación (enlace o app)
+        # y `canjear_invitacion` crea su membresía; vincularlo antes la haría imposible.
         tenant_id, steps = await onboard_tenant(
             name=payload.name.strip(),
             slug=slug,
@@ -139,12 +202,58 @@ async def create_tenant(
             persona={"tone": payload.tone},
             escalation_triggers=payload.escalation_triggers,
             packs=payload.packs,
-            admin_email=admin_email or None,
-            admin_password=payload.admin_password or None,
         )
     except ValueError as exc:
         raise ApiError.bad_request(str(exc)[:180], "invalid_tenant") from exc
-    return TenantCreated(tenant_id=tenant_id, slug=slug, steps=steps)
+    except IntegrityError as exc:
+        # Otra petición creó el mismo slug a la vez.
+        raise ApiError(409, "slug_en_uso", "Ya existe un negocio con ese slug.") from exc
+
+    invitation: TenantOwnerInvitation | None = None
+    if admin_id is not None and es_tester(principal.admin) and any(p.startswith("tenant ya existía") for p in steps):
+        # El pre-check del slug es previo y no es atómico: si otro lo creó en medio, el tester no
+        # emite una invitación `owner` sobre un negocio que no es suyo.
+        raise ApiError(409, "conflict", "Ya existe un negocio con ese slug. Un tester solo da de alta negocios nuevos.")
+    if admin_id is not None:
+        try:
+            acceso = await emitir_y_enviar_acceso(
+                tenant_id=tenant_id,
+                admin_id=admin_id,
+                email=admin_email,
+                negocio=payload.name.strip(),
+                actor_email=principal.admin.email,
+            )
+        except AccesoRechazado as exc:
+            raise ApiError(409, exc.codigo, f"El negocio se creó, pero {exc.mensaje}") from exc
+        invitation = TenantOwnerInvitation(estado=acceso.estado, tipo=acceso.tipo, expires_at=acceso.expires_at)
+        # `onboard_tenant` no vinculó a nadie (el dueño entra por la invitación): el paso suyo lo dice.
+        steps = [s for s in steps if not s.startswith("sin admin")]
+        steps.append(f"acceso del dueño: invitación {acceso.tipo}, correo {acceso.estado}")
+    return TenantCreated(tenant_id=tenant_id, slug=slug, steps=steps, invitation=invitation)
+
+
+@router.post(
+    "/tenants/{tenant_id}/owner-invitation/resend",
+    response_model=TenantOwnerInvitation,
+    summary="Reenvía el acceso al dueño del negocio",
+)
+async def resend_owner_invitation(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> TenantOwnerInvitation:
+    """Reenvía el correo de acceso a la cuenta de la invitación `owner` pendiente del negocio
+    (ADR-0175). El destinatario no se recibe: es el de la invitación. Reusa el enlace mientras
+    vigente y lo renueva si venció."""
+    _require_master(principal)
+
+    from core.alta_acceso import AccesoRechazado, reenviar_acceso
+
+    try:
+        acceso = await reenviar_acceso(tenant_id=tenant_id, actor_email=principal.admin.email)
+    except AccesoRechazado as exc:
+        status = 404 if exc.codigo == "tenant_no_encontrado" else 409
+        raise ApiError(status, exc.codigo, exc.mensaje) from exc
+    return TenantOwnerInvitation(estado=acceso.estado, tipo=acceso.tipo, expires_at=acceso.expires_at)
 
 
 @router.post("/tenants/{tenant_id}/plan", status_code=204)
@@ -227,14 +336,520 @@ async def purge_tenant_endpoint(
     payload: PurgeRequest,
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> Response:
-    """Eliminación física IRREVERSIBLE: exige la frase `ELIMINAR <slug>` (invariante 8)."""
-    _require_master(principal)
-    from core.tenants import purge_tenant
+    """Eliminación física IRREVERSIBLE (invariante 8).
+
+    Exige el tenant suspendido (409 `tenant_not_suspended`) y la frase `ELIMINAR <slug>`.
+    Solo el master, también en test (invariante 8: el tester no purga).
+    """
+    if not es_master(principal.admin):
+        raise ApiError.forbidden("Solo el admin de plataforma puede eliminar un negocio.")
+    from core.tenants import TenantNotSuspendedError, purge_tenant
 
     try:
         await purge_tenant(str(tenant_id), payload.confirm_phrase)
+    except TenantNotSuspendedError as exc:
+        raise ApiError(409, "tenant_not_suspended", str(exc)[:240]) from exc
     except ValueError as exc:
         raise ApiError.bad_request(str(exc)[:180], "purge_confirmation") from exc
     except Exception as exc:
         raise ApiError(502, "purge_failed", f"No se pudo eliminar: {str(exc)[:140]}") from exc
     return Response(status_code=204)
+
+
+# ------------------------------------------------- App de Meta de la plataforma (HU-CONN-07)
+class PlatformMetaApp(ReadinessRun):
+    """Checklist de la app de Meta de la plataforma y la infraestructura (solo master)."""
+
+    meta_app_id: str = ""
+
+
+async def _platform_meta_app(principal: Principal) -> PlatformMetaApp:
+    from core.admin.production_readiness_service import latest_platform_run
+    from core.config import get_settings
+
+    run = await latest_platform_run(principal.admin)
+    return PlatformMetaApp(meta_app_id=get_settings().meta_app_id or "", **readiness_run_out(run))
+
+
+@router.get("/meta-app", response_model=PlatformMetaApp)
+async def get_platform_meta_app(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> PlatformMetaApp:
+    """Último resultado guardado (con fecha) de los chequeos de la app de Meta de la
+    plataforma e infraestructura: webhook, suscripciones de la app, App Secret, claves de
+    cifrado, worker, RLS. No corre nada: para revisar, `POST /meta-app/run`."""
+    _require_master(principal)
+    return await _platform_meta_app(principal)
+
+
+@router.post("/meta-app/run", response_model=PlatformMetaApp, status_code=202)
+async def run_platform_meta_app(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> PlatformMetaApp:
+    """Encola la revisión de la plataforma (job de Celery, sin pytest) y responde al instante
+    con la corrida `queued` (o la que ya estaba en curso)."""
+    from core.admin import production_readiness_service as readiness
+
+    _require_master(principal)
+    try:
+        await readiness.request_platform_run(principal.admin)
+    except readiness.EnqueueFailed as exc:
+        raise ApiError(503, "enqueue_failed", str(exc)) from exc
+    return await _platform_meta_app(principal)
+
+
+# ------------------------------------------------- Agent OS por negocio (solo master)
+def _require_master_agent_os(principal: Principal) -> None:
+    # Solo el master, también en test (decisión del dueño, 2026-10-20; excepción a ADR-0134 §2 como
+    # la purga): ni el tester ni un colaborador.
+    if not es_master(principal.admin):
+        raise ApiError.forbidden("Solo el admin master cambia el Agent OS de un negocio.")
+
+
+# ---------------------------------------------------------------- referencias retiradas (HU-AOS-59, ADR-0184)
+class RetiredReferenceRow(BaseModel):
+    """Una referencia retirada, con el mismo contenido que una fila de `auditar-referencias`."""
+
+    scope: Literal["version", "draft", "release"] = Field(
+        description="`version`: la última versión publicada del agente. `draft`: el borrador, si difiere de esa "
+        "versión (se avisa, no cuenta como falla). `release`: el manifiesto de una release activa."
+    )
+    agent: str = Field(description="Key del agente.")
+    version: int | None = Field(description="Número de versión (null en el borrador).")
+    path: str = Field(description="Ruta en el contenido (p. ej. `tools[3].tool`).")
+    code: str = Field(description="`accion_inexistente` o `procedimiento_inexistente` (código interno: solo para el equipo).")
+    kind: Literal["action", "procedure"]
+    name: str
+    destination: str = Field(description="Lo que haría `migrar-referencias`: «quitar» o «reemplazar por <id> <rango>».")
+    message: str = Field(description="El mismo aviso en palabras simples que ve el dueño.")
+    where: list[str] = Field(description="Releases activas que lo contienen («conexión <id> release #n»).")
+
+
+class RetiredAsideConnection(BaseModel):
+    """Conexión borrada o que no produce conversaciones: se reporta aparte y no cuenta como falla."""
+
+    connection_id: uuid.UUID
+    reason: Literal["borrada", "playground", "integracion"]
+    release: int | None
+    rows: list[RetiredReferenceRow]
+
+
+class RetiredAffectedConnection(BaseModel):
+    connection_id: uuid.UUID
+    release: int = Field(description="Número de la release activa afectada.")
+
+
+class RetiredReferencesReport(BaseModel):
+    tenant_id: uuid.UUID
+    slug: str
+    affected: bool = Field(description="Hay versiones o releases activas con referencias retiradas (lo que pone el exit code del CLI).")
+    agents_affected: int
+    releases_affected: int
+    rows: list[RetiredReferenceRow] = Field(description="Versiones publicadas y releases activas: lo que cuenta.")
+    drafts: list[RetiredReferenceRow] = Field(description="Borradores con referencias retiradas: se avisan, no cuentan.")
+    affected_connections: list[RetiredAffectedConnection]
+    aside: list[RetiredAsideConnection]
+    error: str | None = Field(description="Si la auditoría de este negocio falló, por qué; el resto del informe puede estar vacío.")
+
+
+def _fila_retirada(f: Any) -> RetiredReferenceRow:
+    from core.agents.aviso_retiros import texto_de, tipo_api, tipo_de
+
+    tipo = tipo_de(f.codigo)
+    return RetiredReferenceRow(
+        scope="draft" if f.ambito == "borrador" else f.ambito,
+        agent=f.agente,
+        version=f.version,
+        path=f.ruta,
+        code=f.codigo,
+        kind=tipo_api(tipo),
+        name=f.nombre,
+        destination=f.destino,
+        message=texto_de(f.ruta, tipo, f.nombre, en_uso=f.ambito == "release"),
+        where=list(f.donde),
+    )
+
+
+_ERRORES_RETIRADAS: dict[int | str, dict[str, Any]] = {
+    403: {"model": OpcionesErrorOut, "description": "No es el admin master (tampoco el tester ni un colaborador)."},
+    404: {"model": OpcionesErrorOut, "description": "El negocio no existe o está borrado."},
+}
+
+
+@router.get(
+    "/tenants/{tenant_id}/retired-references",
+    response_model=RetiredReferencesReport,
+    responses=_ERRORES_RETIRADAS,
+)
+async def get_retired_references(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> RetiredReferencesReport:
+    """Agentes, versiones, rutas, códigos y releases activas de este negocio que nombran algo que el
+    binario ya retiró: el mismo contenido que `agent-core db auditar-referencias --tenant <slug>`.
+    Solo lectura: no escribe nada ni corrige. Solo el master (ni el tester ni un colaborador)."""
+    _require_master_agent_os(principal)
+    from core.plugin_manager import plugin_manager
+    from core.releases.referencias_retiradas import auditar
+
+    reporte = await auditar(tenant_ids=[tenant_id], modules=plugin_manager.list_modules())
+    if not reporte.negocios:
+        raise ApiError.not_found("Negocio no encontrado.")
+    n = reporte.negocios[0]
+    return RetiredReferencesReport(
+        tenant_id=n.tenant_id,
+        slug=n.slug,
+        affected=n.afectado,
+        agents_affected=n.agentes_afectados,
+        releases_affected=n.releases_afectadas,
+        rows=[_fila_retirada(f) for f in n.filas],
+        drafts=[_fila_retirada(f) for f in n.borradores],
+        affected_connections=[
+            RetiredAffectedConnection(connection_id=cid, release=numero) for cid, numero in n.conexiones_afectadas.items()
+        ],
+        aside=[
+            RetiredAsideConnection(
+                connection_id=c.conexion_id,
+                reason=c.motivo,  # type: ignore[arg-type]
+                release=c.release,
+                rows=[_fila_retirada(f) for f in c.filas],
+            )
+            for c in n.aparte
+        ],
+        error=n.error,
+    )
+
+
+# ---------------------------------------------------------------- gate de pass^k (HU-AOS-21 parte 4)
+class GateBandera(BaseModel):
+    cerrado: bool = Field(description="Con el gate cerrado, una versión sin veredicto no se activa (409 `gate_pendiente`).")
+    tope_usd_mensual: float | None = Field(
+        default=None, description="Tope mensual de las mediciones (USD, lo paga la plataforma); null = el del entorno."
+    )
+
+
+class GateBanderaIn(GateBandera):
+    model_config = ConfigDict(extra="forbid")
+
+
+@router.get("/tenants/{tenant_id}/gate", response_model=GateBandera)
+async def get_gate(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> GateBandera:
+    """Bandera del gate de pass^k del negocio y su tope mensual. Solo el master."""
+    _require_master_agent_os(principal)
+    from core.releases import gate
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            bandera = await gate.leer(tenant_id)
+    except gate.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return GateBandera(cerrado=bandera.cerrado, tope_usd_mensual=bandera.tope_usd_mensual)
+
+
+@router.put("/tenants/{tenant_id}/gate", response_model=GateBandera)
+async def put_gate(
+    tenant_id: uuid.UUID,
+    payload: GateBanderaIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> GateBandera:
+    """Enciende o apaga el gate del negocio (auditado como `release_gate_bandera`). 409
+    `sin_base_de_eval` si se intenta cerrar sin la base de evaluación configurada en el entorno."""
+    _require_master_agent_os(principal)
+    from core.releases import gate
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            bandera = await gate.fijar(
+                tenant_id,
+                cerrado=payload.cerrado,
+                tope_usd_mensual=payload.tope_usd_mensual,
+                actor=f"admin:{principal.admin.email}",
+            )
+    except gate.SinBaseDeEval as exc:
+        raise ApiError(409, "sin_base_de_eval", str(exc)) from None
+    except gate.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    except ValueError as exc:
+        raise ApiError(422, "tope_invalido", str(exc)) from None
+    return GateBandera(cerrado=bandera.cerrado, tope_usd_mensual=bandera.tope_usd_mensual)
+
+
+# ---------------------------------------------------------------- colaboración con pila (HU-AOS-20)
+ModoPila = Literal["off", "shadow", "active"]
+ModoVerificacion = Literal["shadow", "active"]
+
+
+class ColaboracionBanderas(BaseModel):
+    pila: ModoPila = Field(
+        description="Pila de tareas: «off», «shadow» (calcula y anota lo que abriría) o «active» (la abre)."
+    )
+    verificar_horarios: ModoVerificacion = Field(
+        description="Horarios sin respaldo: «shadow» solo cuenta; «active» rechaza y reintenta."
+    )
+    verificar_preguntas: ModoVerificacion = Field(
+        description="Más preguntas que `composition.maxQuestions`: «shadow» solo cuenta; «active» rechaza."
+    )
+    disponibles: dict[str, list[str]] = Field(
+        default_factory=dict, description="Los valores que este despliegue ya aplica (la HU se entrega por partes)."
+    )
+
+
+class ColaboracionBanderasIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pila: ModoPila | None = None
+    verificar_horarios: ModoVerificacion | None = None
+    verificar_preguntas: ModoVerificacion | None = None
+
+
+def _colaboracion_out(bandera: Any) -> ColaboracionBanderas:
+    from core.kernel.banderas_pila import DISPONIBLES
+
+    return ColaboracionBanderas(
+        pila=bandera.pila,
+        verificar_horarios=bandera.verificar_horarios,
+        verificar_preguntas=bandera.verificar_preguntas,
+        disponibles={k: list(v) for k, v in DISPONIBLES.items()},
+    )
+
+
+@router.get("/tenants/{tenant_id}/colaboracion", response_model=ColaboracionBanderas)
+async def get_colaboracion(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> ColaboracionBanderas:
+    """Banderas de la colaboración con pila de tareas del negocio. Solo el master."""
+    _require_master_agent_os(principal)
+    from core.kernel import banderas_pila as colaboracion
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            bandera = await colaboracion.leer(tenant_id)
+    except colaboracion.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return _colaboracion_out(bandera)
+
+
+@router.put("/tenants/{tenant_id}/colaboracion", response_model=ColaboracionBanderas)
+async def put_colaboracion(
+    tenant_id: uuid.UUID,
+    payload: ColaboracionBanderasIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> ColaboracionBanderas:
+    """Cambia las banderas que vengan (auditado como `agent_os_colaboracion`). 409 `no_disponible`
+    con un valor que este despliegue todavía no aplica."""
+    _require_master_agent_os(principal)
+    from core.kernel import banderas_pila as colaboracion
+    from core.shared.tenant import tenant_scope
+
+    cambios = payload.model_dump(exclude_none=True)
+    try:
+        async with tenant_scope(tenant_id):
+            bandera = (
+                await colaboracion.fijar(tenant_id, cambios, actor=f"admin:{principal.admin.email}")
+                if cambios
+                else await colaboracion.leer(tenant_id)
+            )
+    except colaboracion.NoDisponible as exc:
+        raise ApiError(409, "no_disponible", str(exc)) from None
+    except colaboracion.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return _colaboracion_out(bandera)
+
+
+
+# ---------------------------------------------------------------- opciones directas (SPEC-40, ADR-0172 §5)
+class OpcionesDirectasBandera(BaseModel):
+    habilitada: bool = Field(
+        description="Si las plantillas con opciones que ejecutan una tool están encendidas para el negocio. "
+        "Apagada: toda la API `/plantillas-opciones` responde 404 `opciones_directas_no_habilitadas`."
+    )
+
+
+class OpcionesDirectasBanderaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Estricto: solo `true`/`false` (no «1», «yes» ni «true» como texto) para una bandera que enciende envíos reales.
+    habilitada: StrictBool
+
+
+_ERRORES_OPCIONES_DIRECTAS: dict[int | str, dict[str, Any]] = {
+    403: {"model": OpcionesErrorOut, "description": "No es el admin master (tampoco el tester ni un colaborador)."},
+    404: {"model": OpcionesErrorOut, "description": "El negocio no existe o está borrado."},
+}
+
+
+@router.get(
+    "/tenants/{tenant_id}/opciones-directas",
+    response_model=OpcionesDirectasBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def get_opciones_directas(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> OpcionesDirectasBandera:
+    """Bandera de las opciones directas del negocio (apagada por defecto). Solo el master."""
+    _require_master_agent_os(principal)
+    from core.kernel.opciones import bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            encendida = await bandera.leer(tenant_id)
+    except bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return OpcionesDirectasBandera(habilitada=encendida)
+
+
+@router.put(
+    "/tenants/{tenant_id}/opciones-directas",
+    response_model=OpcionesDirectasBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def put_opciones_directas(
+    tenant_id: uuid.UUID,
+    payload: OpcionesDirectasBanderaIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> OpcionesDirectasBandera:
+    """Enciende o apaga las opciones directas del negocio (auditado como `opciones_directas_bandera`). Idempotente:
+    repetir el mismo valor deja el mismo estado. Solo el master; es por negocio y no toca ningún otro."""
+    _require_master_agent_os(principal)
+    from core.kernel.opciones import bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            encendida = await bandera.fijar(tenant_id, payload.habilitada, actor=f"admin:{principal.admin.email}")
+    except bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return OpcionesDirectasBandera(habilitada=encendida)
+
+
+# ---------------------------------------------------------------- avisos por canal (ADR-0178 D2, ADR-0108)
+class AvisosPorCanalBandera(BaseModel):
+    habilitada: bool = Field(
+        description="Si los avisos por evento también salen como texto por QR, chat web, Messenger e Instagram "
+        "(con el texto que el negocio definió para cada canal en `fallback_text_by_channel`). Apagada: solo "
+        "conversaciones de WhatsApp, como siempre."
+    )
+
+
+class AvisosPorCanalBanderaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Estricto: solo `true`/`false`, como la de opciones directas: enciende envíos reales a clientes finales.
+    habilitada: StrictBool
+
+
+@router.get(
+    "/tenants/{tenant_id}/avisos-por-canal",
+    response_model=AvisosPorCanalBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def get_avisos_por_canal(
+    tenant_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AvisosPorCanalBandera:
+    """Bandera de los avisos por evento por canal de texto del negocio (apagada por defecto). Solo el master."""
+    _require_master_agent_os(principal)
+    from core.gateway import avisos_bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            encendida = await avisos_bandera.leer(tenant_id)
+    except avisos_bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return AvisosPorCanalBandera(habilitada=encendida)
+
+
+@router.put(
+    "/tenants/{tenant_id}/avisos-por-canal",
+    response_model=AvisosPorCanalBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def put_avisos_por_canal(
+    tenant_id: uuid.UUID,
+    payload: AvisosPorCanalBanderaIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> AvisosPorCanalBandera:
+    """Enciende o apaga los avisos por canal de texto del negocio (auditado como `avisos_por_canal_bandera`).
+    Idempotente. Solo el master; es por negocio y no toca ningún otro."""
+    _require_master_agent_os(principal)
+    from core.gateway import avisos_bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            encendida = await avisos_bandera.fijar(tenant_id, payload.habilitada, actor=f"admin:{principal.admin.email}")
+    except avisos_bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return AvisosPorCanalBandera(habilitada=encendida)
+
+
+class CanalBandera(BaseModel):
+    canal: str = Field(description="Canal que se abre por negocio (hoy solo `whatsapp_twilio`, ADR-0186).")
+    habilitado: bool = Field(
+        description="Si el tipo de conexión del canal está disponible en el catálogo del negocio. Apagado: "
+        "«Próximamente» y su alta responde 404."
+    )
+
+
+class CanalBanderaIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    habilitado: StrictBool
+
+
+async def _canal_bandera(tenant_id: uuid.UUID, canal: str, valor: bool | None, principal: Principal) -> CanalBandera:
+    _require_master_agent_os(principal)
+    from core.gateway.twilio import bandera as canal_bandera
+    from core.shared.tenant import tenant_scope
+
+    try:
+        async with tenant_scope(tenant_id):
+            if valor is None:
+                encendido = await canal_bandera.leer(tenant_id, canal)
+            else:
+                encendido = await canal_bandera.fijar(tenant_id, canal, valor, actor=f"admin:{principal.admin.email}")
+    except canal_bandera.CanalDesconocido:
+        raise ApiError.not_found("Canal desconocido.") from None
+    except canal_bandera.NegocioNoEncontrado:
+        raise ApiError.not_found("Negocio no encontrado.") from None
+    return CanalBandera(canal=canal, habilitado=encendido)
+
+
+@router.get(
+    "/tenants/{tenant_id}/canales/{canal}",
+    response_model=CanalBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def get_canal_bandera(
+    tenant_id: uuid.UUID,
+    canal: str,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> CanalBandera:
+    """Bandera de un canal que se abre por negocio (apagada por defecto). Solo el master."""
+    return await _canal_bandera(tenant_id, canal, None, principal)
+
+
+@router.put(
+    "/tenants/{tenant_id}/canales/{canal}",
+    response_model=CanalBandera,
+    responses=_ERRORES_OPCIONES_DIRECTAS,
+)
+async def put_canal_bandera(
+    tenant_id: uuid.UUID,
+    canal: str,
+    payload: CanalBanderaIn,
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> CanalBandera:
+    """Abre o cierra un canal para el negocio (auditado como `canal_bandera`). Idempotente. Solo el master; es por
+    negocio y no toca ningún otro."""
+    return await _canal_bandera(tenant_id, canal, payload.habilitado, principal)

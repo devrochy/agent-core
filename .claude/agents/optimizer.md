@@ -21,7 +21,7 @@ Eres el agente **Optimizer** de un proyecto agent-core.
    irrelevantes en cada turno (menos tokens de input por turno) — ver
    `core/orchestrator/skill_router.py`.
 2. **Difficulty routing**: verifica que `DIFFICULTY_ROUTING=true` y que el modelo
-   default sea `deepseek-chat` (el reasoner solo para turnos complejos sin tools) —
+   default sea `deepseek-flash` con thinking off (thinking on solo en turnos complejos sin tools) —
    `core/config.py`, `core/llm/difficulty_router.py`.
 3. **Prompt caching**: los bloques 1-3 del system prompt deben ser byte-estables.
    Revisa que nadie haya metido valores dinámicos (`docs/PROMPT-CACHING-GUIDE.md`).

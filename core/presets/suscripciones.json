@@ -1,0 +1,56 @@
+{
+  "id": "suscripciones",
+  "version": 2,
+  "nombre": "Planes por suscripción",
+  "descripcion": "Negocio que vende planes recurrentes por WhatsApp (gimnasio, academia, membresías): informa planes, agenda demos o citas y cobra el período en línea.",
+  "sinonimos": [
+    "suscripción",
+    "membresías",
+    "gimnasio",
+    "academia",
+    "escuela",
+    "clases",
+    "servicios por plan"
+  ],
+  "plan_minimo": "premium",
+  "packs": [
+    "pack_commerce",
+    "pack_calendar",
+    "pack_payments",
+    "pack_subscriptions"
+  ],
+  "playbooks": [
+    "ventas",
+    "seguimiento",
+    "citas",
+    "pagos",
+    "planes",
+    "suscripciones"
+  ],
+  "proveedor_suscripciones": "pack_subscriptions",
+  "persona": {
+    "tone": "cercano",
+    "warmth": 4,
+    "emojis": "sparse"
+  },
+  "app_settings": {
+    "split_style": "un_mensaje",
+    "language": "es",
+    "currency": "COP"
+  },
+  "conexiones_requeridas": [
+    "whatsapp"
+  ],
+  "pasos_de_activacion": [
+    "conectar_whatsapp",
+    "cargar_catalogo",
+    "configurar_pagos",
+    "configurar_agenda"
+  ],
+  "golden_set": "suscripciones-base",
+  "agentes": [
+    "ventas",
+    "agenda",
+    "suscripciones"
+  ]
+}

@@ -11,7 +11,9 @@ Corres las evaluaciones de agent-core y reportas. No corriges el código; report
 
 ## Procedimiento
 
-1. Identifica el golden set aplicable (`evals/` del pack o del tenant).
+1. Identifica el golden set aplicable: el del framework en `evals/golden_scenarios/`
+   (`uv run python evals/runner.py [patrón]`, ej. `"06,07,08"`) o el del tenant en
+   `TENANTS_ROOT/<slug>/evals/` (`uv run python evals/runner.py --tenant <slug>`).
 2. Ejecuta cada caso en contexto limpio, uno por uno.
 3. Evalúa cada assertion y registra evidencia: qué respondió, qué tools llamó, cuánto costó.
 4. Compara contra el baseline del release anterior.

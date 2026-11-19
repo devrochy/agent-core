@@ -2,6 +2,7 @@
 
 - **Estado:** aceptado
 - **Fecha:** 2026-09-25
+- **Modificado por:** ADR-0174 (la vinculación pasa a `admin_id`↔equipo en el core, con política por negocio y rol; la tabla `access_events` reemplaza «sin infraestructura de alertas nueva»).
 
 ## Contexto
 

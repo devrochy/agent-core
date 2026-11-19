@@ -1,0 +1,73 @@
+{
+  "nombre": "cargo-siguiente-periodo",
+  "descripcion": "Un mes después se genera el cargo del período con su link, y el cliente lo consulta y recibe el link.",
+  "pasos": [
+    {
+      "nota": "cliente con Basic activo",
+      "accion": "activar_suscripcion",
+      "datos": {
+        "plan": {
+          "plan_code": "PLAN-BASIC",
+          "nombre": "Plan Basic",
+          "precio": 200000,
+          "moneda": "COP",
+          "periodicidad": "mensual",
+          "trial_dias": 0
+        }
+      }
+    },
+    {
+      "nota": "28 días después (3 de anticipación)",
+      "reloj": "+28d"
+    },
+    {
+      "job": "pack_subscriptions.generar_cargos"
+    },
+    {
+      "nota": "cargo pendiente con link",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.subscription_id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "pendiente",
+          "monto": 200000,
+          "link_url": {
+            "$contiene": "pagos.simulados"
+          }
+        },
+        "guardar_como": "cargo"
+      }
+    },
+    {
+      "nota": "aviso de cargo por el outbox",
+      "verifica": {
+        "tabla": "domain_events",
+        "donde": {
+          "topic": "subscription.charge_created",
+          "payload->>charge_id": "{cargo.id}"
+        },
+        "filas": 1
+      }
+    },
+    {
+      "nota": "el cliente pregunta cuánto debe",
+      "usuario": "Hola, ¿cuánto tengo que pagar de mi suscripción y cómo pago?",
+      "espera": {
+        "texto_contiene_alguno": [
+          "200.000",
+          "200,000",
+          "200000"
+        ],
+        "texto_contiene": [
+          "https://pagos.simulados/"
+        ]
+      },
+      "hasta_herramienta": "sub_link_pago",
+      "insistir": "Sí, pasame el link para pagarla en línea.",
+      "max_turnos": 3
+    }
+  ]
+}

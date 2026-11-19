@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator, model_validator
 
 from core.mcp.types import BasePluginConfig
+
+_PREFIJO = re.compile(r"^[A-Za-z0-9]{1,8}$")
+# Reenganche de leads (`jobs.follow_up_leads`): solo se escribe a quien habló en las últimas 24 h
+# (ventana de WhatsApp: fuera de ella no se puede mandar texto libre), así que la espera tiene que
+# ser menor que 24. Un valor de 24 o más dejaría las dos cotas de la consulta en el mismo punto:
+# el cron correría cada día sin enviar nada.
+FOLLOW_UP_HORAS_POR_DEFECTO = 4
+FOLLOW_UP_HORAS_MAX = 23
+# `business_name` y `vertical` se siguen aceptando por compatibilidad con configuraciones ya
+# guardadas (antes los pedía el pedido de un plan; hoy los planes son del pack de Suscripciones).
+_CAMPOS_VALIDOS = {
+    "full_name", "id_document", "address", "municipality", "city", "phone", "email",
+    "business_name", "vertical",
+}
 
 
 class CRMConfig(BasePluginConfig):
@@ -17,44 +32,65 @@ class CRMConfig(BasePluginConfig):
         default=True,
         description="Crear un lead automáticamente cuando inicia una conversación nueva",
     )
+    # `le=8760` se mantiene: negocios que guardaron 24 (el default anterior) tienen que seguir cargando
+    # su config; fuera de 1..`FOLLOW_UP_HORAS_MAX` el cron usa el valor por defecto.
     follow_up_hours: int = Field(
-        default=24, description="Horas sin actividad antes de marcar un lead para seguimiento"
+        default=FOLLOW_UP_HORAS_POR_DEFECTO, ge=0, le=8760,
+        description=(
+            f"Horas sin actividad antes de reenganchar a un lead calificado (1 a {FOLLOW_UP_HORAS_MAX}: "
+            "solo se le escribe dentro de las 24 h de WhatsApp desde su último mensaje)"
+        ),
+    )
+    # HU-CRM-22: avisos de seguimiento. Nacen encendidos porque solo se disparan por seguimientos que
+    # una persona programó (HU-CRM-21) y van a su propio centro de notificaciones, sin mensajes al cliente.
+    seguimiento_recordatorios: bool = Field(
+        default=True, description="Avisar cuando llega la hora de un seguimiento programado"
+    )
+    seguimiento_resumen_diario: bool = Field(
+        default=True, description="Mandar cada mañana «Tu día de ventas» con los seguimientos y leads nuevos"
+    )
+    seguimiento_resumen_hora: int = Field(
+        default=8, ge=0, le=19, description="Hora del negocio (0-19) desde la que sale el resumen diario"
     )
     scoring_mode: Literal["manual", "auto"] = Field(
         default="auto", description="Cómo se puntúan los leads (auto = el agente pregunta y califica)"
     )
 
     # ---------------------------------------------------------------- segmentación de clientes
+    # Conteos y días: al menos 1 (422 si no; P0 de pruebas 2026-10-17).
     customer_frecuente_min_pedidos: int = Field(
-        default=2, description="Mínimo de pedidos para considerarse 'frecuente'"
+        default=2, ge=1, le=10_000, description="Mínimo de pedidos para considerarse 'frecuente'"
     )
     customer_frecuente_intervalo_max_dias: int = Field(
-        default=45, description="Días máximos entre pedidos para mantenerse 'frecuente'"
+        default=45, ge=1, le=3650, description="Días máximos entre pedidos para mantenerse 'frecuente'"
     )
     customer_fiel_min_pedidos: int = Field(
-        default=5, description="Mínimo de pedidos para considerarse 'fiel'"
+        default=5, ge=1, le=10_000, description="Mínimo de pedidos para considerarse 'fiel'"
     )
     customer_inactivo_dias_sin_comprar: int = Field(
-        default=120, description="Días sin comprar para marcar al cliente como 'inactivo'"
+        default=120, ge=1, le=3650, description="Días sin comprar para marcar al cliente como 'inactivo'"
     )
 
     # ---------------------------------------------------------------- montos y pagos
     monto_alto_threshold: float = Field(
-        default=1_000_000, description="Monto en COP que dispara escalamiento a humano"
+        default=1_000_000, ge=0, le=9_999_999_999, allow_inf_nan=False, description="Monto en COP que dispara escalamiento a humano"
     )
-    # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant
-    # yopoldo): un pedido con pago_en_linea por debajo del mínimo real de la
-    # pasarela (Wompi: $150.000 COP, ver pack_payments/providers/wompi.py::
-    # MIN_AMOUNT_COP) nunca puede completarse -- pack_commerce no puede
-    # importar esa constante (invariante 5, ningún pack importa de otro), así
-    # que este valor es la política propia de pack_commerce, con un default
-    # que hoy coincide con el mínimo real. Antes de esto, `crear_pedido`
-    # dejaba pasar cualquier monto con pago_en_linea y el rechazo solo
-    # ocurría (si el modelo llegaba a llamarla) en generar_link_pago, ya
-    # tarde para redirigir la conversación con naturalidad.
-    pago_en_linea_monto_minimo: float = Field(
-        default=150_000,
-        description="Monto mínimo en COP para aceptar pago_en_linea al crear un pedido",
+    # Gate determinístico en crear_pedido (incidente real 2026-09-11, tenant yopoldo): un
+    # pedido con pago_en_linea por debajo del mínimo de la pasarela nunca puede completarse, y
+    # descubrirlo al generar el link es tarde para redirigir la conversación con naturalidad.
+    # El mínimo lo fija la pasarela y depende del ambiente (Wompi: 150.000 COP en sandbox, 1.500
+    # en producción), así que por defecto se le pregunta a la capacidad de pagos del core
+    # (`core.payments.monto_minimo`); pack_commerce no importa pack_payments (invariante 5).
+    # Un valor explícito manda sobre el de la pasarela (política propia del negocio).
+    pago_en_linea_monto_minimo: float | None = Field(
+        default=None,
+        ge=0,
+        le=9_999_999_999,
+        allow_inf_nan=False,
+        description=(
+            "Monto mínimo en COP para aceptar pago_en_linea al crear un pedido. Vacío = el de la "
+            "pasarela según su ambiente (sandbox o producción); un valor lo reemplaza."
+        ),
     )
     # Cuentas de transferencia visibles al cliente (nunca pasan por el LLM).
     # Formato: [{"entity","accountType","accountNumber","holderName","holderDocument"}]
@@ -63,9 +99,84 @@ class CRMConfig(BasePluginConfig):
         description="Cuentas para transferencia (Nequi, Bancolombia...). Se envían por _safe_append.",
     )
 
+    # Formas de pago del agente (SPEC-48, HU-COM-21): contra entrega, transferencia y pago en
+    # línea, con su interruptor e instrucciones. None = sin configurar (se deduce como antes).
+    payment_forms: list[dict] | None = Field(
+        default=None,
+        description="Formas de pago del agente: [{method, enabled, instructions}] (ver pack_commerce.formas_de_pago).",
+    )
+    transfer_proof_required: bool = Field(
+        default=True,
+        description="Con transferencia, pedir el comprobante antes de dar el pedido por pagado.",
+    )
+    transfer_ocr_enabled: bool = Field(
+        default=True,
+        description="Leer el comprobante con visión y compararlo con el pedido (exige pedir el comprobante).",
+    )
+
     # ---------------------------------------------------------------- moneda
     currency_symbol: str = Field(default="$", description="Símbolo de moneda para precios")
     currency_code: str = Field(default="COP", description="Código de moneda (COP, USD)")
+
+    # ---------------------------------------------------------------- numeración y checkout (HU-COM-03)
+    order_prefix: str = Field(
+        default="OC",
+        description="Prefijo del número público de pedido de este negocio (1-8 letras/números).",
+    )
+    checkout_fields: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "domicilio": ["full_name", "id_document", "address", "municipality", "city", "phone"],
+            "recoger_en_tienda": ["full_name", "id_document", "phone"],
+        },
+        description=(
+            "Campos que pide crear_pedido por tipo de entrega "
+            "(claves: full_name, id_document, address, municipality, city, phone, email). "
+            "El retiro en tienda no pide dirección."
+        ),
+    )
+
+    @field_validator("payment_forms")
+    @classmethod
+    def _formas_de_pago_validas(cls, valor: list[dict] | None) -> list[dict] | None:
+        from pack_commerce.formas_de_pago import normalizar_formas
+
+        return normalizar_formas(valor)
+
+    @field_validator("transfer_accounts", mode="before")
+    @classmethod
+    def _cuentas_validas(cls, valor: object) -> list[dict]:
+        # Al cargar no se rechaza una config ya guardada: las cuentas se sanean (texto corto) y
+        # las que no son objetos se descartan. La validación estricta es la del PUT del panel.
+        from pack_commerce.formas_de_pago import sanear_cuentas
+
+        return sanear_cuentas(valor)
+
+    @model_validator(mode="after")
+    def _lectura_exige_comprobante(self) -> CRMConfig:
+        if self.transfer_ocr_enabled and not self.transfer_proof_required:
+            raise ValueError("Leer el comprobante exige pedirlo: activa «Pedir comprobante».")
+        return self
+
+    @field_validator("order_prefix", mode="before")
+    @classmethod
+    def _normalizar_prefijo(cls, valor: object) -> str:
+        texto = str(valor or "").strip().upper()
+        if not _PREFIJO.match(texto):
+            return "OC"
+        return texto
+
+    @field_validator("checkout_fields")
+    @classmethod
+    def _campos_conocidos(cls, valor: dict[str, list[str]]) -> dict[str, list[str]]:
+        for campos in (valor or {}).values():
+            desconocidos = [c for c in campos if c not in _CAMPOS_VALIDOS]
+            if desconocidos:
+                # Mensaje fijo (sin el valor recibido): termina en `error.fields` de la respuesta.
+                raise ValueError(
+                    "checkout_fields tiene campos desconocidos; los válidos son: "
+                    + ", ".join(sorted(_CAMPOS_VALIDOS))
+                )
+        return valor
 
     # ---------------------------------------------------------------- copy (ADR-0017: CONFIG editable)
     follow_up_lead_message: str = Field(
@@ -74,12 +185,14 @@ class CRMConfig(BasePluginConfig):
             "¿Sigues interesado? Estoy aquí para ayudarte con lo que necesites."
         ),
         description="Mensaje de reenganche de leads ({name}, {interest})",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     follow_up_quote_message: str = Field(
         default=(
             "¡Hola! Te tengo lista tu cotización por {total}. ¿La confirmo para armar tu pedido? 😋"
         ),
         description="Mensaje de reenganche de cotizaciones ({total})",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     order_status_visible: dict[str, str] = Field(
         default_factory=lambda: {
@@ -104,12 +217,14 @@ class CRMConfig(BasePluginConfig):
     order_confirmed_message: str = Field(
         default="✅ Tu pedido {public_order_number} quedó confirmado. Total a pagar: {total}.",
         description="Mensaje de confirmación de pedido (efectivo)",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
     order_confirmed_transfer_message: str = Field(
         default=(
             "Tu pedido {public_order_number} quedó confirmado por transferencia.\n\n{transfer_block}"
         ),
         description="Mensaje de confirmación de pedido por transferencia",
+        json_schema_extra={"mensaje": "whatsapp"},
     )
 
     # ---------------------------------------------------------------- crm_completion_check (ADR-0025)

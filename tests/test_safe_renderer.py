@@ -79,3 +79,44 @@ def test_apply_concatena_appends_distintos() -> None:
     )
     resultado = apply_safe_extras("Listo.", extras)
     assert "A: 1" in resultado and "B: 2" in resultado
+
+
+# ---- línea huérfana (test, 2026-10-10): el verificador quitó la URL que el modelo copió del
+# formato del append y la misma línea llegó completa por `_safe_append`.
+_LINK = "💳 Podés pagar en línea aquí: https://checkout.wompi.co/l/abc123"
+
+
+def test_se_quita_la_linea_huerfana_que_repite_el_append_sin_url() -> None:
+    texto = "¡Listo! Tu pedido OC-0007 quedó creado.\n\n💳 Podés pagar en línea aquí:\n\n¿Algo más?"
+    final = apply_safe_extras(texto, extract_safe_extras([{"_safe_append": _LINK}]))
+    assert final == "¡Listo! Tu pedido OC-0007 quedó creado.\n\n¿Algo más?\n\n" + _LINK
+    assert final.count("Podés pagar en línea aquí") == 1
+
+
+def test_la_linea_huerfana_con_vineta_o_sin_dos_puntos_tambien_se_quita() -> None:
+    for huerfana in ("- 💳 Podés pagar en línea aquí:", "💳 Podés pagar en línea aquí", "* 💳  Podés pagar en línea aquí: "):
+        final = apply_safe_extras(f"Pedido creado.\n{huerfana}", extract_safe_extras([{"_safe_append": _LINK}]))
+        assert final == "Pedido creado.\n\n" + _LINK, huerfana
+
+
+def test_si_solo_quedaba_la_linea_huerfana_queda_el_append() -> None:
+    final = apply_safe_extras("💳 Podés pagar en línea aquí:", extract_safe_extras([{"_safe_append": _LINK}]))
+    assert final == _LINK
+
+
+def test_no_se_tocan_las_lineas_con_otra_url_ni_las_que_no_repiten_el_append() -> None:
+    texto = (
+        "Términos: https://www.solvershub.site/terminos\n"
+        "Podés pagar cuando quieras.\n"
+        "💳 Podés pagar en línea aquí: https://otro.link/viejo"
+    )
+    final = apply_safe_extras(texto, extract_safe_extras([{"_safe_append": _LINK}]))
+    assert final == texto + "\n\n" + _LINK
+
+
+def test_las_lineas_sin_url_del_append_no_cuentan_como_huerfanas() -> None:
+    """Un bloque de transferencia no trae URL: una línea del modelo igual a su encabezado no
+    es un link que quitó el verificador."""
+    append = "💳 Datos para tu transferencia:\nNequi 300 000 0000"
+    texto = "Te paso los datos.\n💳 Datos para tu transferencia:"
+    assert apply_safe_extras(texto, extract_safe_extras([{"_safe_append": append}])) == texto + "\n\n" + append

@@ -81,3 +81,10 @@ un baneo real en producción obligue a migrar tenants a Coexistence/Meta.
 `core/gateway/sender.py` (ventana de servicio provider-aware), `core/config.py`,
 `docker-compose.yml`/Coolify (servicio connector), panel `/admin/conexiones` (QR +
 badge + aceptación de riesgo). **Sin cambio de contrato congelado.**
+
+## Enmienda (2026-10-28)
+
+El modo «solo respuesta» (`waweb_mode = reply_only`) se mostraba en el panel pero ningún camino de envío lo aplicaba. Los avisos
+por evento por QR (ADR-0108, adenda D2 de ADR-0178, tras bandera) son el primer camino que lo hace cumplir: solo salen con
+`allow_outbound`. Los demás envíos siguen como estaban.
+

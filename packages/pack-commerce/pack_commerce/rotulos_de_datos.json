@@ -1,0 +1,10 @@
+{
+  "address": "Dirección",
+  "payment_method": "Forma de pago",
+  "payment_method.pago_en_linea": "Pago en línea",
+  "payment_method.transferencia": "Transferencia",
+  "payment_method.efectivo_contraentrega": "Efectivo contra entrega",
+  "delivery_method": "Entrega",
+  "delivery_method.domicilio": "A domicilio",
+  "delivery_method.recoger_en_tienda": "Recoger en tienda"
+}

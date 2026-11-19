@@ -1,0 +1,285 @@
+"""Agent OS en el negocio de prueba del tester (SPEC-30, HU-QA-09, adenda de ADR-0135).
+
+«Preparar mis datos» deja el negocio `qa-<hex>` del tester listo para probar el Agent OS, con
+las MISMAS funciones de la operación (sin duplicar su lógica):
+
+1. **Chat web activo** con su clave (`chat_web_conexion.guardar_widget`, igual que
+   Configuración → Chat web): reutiliza la clave si ya existe y agrega el origen de
+   `LANDING_BASE_URL`, que sirve `/w/<clave>`. Las demás conexiones no se tocan.
+2. **Coordinador** del negocio y sus instancias en las conexiones (`asegurar_base_del_negocio`, lo
+   mismo que el alta; el negocio ya nace en v3, ADR-0191).
+3. **Agentes del preset v2** (`aplicar_agentes`) con un manifiesto en memoria: las plantillas
+   `AGENTES` (Ventas y Agenda, con las keys de sus plantillas). Ningún preset de archivo encaja con
+   el negocio de prueba, y uno nuevo en `core/presets/` aparecería en el alta de clientes reales.
+   Nunca toca agentes que ya existan (los que creó el tester en el editor, p. ej. Cobranza).
+4. **Release activa** en cada conexión conversacional (`construir` + `promover`, que pasa el
+   gate): el tester es el dueño de su negocio de prueba y pulsar el botón es su decisión.
+
+El motor de procedimientos y el enrutamiento ya no son banderas (ADR-0191, HU-AOS-69): corren en
+todo negocio, así que no hay nada que encender.
+
+Solo con `QA_TESTERS_ENABLED`, y solo en el negocio de la fila del
+tester. Idempotente: cada paso lo es. Si un paso falla, se guarda el motivo
+(`qa_tester_datasets.error`) y el negocio queda como esté; el reintento completa lo que falte.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+from urllib.parse import urlsplit
+
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+
+from core.config import get_settings
+from core.db.session import get_session
+from core.shared.logger import get_logger
+from core.shared.tenant import tenant_scope
+
+log = get_logger(__name__)
+
+ACTOR = "system:qa-datos"
+# Plantillas de `core/presets/plantillas/` que se instalan. Es un fixture de QA, como los
+# fragmentos `qa.json`. Cobranza NO: el catálogo de pruebas la crea desde el editor de agentes
+# (con la key de la plantilla ya ocupada, el editor respondería 409 `key_taken`).
+AGENTES = ("ventas", "agenda")
+NOMBRE_ROL = {"core": "Coordinador", "specialist": "Especialista", "backoffice": "Backoffice"}
+
+
+class FalloAgentOS(Exception):
+    """Un paso no se completó; el mensaje es el motivo que ve el tester."""
+
+
+def _motivo(exc: Exception) -> str:
+    if isinstance(exc, FalloAgentOS):
+        return str(exc)[:500]
+    if isinstance(exc, DBAPIError):
+        # Sin los parámetros SQL.
+        return f"error de base de datos ({type(exc.orig).__name__})"
+    # Sin el texto de la excepción: puede llevar rutas o datos de conexión; el detalle va al log.
+    return f"error inesperado ({type(exc).__name__}); vuelve a intentarlo"
+
+
+def origen_de_la_landing() -> str | None:
+    url = get_settings().landing_base_url.strip()
+    partes = urlsplit(url)
+    if not partes.scheme or not partes.netloc:
+        return None
+    return f"{partes.scheme}://{partes.netloc}".lower()
+
+
+def enlace_del_chat(clave: str) -> str | None:
+    base = get_settings().landing_base_url.strip().rstrip("/")
+    return f"{base}/w/{clave}" if base else None
+
+
+def _manifiesto() -> Any:
+    from core.presets import PresetManifest
+    from core.qa.datos import PACKS, PLAN
+
+    return PresetManifest(
+        id="qa",
+        version=1,
+        nombre="Centro de pruebas",
+        descripcion="Agentes del negocio de prueba del tester (HU-QA-09). No es un preset de alta.",
+        plan_minimo=PLAN,
+        packs=list(PACKS),
+        agentes=list(AGENTES),
+    )
+
+
+# ------------------------------------------------------------------ pasos
+async def _negocio_del_tester(tenant_id: uuid.UUID, slug: str) -> None:
+    """El negocio vivo con ese id Y ese slug `qa-` (si no, `FalloAgentOS`)."""
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT 1 FROM tenants WHERE id = :t AND slug = :s AND slug LIKE 'qa-%' "
+                    "AND deleted_at IS NULL"
+                ),
+                {"t": tenant_id, "s": slug},
+            )
+        ).first()
+    if fila is None:
+        raise FalloAgentOS("el negocio no es el negocio de prueba del tester")
+
+
+async def _chat_web(tenant_id: uuid.UUID) -> None:
+    from sqlalchemy import select
+
+    from core.db.models import AppSettings
+    from core.gateway import chat_web_conexion
+
+    origen = origen_de_la_landing()
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            config = (
+                await session.execute(
+                    select(AppSettings.web_chat_config).where(
+                        AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none() or {}
+            origenes = [str(o) for o in (config.get("allowed_origins") or []) if o]
+            if origen and origen not in [o.rstrip("/").lower() for o in origenes]:
+                origenes.append(origen)
+            await chat_web_conexion.guardar_widget(session, tenant_id, enabled=True, allowed_origins=origenes)
+
+
+async def _coordinador(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
+    from core.agents.base import asegurar_base_del_negocio
+
+    async with tenant_scope(tenant_id):
+        await asegurar_base_del_negocio(tenant_id, modules=modulos)
+
+
+async def _preset(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
+    from core.presets.agentes import aplicar_agentes
+
+    async with tenant_scope(tenant_id):
+        reporte = await aplicar_agentes(tenant_id, _manifiesto(), modules=modulos, aplicar=True)
+    if reporte.omitido:
+        raise FalloAgentOS(f"preset v2 omitido: {reporte.omitido}")
+    if reporte.errores:
+        raise FalloAgentOS(f"preset v2: {reporte.errores[0][:300]}")
+
+
+async def _conexiones(tenant_id: uuid.UUID) -> list[tuple[uuid.UUID, uuid.UUID | None]]:
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            filas = (
+                await session.execute(
+                    text(
+                        "SELECT cc.id, cc.active_release_id FROM channel_connections cc "
+                        "JOIN connection_types ct ON ct.id = cc.type_id WHERE cc.tenant_id = :t "
+                        "AND cc.deleted_at IS NULL AND ct.produces_conversations ORDER BY cc.id"
+                    ),
+                    {"t": tenant_id},
+                )
+            ).all()
+    return [(f[0], f[1]) for f in filas]
+
+
+async def _activar_releases(tenant_id: uuid.UUID, modulos: list[Any]) -> None:
+    from core.releases.build import construir
+    from core.releases.promocion import promover
+
+    async with tenant_scope(tenant_id):
+        for cid, activa in await _conexiones(tenant_id):
+            build = await construir(
+                tenant_id, cid, actor=ACTOR, modules=modulos, notas="Centro de pruebas: Preparar mis datos (HU-QA-09)."
+            )
+            if build.release_id != activa:
+                await promover(tenant_id, cid, build.release_id, actor=ACTOR, motivo="qa_datos", exencion="qa_datos")
+
+
+# ------------------------------------------------------------------ entrada
+async def preparar(tenant_id: uuid.UUID, slug: str) -> str | None:
+    """Deja el negocio de prueba listo para el Agent OS. Devuelve None si quedó listo o el motivo
+    si no (nunca lanza: los datos y las cuentas del tester sirven igual). 409 si ya hay una
+    corrida en curso para ese negocio (`QaError`)."""
+    from core.admin.roles import testers_habilitados
+    from core.plugin_manager import plugin_manager
+    from core.qa.service import QaError
+
+    if not testers_habilitados():
+        return "Los datos de prueba solo existen en el entorno de test (QA_TESTERS_ENABLED)."
+    async with get_session() as candado:
+        from core.kernel.banderas import CANDADO_SQL
+
+        # El mismo candado que los escenarios (HU-QA-13): no se intercalan builds.
+        tomado = (await candado.execute(text(CANDADO_SQL), {"t": str(tenant_id)})).scalar_one()
+        if not tomado:
+            raise QaError("conflicto", "Tu negocio de prueba se está preparando para el Agent OS. Espera un momento.")
+        try:
+            await _negocio_del_tester(tenant_id, slug)
+            modulos = list(plugin_manager.list_modules())
+            await _chat_web(tenant_id)
+            await _coordinador(tenant_id, modulos)
+            await _preset(tenant_id, modulos)
+            await _activar_releases(tenant_id, modulos)
+        except Exception as exc:  # frontera: el motivo queda para el tester y el reintento
+            motivo = _motivo(exc)
+            log.warning(
+                "qa_datos_agent_os_fallo",
+                tenant_id=str(tenant_id),
+                error=type(exc).__name__,
+                motivo=motivo[:300],
+                exc_info=not isinstance(exc, FalloAgentOS | DBAPIError),
+            )
+            return f"No se terminó de preparar el Agent OS: {motivo}"
+    log.info("qa_datos_agent_os_listo", tenant_id=str(tenant_id))
+    return None
+
+
+async def resumen(tenant_id: uuid.UUID, motivo: str | None) -> dict[str, Any]:
+    """Lo que ve el tester: estado, motivo, chat web (clave y enlace) y agentes del chat web."""
+    from core.gateway import chat_web_conexion
+
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text("SELECT 1 FROM tenants WHERE id = :t AND deleted_at IS NULL"),
+                {"t": tenant_id},
+            )
+        ).first()
+    chat: dict[str, Any] | None = None
+    agentes: list[dict[str, Any]] = []
+    if fila is not None:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                conexion = await chat_web_conexion.conexion_del_negocio(session, tenant_id)
+                if conexion is not None:
+                    chat = {
+                        "clave": conexion.external_id,
+                        "enlace": enlace_del_chat(conexion.external_id),
+                        "activo": bool(conexion.active),
+                    }
+                    filas = (
+                        await session.execute(
+                            text(
+                                "SELECT a.key, a.name, a.kind, i.is_default FROM agent_instances i "
+                                "JOIN agents a ON a.tenant_id = i.tenant_id AND a.id = i.agent_id "
+                                "WHERE i.tenant_id = :t AND i.connection_id = :c AND i.deleted_at IS NULL "
+                                "AND a.deleted_at IS NULL AND a.status = 'active' "
+                                "ORDER BY a.kind = 'core' DESC, i.is_default DESC, a.key"
+                            ),
+                            {"t": tenant_id, "c": conexion.id},
+                        )
+                    ).all()
+                    agentes = [
+                        {"key": f[0], "nombre": f[1], "rol": NOMBRE_ROL.get(str(f[2]), str(f[2])), "por_defecto": bool(f[3])}
+                        for f in filas
+                    ]
+    listo = fila is not None and chat is not None and chat["activo"]
+    return {
+        "estado": "listo" if listo and not motivo else ("error" if motivo else "pendiente"),
+        "motivo": motivo,
+        "chat_web": chat,
+        "agentes": agentes,
+    }
+
+
+def como_contenido(agent_os: dict[str, Any]) -> dict[str, Any]:
+    """La misma información como una entrada de `contenido`, que la pestaña Datos ya muestra."""
+    detalle: list[str] = []
+    chat = agent_os.get("chat_web")
+    if chat:
+        detalle.append(f"Chat web: {chat['enlace'] or chat['clave']}")
+    if agent_os["agentes"]:
+        detalle.append(
+            "Agentes: "
+            + ", ".join(a["nombre"] + (" (por defecto)" if a["por_defecto"] else "") for a in agent_os["agentes"])
+        )
+    if agent_os["estado"] == "listo":
+        detalle.append("Enrutamiento activo: «quiero agendar una demo» lo atiende Agenda")
+    elif agent_os["motivo"]:
+        detalle.append(agent_os["motivo"])
+    else:
+        detalle.append("Pendiente: pulsa «Preparar mis datos» para activarlo")
+    return {"habilidad": "Agent OS", "detalle": detalle}
+
+
+__all__ = ["AGENTES", "como_contenido", "enlace_del_chat", "preparar", "resumen"]

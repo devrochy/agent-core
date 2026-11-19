@@ -28,7 +28,7 @@ DEFAULT_SPEC_JSON = (
     '{"id":"agent-default","version":"1.0.0","tenantId":"{tenant_id}",'
     '"persona":{"role":"asistente","tone":"cercano","warmth":3,"emojis":"sparse",'
     '"maxLength":500,"forbiddenPhrases":[],"locale":"es-CO"},'
-    '"model":{"primary":"deepseek-chat","temperature":0.3},'
+    '"model":{"primary":"deepseek-flash","temperature":0.3},'
     '"memory":{"shortTermTurns":30,"summarize":true},'
     '"playbooks":['
     '{"name":"identidad","description":"Identidad del asistente"},'

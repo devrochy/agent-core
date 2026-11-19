@@ -8,16 +8,17 @@ esta lógica estaba duplicada 3 veces dentro de `meta_preflight.py`.
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Any
 
 import httpx
 
-from core.shared.exceptions import AgentCoreError
+from core.gateway.channels.base import ErrorCategory, ProviderError
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
 
-ErrorCategory = Literal["RATE_LIMIT", "AUTH", "TRANSIENT", "PERMANENT"]
+# Meta solo produce RATE_LIMIT, AUTH, TRANSIENT y PERMANENT (POLICY la arma el envío de waweb):
+# el resto de `ErrorCategory` es de otros proveedores (ADR-0186).
 
 # Meta: códigos de rate limit / uso excesivo de la app -- no reintentar en
 # bucle, se resuelve con backoff (real, no un "reintentá ahora" ciego --
@@ -44,7 +45,7 @@ _UNDOCUMENTED_CODES = {80007}
 _DEFAULT_BACKOFF_MS = 60_000  # 60s, arranque del backoff exponencial
 
 
-class GraphError(AgentCoreError):
+class GraphError(ProviderError):
     """Error de una llamada a Graph API, ya clasificado."""
 
     def __init__(
@@ -62,9 +63,14 @@ class GraphError(AgentCoreError):
         is_transient: bool = False,
         retry_after_ms: int | None = None,
     ) -> None:
-        self.category = category
-        self.http_status = http_status
-        self.code = code
+        super().__init__(
+            message,
+            provider="meta",
+            code=code,
+            http_status=http_status,
+            category=category,
+            retry_after=retry_after_ms / 1000 if retry_after_ms is not None else None,
+        )
         self.error_subcode = error_subcode
         self.error_type = error_type
         self.fbtrace_id = fbtrace_id
@@ -72,11 +78,14 @@ class GraphError(AgentCoreError):
         self.error_user_msg = error_user_msg
         self.is_transient = is_transient
         self.retry_after_ms = retry_after_ms
-        super().__init__(message)
 
     @property
-    def message(self) -> str:
-        return str(self)
+    def user_text(self) -> str:
+        """El motivo que da Meta para mostrarle a una persona (`error_user_title` y
+        `error_user_msg`), o `message` si no vino. "Invalid parameter" sola no dice qué
+        parámetro ni por qué; el motivo sí (p. ej. que el número ya está en otra cuenta)."""
+        parts = [p.strip() for p in (self.error_user_title, self.error_user_msg) if p and p.strip()]
+        return ": ".join(parts) if parts else self.message
 
 
 def _retry_after_from_usage(headers: httpx.Headers, attempt: int) -> int:
@@ -110,8 +119,11 @@ def classify_and_build_error(
     un 429) -- en ese caso no hay `error.code` que clasificar, se trata como
     PERMANENT con el texto crudo truncado."""
     if body is None:
+        # El cuerpo crudo (HTML de un proxy o CDN) va solo al log: el mensaje se muestra y se
+        # guarda en el panel (HU-CONN-07).
+        log.warning("graph_respuesta_no_json", http_status=http_status, body=raw_text[:500])
         return GraphError(
-            f"Respuesta no-JSON de Meta (HTTP {http_status}): {raw_text[:500]}",
+            f"Respuesta no-JSON de Meta (HTTP {http_status})",
             category="PERMANENT",
             http_status=http_status,
         )

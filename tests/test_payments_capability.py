@@ -11,7 +11,7 @@ class _Cap:
     def methods(self) -> list[PaymentMethod]:
         return [PaymentMethod(id="x", label="X")]
 
-    async def create_link(self, *, reference: str, amount: float, description: str = "", method: str | None = None) -> PaymentLink:
+    async def create_link(self, *, reference: str, amount: float, description: str = "", method: str | None = None, agent_id=None) -> PaymentLink:
         return PaymentLink(reference=reference, url="https://x", qr_payload="https://x")
 
 

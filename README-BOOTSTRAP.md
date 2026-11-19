@@ -22,7 +22,7 @@ git add -A && git commit -m "chore: bootstrap del devkit de agent-core"
 | `docs/ROADMAP.md` | Sprints con criterio de salida. Es tu tablero. |
 | `docs/inventory.md` | Plantilla del inventario del Paso 1. |
 | `../solvershub/security.md` | Documento de seguridad para ventas (vive en el centro de lanzamiento). |
-| `packages/contracts/src/index.ts` | Los 5 contratos del framework. |
+| `packages/contracts/agentcore_contracts/` | Los contratos del framework (Python; el espejo TS se retiró en 3.0.0, ADR-0113). |
 | `prompts/` | Los prompts exactos para pegar en modo plan. |
 
 ## Orden de ejecución

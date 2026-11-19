@@ -22,12 +22,17 @@ from core.waweb.policy import WaWebPolicy
 
 
 class SendBackend(Protocol):
-    """Lo mínimo que el drenaje necesita del socket. Lo implementa el backend
-    Neonize (o un fake de test)."""
+    """Lo mínimo que el drenaje necesita del socket: la MISMA firma de
+    `WaWebSocket.send` (core/waweb/backend.py), que es la que implementa
+    `NeonizeSocket`. Antes pedía `send_text(connection_id=...)`, un método
+    que el socket real no tiene: el envío fallaba con AttributeError en el
+    conector y el reply de error terminaba en la DLQ del worker."""
 
-    async def send_text(
-        self, *, connection_id: str, to: str, text: str, image_url: str | None = None
-    ) -> str: ...
+    async def send(self, *, to: str, text: str, image_url: str | None = None) -> str: ...
+
+    async def send_image(self, *, to: str, image_url: str, caption: str = "") -> str: ...
+
+    async def send_audio(self, *, to: str, audio_url: str, ptt: bool = True) -> str: ...
 
 
 async def process_job(
@@ -48,17 +53,34 @@ async def process_job(
     request_id = str(job.get("request_id", ""))
     try:
         if allow is not None and not await allow():
-            reply: dict[str, Any] = {"ok": False, "error": "envíos pausados o tope diario alcanzado"}
+            reply: dict[str, Any] = {
+                "ok": False,
+                "reason": "policy",
+                "error": "envíos pausados o tope diario alcanzado",
+            }
         else:
             delay_ms = random.randint(policy.send_min_delay_ms, policy.send_max_delay_ms)
             if delay_ms > 0:
                 await sleep(delay_ms / 1000)
-            wamid = await backend.send_text(
-                connection_id=str(job.get("connection_id", "")),
-                to=str(job.get("to", "")),
-                text=str(job.get("text", "")),
-                image_url=str(job.get("image_url") or "") or None,
-            )
+            to = str(job.get("to", ""))
+            if job.get("kind") == "audio" and job.get("audio_url"):
+                wamid = await backend.send_audio(
+                    to=to,
+                    audio_url=str(job.get("audio_url")),
+                    ptt=True,
+                )
+            elif job.get("kind") == "image" and job.get("image_url"):
+                wamid = await backend.send_image(
+                    to=to,
+                    image_url=str(job.get("image_url")),
+                    caption=str(job.get("text", "")),
+                )
+            else:
+                wamid = await backend.send(
+                    to=to,
+                    text=str(job.get("text", "")),
+                    image_url=str(job.get("image_url") or "") or None,
+                )
             if on_sent is not None:
                 await on_sent()
             reply = {"ok": True, "wamid": wamid}

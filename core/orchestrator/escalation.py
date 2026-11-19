@@ -4,7 +4,12 @@ Reglas (los plugins pueden disparar más vía MCPHost.trigger_escalation):
 - keyword: el cliente pide un humano o usa palabras configuradas.
 - guardrail: una validación bloqueó la respuesta dos veces.
 - llm_refusal: el modelo se negó a responder.
-- plugin:<razon>: disparada por un plugin.
+- plugin:<razon>: disparada por un plugin (`MCPHost.trigger_escalation`), o por una tool
+  cuyo resultado trae `"escalate": True` (o un `BusinessError(escalate=True)`): el loop
+  escala con `plugin:<tool>` y cierra el turno con la respuesta de escalamiento.
+- tool:<código>: el modelo llamó `escalate_to_human` con un motivo del catálogo cerrado.
+
+El código y la etiqueta legibles de cada motivo están en `motivos_escalacion.py` (HU-UX-17).
 
 Al escalar SIEMPRE se pausa el bot para esa conversación
 (lección de la Fase 18 de agent-sale: el bot seguía respondiendo tras escalar).
@@ -32,6 +37,10 @@ ESCALATION_REPLY = (
     "En un momento te contactan por este mismo chat."
 )
 
+# Respuesta neutral al agotar el guardrail con `guardrail_fail_action=neutral`
+# (ADR-0092). Respaldo determinista de la sección `verifying` de `respuestas.md`.
+VERIFYING_REPLY = "Dejame verificar eso y te confirmo en un momento, por favor."
+
 
 async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -> None:
     async with get_session() as session:
@@ -46,8 +55,10 @@ async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -
             return
         conversation.status = "escalated"
         conversation.bot_paused = True  # CRÍTICO: el bot deja de responder ya
+        escalation_id = uuid.uuid4()
         session.add(
             Escalation(
+                id=escalation_id,
                 tenant_id=get_current_tenant_id(),
                 conversation_id=conversation_id,
                 reason=reason,
@@ -62,6 +73,16 @@ async def escalate(conversation_id: uuid.UUID, reason: str, summary: str = "") -
         input_data={"reason": reason, "summary": summary},
     )
     await event_bus.emit(ON_ESCALATION_TRIGGERED, conversation_id=conversation_id, reason=reason)
+
+    # Centro de notificaciones (ADR-0167): feed + push al equipo con acceso a Escalaciones.
+    # Nunca propaga: un fallo del aviso no puede deshacer la escalación.
+    tenant = get_current_tenant_id()
+    if tenant is not None:
+        from core.notifications.catalog import escalacion
+        from core.notifications.service import notify_standalone
+
+        await notify_standalone(tenant, escalacion(conversation_id, reason, escalation_id))
+
     log.info("conversation_escalated", conversation_id=str(conversation_id), reason=reason)
 
 

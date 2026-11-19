@@ -1,10 +1,14 @@
 """Endpoints de webhooks de canales.
 
 Flujo (patrón gateway -> queue -> consumer de agent-sale):
-1. Verificar firma (HMAC-SHA256 con App Secret).
-2. Aplanar el payload en eventos individuales (`webhook_flatten.py`) y
-   resolver el tenant de cada uno (`webhook_route_tenant.py`) -- un payload
-   puede traer entries de varios tenants si comparten la misma App de Meta.
+1. Aplanar el payload en eventos individuales (`webhook_flatten.py`) y
+   resolver el tenant de cada grupo (entry, número) (`webhook_route_tenant.py`)
+   -- un payload puede traer entries de varios tenants si comparten la misma
+   App de Meta.
+2. Verificar la firma (HMAC-SHA256 con App Secret) y saber QUIÉN firmó: la
+   plataforma autoriza cualquier grupo; el secreto de una conexión, solo los
+   grupos cuyos activos son de esa conexión (ADR-0100, ADR-0126). Un grupo que
+   su conexión no firmó no se procesa.
 3. Registrar cada evento en `webhook_events` (auditoría + idempotencia por
    `(meta_app_id, external_id)`) -- si esto falla, 500 a propósito (Meta
    reintenta) y se alerta: es la única red de seguridad ante una BD caída.
@@ -20,7 +24,9 @@ El LLM nunca corre dentro del request del webhook.
 from __future__ import annotations
 
 import json
+import re
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, Query, Request, Response
@@ -31,7 +37,8 @@ from core.gateway.channels.registry import inbound_adapter_for
 from core.gateway.connections import effective_credentials
 from core.gateway.idempotency import claim_message_once
 from core.gateway.webhook_flatten import FlattenedEvent, flatten_payload
-from core.gateway.webhook_route_tenant import resolve_tenant_for_event
+from core.gateway.webhook_route_tenant import EventRoute, route_event
+from core.gateway.webhook_secrets import CacheDeSecretos
 from core.gateway.webhook_verify import constant_time_equal
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
@@ -67,91 +74,199 @@ async def verify_webhook_tenant(
 ) -> Response:
     """Handshake de verificación por tenant: `/webhooks/whatsapp/<slug>`.
 
-    Cada app/tenant tiene su propio webhook (la URL la imprime
-    `agent-core tenant webhook <slug>`). El verify_token se toma de la conexión
-    del tenant (o del `.env`).
+    Cada app propia del negocio registra esta URL (la imprime `agent-core tenant webhook
+    <slug>`). Se acepta el `verify_token` que registró cualquiera de sus conexiones
+    (HU-CONN-05): con dos apps BYOK, cada una re-verifica su suscripción con el suyo.
     """
-    from core.gateway.connections import resolve_effective_verify_token
+    from core.gateway.webhook_secrets import verify_tokens_aceptados
     from core.tenants import resolve_tenant_by_slug
 
     tenant_id = await resolve_tenant_by_slug(slug)
-    if tenant_id is None:
+    if tenant_id is None or hub_mode != "subscribe":
         return Response(status_code=403)
-    # Orden: ChannelConnection (conexión manual) -> MetaConnection BYOK
-    # (verify_token propio generado en el wizard) -> `.env` (global). Misma
-    # resolución que usa el registro (`/admin/conexiones`), para que el token
-    # registrado en Meta sea el que este handler acepta.
     async with tenant_scope(tenant_id):
-        verify_token = await resolve_effective_verify_token(tenant_id)
-    if hub_mode == "subscribe" and verify_token and constant_time_equal(hub_verify_token, verify_token):
+        aceptados = await verify_tokens_aceptados(tenant_id)
+    # Se comparan todos (sin cortar en el primero): el tiempo no dice cuál coincidió.
+    coincide = [constant_time_equal(hub_verify_token, token) for token in aceptados]
+    if any(coincide):
         return Response(content=hub_challenge, media_type="text/plain; charset=utf-8")
     return Response(status_code=403)
 
 
-async def _tenant_y_secretos(payload: dict[str, Any]) -> tuple[uuid.UUID | None, list[str]]:
-    """Negocios y secretos con los que puede venir firmado el webhook.
+@dataclass(frozen=True)
+class _Grupo:
+    """Eventos de una entry y un número, ya ruteados (ADR-0095). Se rutea una sola vez
+    por POST: la firma y el despacho usan la misma resolución."""
 
-    Por cada entry se resuelve su negocio (teléfono -> WABA) y se recolecta el
-    **secret efectivo del negocio** (BYOK / conexión manual) y luego el del
-    framework (`.env`). Dos bugs reales corregidos acá (2026-09-29):
-    - la ruta genérica validaba solo con el secret del framework: con BYOK toda
-      entrega terminaba en 401;
-    - el token BYOK vive bajo RLS de tenant (custodia `meta_token_store`): hay
-      que resolverlo dentro de `tenant_scope` o la lectura cae al `.env`.
-    """
-    from core.gateway.connections import resolve_effective_app_secret
-    from core.gateway.webhook_route_tenant import _resolve_tenant_for_waba
-    from core.shared.tenant import resolve_tenant_for_phone
+    entry_id: str
+    sub_id: str | None
+    events: list[FlattenedEvent]
+    route: EventRoute
 
-    tenants: list[uuid.UUID] = []
-    for entry in payload.get("entry") or []:
-        tenant_id: uuid.UUID | None = None
-        for change in entry.get("changes") or []:
-            value = change.get("value") or {}
-            metadata = value.get("metadata") or {}
-            telefono = str(metadata.get("phone_number_id") or "").strip()
-            if not telefono:
-                continue
-            try:
-                tenant_id = await resolve_tenant_for_phone(telefono)
-            except Exception:
-                log.exception("webhook_tenant_lookup_failed", phone_number_id=telefono)
-            if tenant_id is not None:
+    @property
+    def clave(self) -> tuple[str, str | None]:
+        return (self.entry_id, self.sub_id)
+
+
+@dataclass(frozen=True)
+class Firmantes:
+    """Quién firmó el POST y qué grupos autoriza esa firma (ADR-0100, ADR-0126).
+
+    La app de la plataforma autoriza cualquier grupo (ningún negocio conoce su secreto). El
+    secreto de una conexión autoriza solo los grupos cuyos activos (número, WABA, página o
+    cuenta de Instagram) son de esa conexión: ni los de otro negocio ni los de otra conexión
+    del mismo negocio. `negocios`: los negocios de los grupos autorizados por un secreto
+    propio, para los logs y la alerta de firma ajena."""
+
+    plataforma: bool
+    grupos: frozenset[tuple[str, str | None]] = frozenset()
+    negocios: frozenset[uuid.UUID] = frozenset()
+    # ¿Algún grupo tenía un secreto propio contra el que verificar (o no se pudo leer)? Sin
+    # ninguno, un 401 es "grupo sin conexión dueña", no una firma inválida (ADR-0126).
+    con_candidatos: bool = False
+    # Objetos que autoriza un secreto de plataforma ACOTADO (el de la app de Instagram: solo `instagram`).
+    objetos: frozenset[str] = frozenset()
+
+    def autoriza(self, grupo: _Grupo) -> bool:
+        return self.plataforma or grupo.clave in self.grupos or grupo.events[0].object_type in self.objetos
+
+
+# Tope de grupos (entry, número) distintos en un POST que no firmó la plataforma. Cada grupo
+# cuesta consultas y descifrados ANTES de saber si la firma vale; Meta manda pocos por POST.
+MAX_GRUPOS_SIN_PLATAFORMA = 100
+
+_FIRMA_RE = re.compile(r"^sha256=[0-9a-fA-F]{64}$")
+
+
+def _agrupar(payload: dict[str, Any]) -> dict[tuple[str, str | None], list[FlattenedEvent]]:
+    """Agrupa por (entry, número), no por entry: con el ruteo por número primero
+    (ADR-0095), dos números de una misma entry pueden ser de negocios distintos."""
+    por_grupo: dict[tuple[str, str | None], list[FlattenedEvent]] = {}
+    for event in flatten_payload(payload):
+        por_grupo.setdefault((event.entry_id, event.sub_id), []).append(event)
+    return por_grupo
+
+
+async def _rutear_grupos(
+    payload: dict[str, Any], por_grupo: dict[tuple[str, str | None], list[FlattenedEvent]] | None = None
+) -> list[_Grupo]:
+    if por_grupo is None:
+        por_grupo = _agrupar(payload)
+    return [
+        _Grupo(entry_id, sub_id, events, await route_event(events[0]))
+        for (entry_id, sub_id), events in por_grupo.items()
+    ]
+
+
+def _firmo_la_plataforma(raw_body: bytes, firma: str) -> bool:
+    from core.gateway.connections import instagram_platform_secret, platform_app_secret
+    from core.gateway.webhook_verify import verify_signature
+
+    # La app de Instagram también cuenta para el tope de grupos (es una firma válida de la plataforma); lo que autoriza
+    # cada una lo decide `_firmantes_del_post`.
+    return any(
+        bool(secreto) and verify_signature(raw_body, firma, secreto)
+        for secreto in (platform_app_secret(), instagram_platform_secret())
+    )
+
+
+async def _rechazo_previo(
+    raw_body: bytes, firma: str, por_grupo: dict[tuple[str, str | None], list[FlattenedEvent]]
+) -> Response | None:
+    """401 antes de rutear y de leer secretos (ADR-0126): sin un header de firma bien formado
+    (salvo el escape de test), o con más grupos que el tope y sin la firma de la plataforma.
+    Corta la amplificación: cada grupo cuesta consultas y descifrados antes del HMAC."""
+    if not _FIRMA_RE.match(firma) and not _unsigned_allowed():
+        log.warning("webhook_firma_ausente_o_mal_formada")
+        return Response(status_code=401)
+    if len(por_grupo) > MAX_GRUPOS_SIN_PLATAFORMA and not _firmo_la_plataforma(raw_body, firma):
+        log.warning("webhook_demasiados_grupos_sin_plataforma", grupos=len(por_grupo))
+        return Response(status_code=401)
+    return None
+
+
+async def _secretos_del_grupo(grupo: _Grupo, cache: CacheDeSecretos) -> tuple[str, ...] | None:
+    """Secretos de las conexiones dueñas de los activos del grupo (HU-CONN-05), sin el de la
+    plataforma. Viven bajo RLS del negocio (custodia `meta_token_store`): se leen dentro de
+    su `tenant_scope` (bug real, 2026-09-29). `None` si no se pudieron leer."""
+    from core.gateway.webhook_secrets import secretos_del_grupo
+
+    tenant_id = grupo.route.tenant_id
+    if tenant_id is None:
+        return ()
+    try:
+        return await secretos_del_grupo(
+            tenant_id, object_type=grupo.events[0].object_type, entry_id=grupo.entry_id, sub_id=grupo.sub_id,
+            cache=cache,
+        )
+    except Exception:
+        log.exception("webhook_tenant_secret_failed", tenant_id=str(tenant_id), entry_id=grupo.entry_id)
+        return None
+
+
+async def _firmantes_del_post(
+    raw_body: bytes, firma: str, grupos: list[_Grupo], *, negocio_del_slug: uuid.UUID | None = None
+) -> Firmantes | None:
+    """Quién firmó el POST, o `None` si no hay ningún secreto contra el que verificar.
+
+    Primero la plataforma: si firmó, no hace falta mirar ninguna conexión. Si no, cada
+    grupo con negocio resuelto (sin conflicto) se verifica con los secretos de SUS
+    conexiones (`webhook_secrets.secretos_del_grupo`): el cuerpo solo dice qué activos
+    trae; qué secreto se prueba lo decide la base de datos. Por el endpoint por slug solo
+    cuentan los grupos de ese negocio (los demás se rechazan como `tenant_mismatch`).
+    `Firmantes` sin plataforma ni grupos = firma inválida."""
+    from core.gateway.connections import instagram_platform_secret, platform_app_secret
+    from core.gateway.webhook_verify import verify_signature
+
+    plataforma = platform_app_secret()
+    if plataforma and verify_signature(raw_body, firma, plataforma):
+        return Firmantes(plataforma=True)
+    instagram = instagram_platform_secret()
+    if instagram and verify_signature(raw_body, firma, instagram):
+        # Firma de la app de Instagram: solo autoriza los grupos de Instagram; los demás se rechazan como firma ajena.
+        return Firmantes(plataforma=False, objetos=frozenset({"instagram"}), con_candidatos=True)
+
+    hay_secreto = bool(plataforma) or bool(instagram)
+    con_candidatos = False
+    cache: CacheDeSecretos = {}
+    verificados: dict[str, bool] = {}
+    autorizados: set[tuple[str, str | None]] = set()
+    negocios: set[uuid.UUID] = set()
+    for grupo in grupos:
+        tenant_id = grupo.route.tenant_id
+        if tenant_id is None or grupo.route.conflict:
+            continue
+        if negocio_del_slug is not None and tenant_id != negocio_del_slug:
+            continue
+        secretos = await _secretos_del_grupo(grupo, cache)
+        if secretos is None:
+            # No se pudo leer: puede que tenga secreto. Nunca habilita el escape sin firma.
+            hay_secreto = con_candidatos = True
+            continue
+        for secreto in secretos:
+            hay_secreto = con_candidatos = True
+            if secreto not in verificados:
+                verificados[secreto] = verify_signature(raw_body, firma, secreto)
+            if verificados[secreto]:
+                autorizados.add(grupo.clave)
+                negocios.add(tenant_id)
                 break
-        if tenant_id is None:
-            waba_id = str(entry.get("id") or "").strip()
-            if waba_id:
-                try:
-                    tenant_id = await _resolve_tenant_for_waba(waba_id)
-                except Exception:
-                    log.exception("webhook_waba_lookup_failed", waba_id=waba_id)
-        if tenant_id is not None and tenant_id not in tenants:
-            tenants.append(tenant_id)
-
-    secretos: list[str] = []
-    for tenant_id in tenants:
-        try:
-            async with tenant_scope(tenant_id):
-                propio = await resolve_effective_app_secret(tenant_id)
-        except Exception:
-            log.exception("webhook_tenant_secret_failed", tenant_id=str(tenant_id))
-            propio = ""
-        if propio and propio not in secretos:
-            secretos.append(propio)
-
-    settings = get_settings()
-    marco = settings.whatsapp_app_secret or settings.meta_app_secret
-    if marco and marco not in secretos:
-        secretos.append(marco)
-    return (tenants[0] if tenants else None), secretos
+    if not hay_secreto:
+        return None
+    if len(negocios) > 1:
+        # Dos negocios con la misma app: se autorizan entre sí y no se puede distinguir.
+        log.warning("webhook_secreto_compartido", tenant_ids=sorted(str(t) for t in negocios))
+    return Firmantes(
+        plataforma=False, grupos=frozenset(autorizados), negocios=frozenset(negocios), con_candidatos=con_candidatos
+    )
 
 
 @router.post("/whatsapp")
 async def receive_whatsapp(request: Request) -> Response:
-    """Endpoint genérico: una sola App de Meta compartida (`.env`), puede
-    recibir entries de VARIOS tenants en un solo POST si comparten esa App
-    -- se resuelve el tenant de CADA entry por separado, nunca uno solo
-    para todo el payload."""
+    """Endpoint genérico: puede recibir entries de VARIOS tenants en un solo POST
+    (todos los que estén suscritos a la misma App de Meta). Se rutea cada grupo
+    (entry, número) por separado, y cada uno se procesa solo si lo firmó la
+    plataforma o la conexión dueña de sus activos (ADR-0100, ADR-0126)."""
     raw_body = await request.body()
     headers = {k.lower(): v for k, v in request.headers.items()}
 
@@ -160,23 +275,71 @@ async def receive_whatsapp(request: Request) -> Response:
     except json.JSONDecodeError:
         log.warning("webhook_payload_no_json")
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
+    if not isinstance(payload, dict):
+        log.warning("webhook_payload_no_es_objeto")
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
-    # La firma puede venir con la app del framework (`.env`) o con la del negocio
-    # (BYOK / conexión manual): se prueban los secretos aplicables.
-    tenant_id, secretos = await _tenant_y_secretos(payload)
-    if secretos:
-        from core.gateway.webhook_verify import verify_signature
+    firma = headers.get("x-hub-signature-256", "")
+    por_grupo = _agrupar(payload)
+    rechazo_previo = await _rechazo_previo(raw_body, firma, por_grupo)
+    if rechazo_previo is not None:
+        return rechazo_previo
+    grupos = await _rutear_grupos(payload, por_grupo)
+    firmantes = await _firmantes_del_post(raw_body, firma, grupos)
+    if firmantes is None:
+        # Sin ningún secreto resoluble, fail-closed (HU-ARCH-05): no se procesa
+        # un mensaje sin firma verificable salvo el escape de test.
+        primero = next((g.route.tenant_id for g in grupos if g.route.tenant_id is not None), None)
+        rechazo = await _fail_closed_sin_secreto(tenant_id=primero)
+        if rechazo is not None:
+            return rechazo
+        firmantes = Firmantes(plataforma=True)  # escape de test: nada que verificar, como antes
+    elif not firmantes.plataforma and not firmantes.grupos and not firmantes.objetos:
+        log.warning("webhook_signature_invalid", grupos=len(grupos))
+        await _alert_on_invalid_signature(get_settings().meta_app_id)
+        return Response(status_code=401)
+    elif not firmantes.plataforma and not firmantes.objetos:
+        # Una app propia apuntando al genérico (el wizard BYOK registra el slug): se mide
+        # para poder migrar esas suscripciones y retirar esta rama (ADR-0100).
+        log.info("webhook_generico_firmado_por_negocio", tenant_ids=sorted(str(t) for t in firmantes.negocios))
 
-        firma = headers.get("x-hub-signature-256", "")
-        if not any(verify_signature(raw_body, firma, secreto) for secreto in secretos):
-            log.warning(
-                "webhook_signature_invalid",
-                tenant_id=str(tenant_id) if tenant_id else None,
-            )
-            await _alert_on_invalid_signature(get_settings().meta_app_id)
-            return Response(status_code=401)
+    return await _process_payload(
+        payload, known_tenant_id=None, dev_fallback=True, firmantes=firmantes, grupos=grupos
+    )
 
-    return await _process_payload(payload, known_tenant_id=None, dev_fallback=True)
+
+_FIRMA_AJENA_VENTANA_S = 24 * 60 * 60
+
+
+async def _alert_on_firma_ajena(firmantes: Firmantes, ajenos: list[uuid.UUID]) -> None:
+    """Un negocio firmó eventos de otro: intento de inyección, o la WABA de un negocio
+    suscrita a la app de otro. Alerta una vez al día por par firmante-afectados: una
+    configuración rota alertaría cada pocos minutos y terminaría silenciando el canal.
+    Nunca corta el webhook: un fallo acá se loguea y se sigue."""
+    from core.shared.alerts import send_alert
+
+    firmantes_ids = ",".join(sorted(str(t) for t in firmantes.negocios))
+    ajenos_ids = ",".join(sorted({str(t) for t in ajenos}))
+    try:
+        primera_vez = await get_redis().set(
+            f"webhook_firma_ajena:{firmantes_ids}:{ajenos_ids}", "1", nx=True, ex=_FIRMA_AJENA_VENTANA_S
+        )
+    except Exception:
+        # Sin Redis no hay dedupe: mejor alertar de más que callar un intento de inyección.
+        log.exception("webhook_alerta_firma_ajena_sin_redis")
+        primera_vez = True
+    if not primera_vez:
+        return
+    try:
+        await send_alert(
+            "Un negocio firmó eventos de otro",
+            f"Llegaron eventos de {ajenos_ids} firmados con el secreto de {firmantes_ids}: no se "
+            "procesaron. Puede ser un intento de inyección o una WABA suscrita a la app de otro "
+            "negocio (ADR-0100).",
+            severity="critical",
+        )
+    except Exception:
+        log.exception("webhook_alerta_firma_ajena_fallo")
 
 
 async def _alert_on_invalid_signature(meta_app_id: str) -> None:
@@ -195,11 +358,42 @@ async def _alert_on_invalid_signature(meta_app_id: str) -> None:
         )
 
 
+def _unsigned_allowed() -> bool:
+    """`WEBHOOK_ALLOW_UNSIGNED=true` (solo entornos de prueba) permite procesar
+    sin firma, con aviso. En producción nunca se permite (fail-closed)."""
+    settings = get_settings()
+    if settings.webhook_allow_unsigned:
+        if settings.app_env == "production":
+            log.error("webhook_allow_unsigned_en_produccion")
+            return False
+        log.warning("webhook_sin_firma_permitido_por_flag")
+        return True
+    return False
+
+
+async def _fail_closed_sin_secreto(*, tenant_id: uuid.UUID | None) -> Response | None:
+    """Sin `app_secret` resoluble, fail-closed: 401, no se encola y se alerta.
+
+    Devuelve la respuesta 401 si hay que rechazar; `None` si se puede seguir
+    (existe secreto, o el escape de test está activo).
+    """
+    if _unsigned_allowed():
+        return None
+    log.error("webhook_sin_secreto_fail_closed", tenant_id=str(tenant_id) if tenant_id else None)
+    await _alert_on_invalid_signature(get_settings().meta_app_id or "default")
+    return Response(status_code=401)
+
+
 @router.post("/whatsapp/{slug}")
 async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
-    """Webhook por tenant: `/webhooks/whatsapp/<slug>`. El slug identifica al
-    tenant -- un solo tenant posible por diseño (una app dedicada = un slug),
-    a diferencia del genérico."""
+    """Webhook por tenant: `/webhooks/whatsapp/<slug>`, el que registra cada app propia
+    (BYOK) del negocio. El slug dice de qué negocio tiene que ser el POST; la firma de
+    cada grupo se verifica con el secreto de la conexión dueña de sus activos
+    (HU-CONN-05), así un negocio con dos apps recibe de las dos.
+
+    Un grupo de otro negocio se rechaza (`tenant_mismatch`), y uno cuyos activos no son de
+    ninguna conexión del negocio no se procesa (`unresolved_tenant`): sin conexión no hay
+    secreto con el que verificarlo, y antes se atribuía a ciegas al negocio del slug."""
     from core.billing.enforcement import is_tenant_operational
     from core.tenants import resolve_tenant_by_slug
 
@@ -211,22 +405,39 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
     raw_body = await request.body()
     headers = {k.lower(): v for k, v in request.headers.items()}
 
-    # tenant_scope solo envuelve la verificación de firma, que necesita el
-    # app_secret propio del tenant (effective_credentials). El parseo/enrutado
-    # de abajo vuelve a abrir su propio tenant_scope por entry en
-    # _process_payload -- no muevas lógica sensible fuera de ese `async with`
-    # de más abajo asumiendo que este de acá arriba todavía la cubre.
-    async with tenant_scope(tenant_id):
-        from core.gateway.connections import resolve_effective_app_secret
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        log.warning("webhook_payload_no_json", tenant_id=str(tenant_id))
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
+    if not isinstance(payload, dict):
+        log.warning("webhook_payload_no_es_objeto", tenant_id=str(tenant_id))
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
-        app_secret = await resolve_effective_app_secret(tenant_id)
-        if app_secret:
-            from core.gateway.webhook_verify import verify_signature
-
-            if not verify_signature(raw_body, headers.get("x-hub-signature-256", ""), app_secret):
-                log.warning("webhook_signature_invalid", tenant_id=str(tenant_id))
-                await _alert_on_invalid_signature(get_settings().meta_app_id or str(tenant_id))
-                return Response(status_code=401)
+    firma = headers.get("x-hub-signature-256", "")
+    por_grupo = _agrupar(payload)
+    rechazo_previo = await _rechazo_previo(raw_body, firma, por_grupo)
+    if rechazo_previo is not None:
+        return rechazo_previo
+    grupos = await _rutear_grupos(payload, por_grupo)
+    firmantes = await _firmantes_del_post(raw_body, firma, grupos, negocio_del_slug=tenant_id)
+    if firmantes is None:
+        # Sin ningún secreto resoluble, fail-closed (HU-ARCH-05).
+        rechazo = await _fail_closed_sin_secreto(tenant_id=tenant_id)
+        if rechazo is not None:
+            return rechazo
+        firmantes = Firmantes(plataforma=True)  # escape de test: nada que verificar, como antes
+    elif not firmantes.plataforma and not firmantes.grupos and not firmantes.objetos:
+        if not firmantes.con_candidatos:
+            # Ningún grupo es de una conexión del negocio (un número sin sincronizar, un
+            # evento de prueba del panel de Meta): no hay secreto que verificar y no es una
+            # firma inválida, no suma a la alerta de spoofing (contador compartido). 401 para
+            # que Meta reintente y entre cuando el número se sincronice (ADR-0126).
+            log.warning("webhook_grupo_sin_conexion", tenant_id=str(tenant_id), grupos=len(grupos))
+            return Response(status_code=401)
+        log.warning("webhook_signature_invalid", tenant_id=str(tenant_id), grupos=len(grupos))
+        await _alert_on_invalid_signature(get_settings().meta_app_id or str(tenant_id))
+        return Response(status_code=401)
 
     # Gate de billing DESPUÉS de la firma: antes filtraría el estado de
     # facturación de un tenant a quien no está autenticado (401 vs. 200).
@@ -234,42 +445,63 @@ async def receive_whatsapp_tenant(request: Request, slug: str) -> Response:
         log.warning("webhook_tenant_not_operational", tenant_id=str(tenant_id), slug=slug)
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
-    try:
-        payload = json.loads(raw_body)
-    except json.JSONDecodeError:
-        log.warning("webhook_payload_no_json", tenant_id=str(tenant_id))
-        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
-
-    return await _process_payload(payload, known_tenant_id=tenant_id)
+    return await _process_payload(payload, known_tenant_id=tenant_id, firmantes=firmantes, grupos=grupos)
 
 
 async def _process_payload(
-    payload: dict[str, Any], *, known_tenant_id: uuid.UUID | None, dev_fallback: bool = False
+    payload: dict[str, Any],
+    *,
+    known_tenant_id: uuid.UUID | None,
+    firmantes: Firmantes,
+    dev_fallback: bool = False,
+    grupos: list[_Grupo] | None = None,
 ) -> Response:
-    """Aplana, rutea (o usa `known_tenant_id` si ya se sabe por la URL),
-    registra en `webhook_events` y encola. Agrupa eventos por `entry_id`:
-    todos los eventos de un mismo entry comparten tenant (una entry = una
-    WABA/página/cuenta de IG = un tenant).
+    """Aplana, rutea, registra en `webhook_events` y encola, grupo por grupo
+    (entry, número).
+
+    `firmantes` es obligatorio (falla cerrado por construcción): un grupo solo se
+    procesa si lo firmó la plataforma o la conexión dueña de sus activos (ADR-0100,
+    ADR-0126). `known_tenant_id` (el negocio del slug) no atribuye nada: solo rechaza
+    los grupos que resuelven a otro negocio; uno sin negocio resuelto no se procesa.
+    `grupos`: los ya ruteados por el llamador, para no rutear dos veces.
 
     `dev_fallback`: solo el endpoint GENÉRICO en APP_ENV=development cae al
     `default_tenant()` si no resuelve nada (bootstrap sin conexión real
-    registrada) -- comportamiento preexistente, nunca en producción."""
+    registrada) -- comportamiento preexistente, nunca en producción; también
+    necesita estar autorizado por la firma."""
     from core.billing.enforcement import is_tenant_operational
 
-    events = flatten_payload(payload)
+    if grupos is None:
+        grupos = await _rutear_grupos(payload)
     settings = get_settings()
     meta_app_id = settings.meta_app_id or "unknown"
-
-    events_by_entry: dict[str, list[FlattenedEvent]] = {}
-    for event in events:
-        events_by_entry.setdefault(event.entry_id, []).append(event)
 
     total_enqueued = 0
     total_duplicates = 0
     any_entry_processed = False
+    ajenos: list[uuid.UUID] = []
 
-    for entry_id, entry_events in events_by_entry.items():
-        resolved_tenant_id = await resolve_tenant_for_event(entry_events[0])
+    for grupo in grupos:
+        entry_id, sub_id, entry_events, route = grupo.entry_id, grupo.sub_id, grupo.events, grupo.route
+        resolved_tenant_id = route.tenant_id
+
+        if route.conflict:
+            # Los activos del evento apuntan a más de un negocio (ADR-0095): no va
+            # a ninguno, ni al del slug ni al `default_tenant()` de desarrollo.
+            log.warning(
+                "webhook_tenant_conflict",
+                slug_tenant_id=str(known_tenant_id) if known_tenant_id else None,
+                entry_id=entry_id,
+                phone_number_id=sub_id,
+            )
+            for event in entry_events:
+                ok = await _log_webhook_event(
+                    meta_app_id, event, tenant_id=None, process_error="tenant_conflict",
+                    signature_ok=firmantes.autoriza(grupo),
+                )
+                if not ok:
+                    return _webhook_events_failure_response()
+            continue
 
         if known_tenant_id is not None and resolved_tenant_id is not None and resolved_tenant_id != known_tenant_id:
             # Defensa en profundidad (hallazgo auditor-multitenant, 2026-09-20):
@@ -285,16 +517,18 @@ async def _process_payload(
                 slug_tenant_id=str(known_tenant_id),
                 resolved_tenant_id=str(resolved_tenant_id),
                 entry_id=entry_id,
+                phone_number_id=sub_id,
             )
             for event in entry_events:
                 ok = await _log_webhook_event(
-                    meta_app_id, event, tenant_id=None, process_error="tenant_mismatch"
+                    meta_app_id, event, tenant_id=None, process_error="tenant_mismatch",
+                    signature_ok=firmantes.autoriza(grupo),
                 )
                 if not ok:
                     return _webhook_events_failure_response()
             continue
 
-        tenant_id = known_tenant_id if known_tenant_id is not None else resolved_tenant_id
+        tenant_id = resolved_tenant_id
 
         if tenant_id is None and dev_fallback and settings.app_env == "development":
             from core.shared.tenant import default_tenant
@@ -304,11 +538,44 @@ async def _process_payload(
         if tenant_id is None:
             for event in entry_events:
                 ok = await _log_webhook_event(
-                    meta_app_id, event, tenant_id=None, process_error="unresolved_tenant"
+                    meta_app_id, event, tenant_id=None, process_error="unresolved_tenant",
+                    signature_ok=firmantes.autoriza(grupo),
                 )
                 if not ok:
                     return _webhook_events_failure_response()
-            log.warning("webhook_unresolved_tenant", object_type=entry_events[0].object_type, entry_id=entry_id)
+            log.warning(
+                "webhook_unresolved_tenant",
+                object_type=entry_events[0].object_type,
+                entry_id=entry_id,
+                phone_number_id=sub_id,
+            )
+            continue
+
+        if not firmantes.autoriza(grupo):
+            # Lo firmó otra conexión (ADR-0100, ADR-0126): no se procesa ni se le atribuye
+            # a nadie. Va antes del chequeo de facturación, que registraría la fila a
+            # nombre de este negocio (`tenant_not_operational`) aunque no la mandó.
+            # De otro negocio: intento de inyección o WABA suscrita a una app ajena, con
+            # alerta. Del mismo negocio: una app suya firmando los activos de otra de sus
+            # conexiones (configuración cruzada), sin alerta.
+            del_mismo_negocio = tenant_id in firmantes.negocios
+            log.warning(
+                "webhook_firma_de_otra_conexion" if del_mismo_negocio else "webhook_firma_no_es_del_negocio",
+                tenant_id=str(tenant_id),
+                firmantes=sorted(str(t) for t in firmantes.negocios),
+                entry_id=entry_id,
+                phone_number_id=sub_id,
+                eventos=len(entry_events),
+            )
+            motivo = "signature_connection_mismatch" if del_mismo_negocio else "signature_tenant_mismatch"
+            for event in entry_events:
+                ok = await _log_webhook_event(
+                    meta_app_id, event, tenant_id=None, process_error=motivo, signature_ok=False,
+                )
+                if not ok:
+                    return _webhook_events_failure_response()
+            if not del_mismo_negocio:
+                ajenos.append(tenant_id)
             continue
 
         if not await is_tenant_operational(tenant_id):
@@ -332,14 +599,17 @@ async def _process_payload(
             total_enqueued += enqueued
             total_duplicates += duplicates
 
-            await _dispatch_template_events(entry_events)
-            await _dispatch_status_events(entry_events)
+            await _dispatch_template_events(tenant_id, entry_events)
+            await _dispatch_status_events(tenant_id, entry_events)
 
             # Marca processed_at DESPUÉS de que los tres dispatch terminaron
             # sin excepción -- es la señal que usa el check de "worker
             # caído" del cron de salud (`count_stalled_webhook_events`).
             # Antes de este ticket, `processed_at` no lo escribía nadie.
-            await _mark_entry_processed(meta_app_id, entry_events)
+            await _mark_entry_processed(meta_app_id, tenant_id, entry_events)
+
+    if ajenos:
+        await _alert_on_firma_ajena(firmantes, ajenos)
 
     if not any_entry_processed:
         # Todos los entries se saltaron (sin tenant resuelto o inactivo) --
@@ -359,12 +629,39 @@ def _webhook_events_failure_response() -> Response:
     return Response(status_code=500)
 
 
+async def mensajes_recibidos_desde(tenant_id: uuid.UUID, object_type: str, recipient_id: str, since: Any) -> int:
+    """Cuántos eventos de `object_type` dirigidos a `recipient_id` (la cuenta o la Página del negocio) llegaron desde
+    `since`. Para la prueba de humo de Instagram. `webhook_events` no tiene RLS: el filtro por negocio es explícito y está
+    aquí, en el único módulo que toca la tabla (`tests/test_webhook_events_solo_desde_webhooks.py`)."""
+    from sqlalchemy import func, select
+
+    from core.db.models import WebhookEvent
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        return int(
+            (
+                await session.execute(
+                    select(func.count()).select_from(WebhookEvent).where(
+                        WebhookEvent.tenant_id == tenant_id,
+                        WebhookEvent.object_type == object_type,
+                        WebhookEvent.received_at >= since,
+                        WebhookEvent.payload["recipient"]["id"].astext == recipient_id,
+                        # Solo mensajes: una lectura o una reacción no prueban que lleguen los mensajes directos.
+                        WebhookEvent.payload["message"]["mid"].astext.is_not(None),
+                    )
+                )
+            ).scalar_one()
+        )
+
+
 async def _log_webhook_event(
     meta_app_id: str,
     event: FlattenedEvent,
     *,
     tenant_id: uuid.UUID | None,
     process_error: str | None,
+    signature_ok: bool = True,
 ) -> bool:
     from datetime import UTC, datetime
 
@@ -380,7 +677,7 @@ async def _log_webhook_event(
                 object_type=event.object_type,
                 field=event.field,
                 external_id=event.external_id,
-                signature_ok=True,
+                signature_ok=signature_ok,
                 payload=event.value,
                 received_at=datetime.now(UTC),
                 process_error=process_error,
@@ -393,12 +690,18 @@ async def _log_webhook_event(
         return False
 
 
-async def _mark_entry_processed(meta_app_id: str, entry_events: list[FlattenedEvent]) -> None:
+async def _mark_entry_processed(
+    meta_app_id: str, tenant_id: uuid.UUID, entry_events: list[FlattenedEvent]
+) -> None:
     """Best-effort: si esto falla, el evento queda `processed_at is null`
     para siempre -- aceptable (el check de "worker caído" lo detectaría
     igual, y `_log_webhook_event` ya es la única red de seguridad real de
     ADR-0028), nunca se re-lanza para no tumbar la respuesta 200 al
-    webhook por un fallo puramente de esta marca secundaria."""
+    webhook por un fallo puramente de esta marca secundaria.
+
+    Filtra por el negocio del grupo: `meta_app_id` es el de la plataforma (el
+    mismo para todos), y un `external_id` repetido no puede marcar como
+    procesada la fila de otro negocio (ADR-0100)."""
     from datetime import UTC, datetime
 
     from sqlalchemy import update
@@ -412,6 +715,7 @@ async def _mark_entry_processed(meta_app_id: str, entry_events: list[FlattenedEv
                 update(WebhookEvent)
                 .where(
                     WebhookEvent.meta_app_id == meta_app_id,
+                    WebhookEvent.tenant_id == tenant_id,
                     WebhookEvent.external_id.in_([event.external_id for event in entry_events]),
                 )
                 .values(processed_at=datetime.now(UTC))
@@ -444,38 +748,65 @@ async def _dispatch_entry_messages(
     messages = adapter.parse_inbound(mini_payload)
     enqueued = 0
     duplicates = 0
-    redis = get_redis()
-
     for message in messages:
-        if not await claim_message_once(tenant_id, message.provider, message.external_message_id):
+        resultado = await publish_inbound_message(tenant_id, message)
+        if resultado == "duplicate":
             duplicates += 1
-            continue
-
-        if message.media:
-            processed = await _try_process_media(message)
-            if processed is None:
-                # Cuota de audio/OCR agotada: se descarta el mensaje (ADR-0045).
-                continue
-            message = processed
-
-        await redis.xadd(
-            INBOUND_STREAM,
-            {
-                "tenant_id": str(tenant_id),
-                "provider": message.provider,
-                "channel": message.channel,
-                "external_message_id": message.external_message_id,
-                "customer_external_id": message.customer_external_id,
-                "customer_name": message.customer_name or "",
-                "content": message.content,
-                "connection_external_id": message.connection_external_id,
-                "media": json.dumps(message.media),
-                "media_context": message.media_context,
-            },
-        )
-        enqueued += 1
-
+        elif resultado == "enqueued":
+            enqueued += 1
     return enqueued, duplicates
+
+
+async def publish_inbound_message(
+    tenant_id: uuid.UUID, message: Any, *, connection_id: uuid.UUID | None = None
+) -> str:
+    """Publica un mensaje entrante ya verificado en el stream del core (capa 2 de idempotencia incluida).
+    Devuelve `"enqueued"`, `"duplicate"` (ya visto: Meta o Twilio reintentan) o `"dropped"` (cuota de medios
+    agotada, ADR-0045). Lo usan el webhook de Meta y el de Twilio (ADR-0186). `connection_id` es la conexión que el
+    webhook ya validó (Twilio): viaja en el stream para que el consumer no la vuelva a buscar por número.
+
+    Si algo falla después del claim (cuota, Redis), el claim se libera: el reintento del proveedor no llega como
+    duplicado y el mensaje no se pierde."""
+    from core.gateway.idempotency import release_message_claim
+
+    if not await claim_message_once(tenant_id, message.provider, message.external_message_id):
+        return "duplicate"
+    try:
+        return await _publicar(tenant_id, message, connection_id)
+    except Exception:
+        await release_message_claim(tenant_id, message.provider, message.external_message_id)
+        raise
+
+
+async def _publicar(tenant_id: uuid.UUID, message: Any, connection_id: uuid.UUID | None) -> str:
+    if message.media:
+        processed = await _try_process_media(message)
+        if processed is None:
+            # Cuota de audio/OCR agotada: se descarta el mensaje (ADR-0045).
+            return "dropped"
+        message = processed
+
+    await get_redis().xadd(
+        INBOUND_STREAM,
+        {
+            "tenant_id": str(tenant_id),
+            "provider": message.provider,
+            "channel": message.channel,
+            "external_message_id": message.external_message_id,
+            "customer_external_id": message.customer_external_id,
+            "customer_name": message.customer_name or "",
+            "content": message.content,
+            "connection_external_id": message.connection_external_id,
+            "media": json.dumps(message.media),
+            "media_context": message.media_context,
+            # Solo si el cliente tocó un botón o una fila de lista (HU-AOS-05).
+            **({"interactive_id": message.interactive_id} if message.interactive_id else {}),
+            # Teléfono compartido por el propio cliente (Telegram, ADR-0199 §8).
+            **({"shared_phone": message.shared_phone} if getattr(message, "shared_phone", None) else {}),
+            **({"connection_id": str(connection_id)} if connection_id else {}),
+        },
+    )
+    return "enqueued"
 
 
 _TEMPLATE_WEBHOOK_FIELDS = {
@@ -483,11 +814,12 @@ _TEMPLATE_WEBHOOK_FIELDS = {
 }
 
 
-async def _dispatch_template_events(entry_events: list[FlattenedEvent]) -> None:
+async def _dispatch_template_events(tenant_id: uuid.UUID, entry_events: list[FlattenedEvent]) -> None:
     """Máquina de estados de plantillas -- vive en un módulo aparte
     (`core/gateway/meta_template_webhooks.py`), NUNCA toca `WebhookEvent`
     (ya se logueó en el loop de `_process_payload` antes de llegar acá,
-    ADR-0028 intacto)."""
+    ADR-0028 intacto). `tenant_id` es el negocio del grupo, ya autorizado por
+    la firma: una plantilla de otro negocio no se toca (ADR-0100)."""
     from core.gateway.meta_template_webhooks import (
         handle_template_category_update,
         handle_template_quality_update,
@@ -503,18 +835,19 @@ async def _dispatch_template_events(entry_events: list[FlattenedEvent]) -> None:
         if event.field not in _TEMPLATE_WEBHOOK_FIELDS:
             continue
         try:
-            await handlers[event.field](event.value)
+            await handlers[event.field](event.value, expected_tenant_id=tenant_id)
         except Exception:
             log.exception("template_webhook_handler_fallo", field=event.field)
 
 
-async def _dispatch_status_events(entry_events: list[FlattenedEvent]) -> None:
+async def _dispatch_status_events(tenant_id: uuid.UUID, entry_events: list[FlattenedEvent]) -> None:
     """`statuses` (sent/delivered/read/failed) de WhatsApp -- NUNCA se
     encolan al stream de inbound (no son mensajes de cliente, no deben
     pasar por el LLM). Cada `FlattenedEvent` de tipo status trae el
     `value` COMPLETO del `change` (puede incluir varios `statuses`); se
     procesa solo el status cuyo `external_id` coincide con el de ESTE
-    evento puntual, para no reaplicar el resto N veces."""
+    evento puntual, para no reaplicar el resto N veces. `tenant_id` es el
+    negocio del grupo: un mensaje de otro negocio no se toca (ADR-0100)."""
     from core.gateway.meta_message_status import apply_status_update
 
     for event in entry_events:
@@ -526,7 +859,7 @@ async def _dispatch_status_events(entry_events: list[FlattenedEvent]) -> None:
             if candidate_id != event.external_id:
                 continue
             try:
-                await apply_status_update(status, phone_number_id=phone_number_id)
+                await apply_status_update(status, expected_tenant_id=tenant_id, phone_number_id=phone_number_id)
             except Exception:
                 log.exception("status_update_handler_fallo", external_id=event.external_id)
 
@@ -553,7 +886,11 @@ async def count_stalled_webhook_events(older_than_minutes: int = 5) -> int:
         return (
             await session.execute(
                 select(func.count(WebhookEvent.id)).where(
-                    WebhookEvent.processed_at.is_(None), WebhookEvent.received_at < cutoff
+                    WebhookEvent.processed_at.is_(None),
+                    WebhookEvent.received_at < cutoff,
+                    # Los rechazados (sin negocio, conflicto, firma ajena...) nunca se
+                    # marcan procesados: no son un worker caído (ADR-0100).
+                    WebhookEvent.process_error.is_(None),
                 )
             )
         ).scalar() or 0
@@ -571,12 +908,14 @@ def _media_metric(message: Any) -> str | None:
 
 
 async def _try_process_media(message: Any) -> Any:
-    """Si mod-media-processor está activo, transforma audio/imagen a texto ANTES de encolar.
+    """Cuota de media en el webhook; el procesamiento real vive en el consumer.
+
+    Descargar/transcribir aquí expondría el webhook a los timeouts de Meta. Esta
+    función solo aplica el bloqueo duro de cuota (ADR-0045) y deja el mensaje
+    intacto; el consumer lo descarga, guarda y entiende (SPEC-04, ADR-0151).
 
     Devuelve None si la cuota de audio/OCR del plan está agotada: el mensaje se
-    descarta (bloqueo duro, ADR-0045) y no se encola.
-
-    Llamada de función Python en el mismo proceso — cero red (docs/MONOLITH-MODEL.md).
+    descarta y no se encola.
     """
     metric = _media_metric(message)
     tenant_id = get_current_tenant_id()
@@ -586,26 +925,22 @@ async def _try_process_media(message: Any) -> Any:
         if not await check_metric(tenant_id, metric):
             log.warning("media_quota_exceeded", tenant_id=str(tenant_id), metric=metric)
             return None
-
-    from core.plugin_manager import plugin_manager
-
-    module = plugin_manager.get("mod_media_processor")
-    if module is None or not plugin_manager.is_active("mod_media_processor"):
-        if not message.content:
-            message.content = "[El cliente envió un archivo multimedia que no puedo procesar]"
-        return message
-    try:
-        processed = await module.process_media(message)  # type: ignore[attr-defined]
-        return processed
-    except Exception as exc:
-        log.exception("media_processing_failed")
-        # Acotado al tenant de este webhook (ADR-0024): no apaga el
-        # procesador de medios para los demás tenants.
-        await plugin_manager.auto_disable_for_tenant(get_current_tenant_id(), "mod_media_processor", str(exc))
-        return message
+    return message
 
 
 # ---------------------------------------------------------------- webhook de billing (ADR-0046)
+def _monto_firmado(payload: dict, centavos: object) -> int | None:
+    """`amount_in_cents` solo si la firma lo cubre (ADR-0123, como `pack_payments`): un monto
+    sin firmar no se usa para comparar."""
+    propiedades = (payload.get("signature") or {}).get("properties") or []
+    if "transaction.amount_in_cents" not in propiedades or isinstance(centavos, bool):
+        return None
+    try:
+        return int(str(centavos))
+    except (TypeError, ValueError):
+        return None
+
+
 @router.post("/billing/wompi")
 async def receive_billing_wompi(request: Request) -> Response:
     """Webhook del pago de la SUSCRIPCIÓN de plataforma (Wompi).
@@ -637,11 +972,26 @@ async def receive_billing_wompi(request: Request) -> Response:
         log.warning("billing_webhook_sin_referencia")
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
-    from core.billing.checkout import apply_payment
+    from core.billing.checkout import apply_payment, tenant_del_pago
 
     try:
+        tenant_id = await tenant_del_pago(event.provider_reference)
+        if tenant_id is None:
+            # R-05 (ADR-0123): con la cuenta de Wompi compartida, el evento puede ser de un
+            # pago del negocio que vende los planes (su pack de pagos).
+            from core.billing.enrutador import reenviar_al_negocio
+
+            destino = await reenviar_al_negocio(payload)
+            return Response(
+                status_code=200,
+                content=json.dumps({"status": "reenviado" if destino != "ignored" else "ignored"}),
+                media_type="application/json",
+            )
         updated = await apply_payment(
-            provider_reference=event.provider_reference, status=event.status
+            provider_reference=event.provider_reference,
+            status=event.status,
+            tenant_id=tenant_id,
+            amount_in_cents=_monto_firmado(payload, event.amount_in_cents),
         )
     except Exception:
         log.exception("billing_webhook_apply_failed")

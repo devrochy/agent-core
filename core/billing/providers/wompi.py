@@ -8,7 +8,8 @@ sandbox real de `packages/pack-payments/providers/wompi.py`:
   + `timestamp` + `events_secret`, SHA256);
 - correlación del webhook por `transaction.payment_link_id` (NO por `id`, que
   cambia en cada intento) — es lo que se guarda al crear el link;
-- mínimo real de Wompi de 150.000 COP por link.
+- mínimo por link según el ambiente (`core.payments.wompi_minimo`: 150.000 COP
+  en sandbox, 1.500 en producción).
 
 La duplicación con el pack es deliberada y documentada en el ADR: core no puede
 importar un pack y el dominio (cobro de plataforma) es otro.
@@ -17,6 +18,7 @@ importar un pack y el dominio (cobro de plataforma) es otro.
 from __future__ import annotations
 
 import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -28,16 +30,13 @@ from core.billing.providers.base import (
     BillingWebhookEvent,
     PaymentLink,
 )
+from core.payments.wompi_minimo import min_amount_cop
 from core.shared.logger import get_logger
 
 log = get_logger(__name__)
 
 PRODUCTION_BASE_URL = "https://production.wompi.co/v1"
 SANDBOX_BASE_URL = "https://sandbox.wompi.co/v1"
-
-# Mínimo real de Wompi para la base de una transacción en COP (no está en su
-# guía pública; verificado por QA contra el sandbox en pack-payments).
-MIN_AMOUNT_COP = 150_000
 
 _STATUS_MAP = {
     "APPROVED": "aprobado",
@@ -63,22 +62,27 @@ class WompiBillingProvider(BaseBillingProvider):
         self.private_key = private_key
         self.events_secret = events_secret
         self.base_url = SANDBOX_BASE_URL if sandbox else PRODUCTION_BASE_URL
+        self.min_amount_cop = min_amount_cop(sandbox)
 
     async def create_payment_link(
-        self, *, reference: str, amount_cop: float, expires_in_hours: int = 24
+        self, *, reference: str, amount_cop: float, expires_in_hours: int = 24,
+        plan_name: str = "",
     ) -> PaymentLink:
-        if amount_cop < MIN_AMOUNT_COP:
+        if amount_cop < self.min_amount_cop:
             # Chequeo ANTES de la red: Wompi va a rechazar esto. Mensaje
             # accionable en vez de un 422 crudo.
             raise BillingRequestRejected(
-                f"El plan cuesta menos que el mínimo de Wompi (${MIN_AMOUNT_COP:,.0f} COP). "
+                f"El plan cuesta menos que el mínimo de Wompi (${self.min_amount_cop:,.0f} COP). "
                 "Cobrá trimestral o anual, o ajustá el precio del plan."
             )
         amount_in_cents = round(amount_cop * 100)
         expires_at = (datetime.now(UTC) + timedelta(hours=expires_in_hours)).isoformat()
+        # Nombre visible al cliente: el plan y "SolversHub", NUNCA un nombre
+        # técnico (HU-REP-04).
+        visible_plan = plan_name.strip() or "plan"
         body = {
-            "name": f"Suscripción {reference}",
-            "description": f"Plan agent-core ({reference})",
+            "name": f"{visible_plan} · SolversHub",
+            "description": f"Suscripción a SolversHub — plan {visible_plan}",
             "single_use": True,
             "collect_shipping": False,  # Wompi lo exige (422 real si falta)
             "currency": "COP",
@@ -124,7 +128,8 @@ class WompiBillingProvider(BaseBillingProvider):
 
         concatenated = "".join(parts) + str(timestamp) + self.events_secret
         computed = hashlib.sha256(concatenated.encode()).hexdigest()
-        return computed.lower() == str(checksum).lower()
+        # Comparación en tiempo constante (HU-SH-04): no filtra por tiempos cuánto coincide.
+        return hmac.compare_digest(computed.lower(), str(checksum).lower())
 
     def parse_webhook_event(self, payload: dict[str, Any]) -> BillingWebhookEvent:
         transaction = (payload.get("data") or {}).get("transaction") or {}

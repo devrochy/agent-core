@@ -31,8 +31,8 @@ esquema** (Sprint 1 del ROADMAP).
 
 | Ruta | Categoría | Destino | Riesgo | Notas |
 |---|---|---|---|---|
-| `packages/contracts/package.json` | CORE | `packages/contracts` | bajo | Manifest `@agentcore/contracts` v1.0.0, sin deps. En TS → migrar a Python (ADR-0011) |
-| `packages/contracts/src/index.ts` | CORE | `packages/contracts` (Python) | bajo | 5 contratos congelados completos (ADR-0003→0011). Sin prompts en `.ts` |
+| `packages/contracts/package.json` | CORE | — | bajo | Retirado en 3.0.0 (ADR-0113, HU-AOS-12): nadie lo consumía |
+| `packages/contracts/src/index.ts` | CORE | `packages/contracts` (Python) | bajo | Retirado en 3.0.0 (ADR-0113, HU-AOS-12); los contratos viven solo en Python |
 | `alembic/env.py` | CORE | `alembic/` | medio | Sin bootstrap de RLS; hay que enchufar policies al migrar |
 | `alembic/script.py.mako` | CORE | `alembic/` | bajo | Plantilla sin boilerplate `tenant_id`/RLS |
 | `alembic/versions/0001_initial_schema.py` | CORE | `alembic/versions/` (reescribir) | **alto** | 13 tablas sin `tenant_id`, sin RLS, sin `deleted_at`, sin índice por tenant |

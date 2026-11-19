@@ -12,7 +12,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import and_, case, func, select
 
 from core.admin.meta_costs_service import (
     list_credit_connections,
@@ -21,8 +21,10 @@ from core.admin.meta_costs_service import (
     verify_credits,
 )
 from core.api.deps import Principal, require
-from core.db.models import UsageLedger
+from core.billing.tipos_de_uso import EVAL, NO_ES_ACTIVIDAD, NO_SON_TURNOS
+from core.db.models import AgentInstanceRecord, AgentRecord, UsageLedger
 from core.db.session import get_session
+from core.shared.test_mode import no_es_prueba
 
 router = APIRouter(prefix="/admin/costs", tags=["admin · costos"])
 
@@ -70,6 +72,20 @@ class MetaPricing(BaseModel):
     service_allowance_hypothesis: bool = False
 
 
+class AgentCost(BaseModel):
+    """Consumo de un agente en 30 días (HU-AOS-35). `agent_id` null = filas sin agente (legacy o
+    anteriores a las versiones). `cached_pct` = leído de la caché / entrada, solo sobre filas
+    desde la migración 0114; null si no hay ninguna medible."""
+
+    agent_id: str | None
+    agent_name: str | None
+    turns: int
+    tokens_in: int
+    cached_tokens: int
+    cached_pct: float | None
+    cost: float
+
+
 class CostsResponse(BaseModel):
     meta: MetaPricing | None = None
     today: float
@@ -77,6 +93,7 @@ class CostsResponse(BaseModel):
     total_turns: int
     by_model: list[ModelCost]
     by_conversation: list[ConversationCost]
+    by_agent: list[AgentCost] = []
 
 
 @router.get("", response_model=CostsResponse)
@@ -87,24 +104,28 @@ async def get_costs(
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     month_ago = now - timedelta(days=30)
     by_tenant = UsageLedger.tenant_id == principal.tenant_id
+    sin_prueba = no_es_prueba(principal.tenant_id, UsageLedger.conversation_id)
 
     async with get_session() as session:
         today_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= today_start
+                    by_tenant, UsageLedger.created_at >= today_start, UsageLedger.kind != EVAL, sin_prueba
                 )
             )
         ).scalar() or 0
         month_cost = (
             await session.execute(
                 select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-                    by_tenant, UsageLedger.created_at >= month_ago
+                    by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != EVAL, sin_prueba
                 )
             )
         ).scalar() or 0
+        # Las filas `embedding` (ingesta del pack de conocimiento, ADR-0145 §3) no son turnos.
         total_turns = (
-            await session.execute(select(func.count(UsageLedger.id)).where(by_tenant))
+            await session.execute(
+                select(func.count(UsageLedger.id)).where(by_tenant, UsageLedger.kind.not_in(NO_SON_TURNOS), sin_prueba)
+            )
         ).scalar() or 0
         by_model_rows = (
             await session.execute(
@@ -116,7 +137,7 @@ async def get_costs(
                     func.avg(UsageLedger.latency_ms),
                     func.sum(UsageLedger.cost_usd),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind != EVAL, sin_prueba)
                 .group_by(UsageLedger.model)
             )
         ).all()
@@ -128,10 +149,52 @@ async def get_costs(
                     func.sum(UsageLedger.cost_usd),
                     func.max(UsageLedger.created_at),
                 )
-                .where(by_tenant, UsageLedger.created_at >= month_ago)
+                .where(
+                    by_tenant,
+                    UsageLedger.created_at >= month_ago,
+                    UsageLedger.kind.not_in(NO_ES_ACTIVIDAD),
+                    sin_prueba,
+                    UsageLedger.conversation_id.is_not(None),
+                )
                 .group_by(UsageLedger.conversation_id)
                 .order_by(func.sum(UsageLedger.cost_usd).desc())
                 .limit(20)
+            )
+        ).all()
+
+        # Por agente (HU-AOS-35): mismas condiciones que `data_por_agente.consumo` (sin
+        # `NO_ES_ACTIVIDAD`). La instancia y el agente se unen también por negocio.
+        medible = UsageLedger.cache_write_tokens.is_not(None)
+        by_agent_rows = (
+            await session.execute(
+                select(
+                    AgentRecord.id,
+                    AgentRecord.name,
+                    func.count(UsageLedger.id),
+                    func.coalesce(func.sum(UsageLedger.input_tokens), 0),
+                    func.coalesce(func.sum(case((medible, UsageLedger.cached_tokens), else_=0)), 0),
+                    func.coalesce(func.sum(case((medible, UsageLedger.input_tokens), else_=0)), 0),
+                    func.coalesce(func.sum(UsageLedger.cost_usd), 0),
+                )
+                .select_from(UsageLedger)
+                .outerjoin(
+                    AgentInstanceRecord,
+                    and_(
+                        AgentInstanceRecord.tenant_id == UsageLedger.tenant_id,
+                        AgentInstanceRecord.id == UsageLedger.agent_instance_id,
+                    ),
+                )
+                .outerjoin(
+                    AgentRecord,
+                    and_(
+                        AgentRecord.tenant_id == AgentInstanceRecord.tenant_id,
+                        AgentRecord.id == AgentInstanceRecord.agent_id,
+                    ),
+                )
+                .where(by_tenant, UsageLedger.created_at >= month_ago, UsageLedger.kind.not_in(NO_ES_ACTIVIDAD), sin_prueba)
+                .group_by(AgentRecord.id, AgentRecord.name)
+                .order_by(func.sum(UsageLedger.cost_usd).desc())
+                .limit(50)
             )
         ).all()
 
@@ -173,6 +236,18 @@ async def get_costs(
             )
             for conversation_id, turns, cost, last in by_conversation_rows
         ],
+        by_agent=[
+            AgentCost(
+                agent_id=str(agent_id) if agent_id is not None else None,
+                agent_name=name,
+                turns=int(turns),
+                tokens_in=int(tokens_in or 0),
+                cached_tokens=int(cached or 0),
+                cached_pct=round(100 * int(cached) / int(medible_in), 1) if medible_in else None,
+                cost=float(cost or 0),
+            )
+            for agent_id, name, turns, tokens_in, cached, medible_in, cost in by_agent_rows
+        ],
     )
 
 
@@ -195,9 +270,15 @@ class MetaCreditsResponse(BaseModel):
 
 
 def _credit_connections(rows) -> list[MetaCreditConnection]:
+    # `MetaConnection` no tiene columna `label` (N-18): se usa `meta_app_id`
+    # (o el business id) como nombre visible, manteniendo el campo `label` del
+    # contrato JSON que ya consume el panel.
     return [
         MetaCreditConnection(
-            id=c.id, label=c.label, channel=c.channel, business_id=c.business_id
+            id=c.id,
+            label=c.meta_app_id or c.business_id,
+            channel=c.channel,
+            business_id=c.business_id,
         )
         for c in rows
     ]

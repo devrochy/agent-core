@@ -1,0 +1,84 @@
+"""Roles de plataforma de un admin (ADR-0047, ADR-0134).
+
+- `master`: el dueño de la plataforma. Bypass total y gestión de cuentas.
+- `tester` (SPEC-30, D-SPEC-30-2): **actúa como master en la operación y como dueño del
+  negocio activo en Colaboradores**, y solo si `QA_TESTERS_ENABLED` está activa (entorno
+  de test). Con la variable apagada (producción) la cuenta no inicia sesión ni conserva
+  sesiones, y no se puede crear.
+
+Regla para el resto del código: los chequeos de **operación** (negocios, Meta, búsqueda,
+sync, onboarding, app de campo) preguntan `actua_como_master`; los de **gestión de
+cuentas de plataforma** (crear masters, tocar cuentas de master o tester, vincular entre
+negocios, gestionar testers, importar el catálogo de pruebas) siguen siendo
+`role == "master"`. En Colaboradores el tester cae en el camino del dueño: gestiona las
+cuentas exclusivas del negocio activo y nada más.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from core.config import get_settings
+
+ROL_MASTER = "master"
+ROL_TESTER = "tester"
+ROLES_DE_PLATAFORMA = frozenset({ROL_MASTER, ROL_TESTER})
+# Dominio reservado de las cuentas de prueba de cada tester (HU-QA-07, ADR-0135): sin
+# `QA_TESTERS_ENABLED` tampoco entran, como el tester.
+DOMINIO_DE_PRUEBA = "pruebas.solvershub.test"
+
+# Secciones que un tester no usa. Vacía desde el 2026-10-13: el dueño habilitó Colaboradores
+# para probarla. Ahí el tester actúa como dueño del negocio activo, no como master: los
+# servicios de cuentas siguen preguntando `role == "master"`.
+SECCIONES_VEDADAS_AL_TESTER: frozenset[str] = frozenset()
+
+
+def testers_habilitados() -> bool:
+    return bool(get_settings().qa_testers_enabled)
+
+
+def es_tester(admin: Any) -> bool:
+    return getattr(admin, "role", None) == ROL_TESTER
+
+
+def es_master(admin: Any) -> bool:
+    return getattr(admin, "role", None) == ROL_MASTER
+
+
+def actua_como_master(admin: Any) -> bool:
+    """Master, o tester con el rol habilitado en este entorno."""
+    return es_master(admin) or (es_tester(admin) and testers_habilitados())
+
+
+def rol_actua_como_master(role: str | None) -> bool:
+    """Lo mismo que `actua_como_master`, para quien solo tiene el texto del rol."""
+    return role == ROL_MASTER or (role == ROL_TESTER and testers_habilitados())
+
+
+def cuenta_habilitada(admin: Any) -> bool:
+    """¿La cuenta puede iniciar sesión o usar una sesión? Activa, y si es tester, con el rol
+    habilitado. Lo llaman el login del panel, la validación de sesión y la app de campo."""
+    if admin is None or not getattr(admin, "active", False):
+        return False
+    # Baja lógica de equipo (ADR-0198): una cuenta eliminada no vuelve a entrar ni con `active`
+    # encendido por error. Solo se reactiva reviviendo la misma fila desde Equipo.
+    if getattr(admin, "deleted_at", None) is not None:
+        return False
+    if es_tester(admin) or str(getattr(admin, "email", "")).endswith("@" + DOMINIO_DE_PRUEBA):
+        return testers_habilitados()
+    return True
+
+
+def acceso_de_plataforma(admin: Any, section: str) -> str | None:
+    """Acceso que da el rol de plataforma a una sección; `None` si el rol no decide.
+
+    Master: `write` en todo. Tester habilitado: `write` en todo salvo las secciones
+    vedadas, que quedan **denegadas** (`"none"`, distinto de `None`: no hay que seguir
+    buscando permisos). Tester sin habilitar: denegado en todo."""
+    if es_master(admin):
+        return "write"
+    if es_tester(admin):
+        if not testers_habilitados() or section in SECCIONES_VEDADAS_AL_TESTER:
+            return "none"
+        return "write"
+    return None

@@ -75,7 +75,7 @@ async def _get_tenant(slug: str) -> uuid.UUID:
 def create(
     email: str = typer.Option(..., "--email", help="Email del admin (identificador de login)"),
     password: str = typer.Option("", "--password", help="Contraseña (vacío = se genera)"),
-    role: str = typer.Option("colaborador", "--role", help="master | colaborador"),
+    role: str = typer.Option("colaborador", "--role", help="master | colaborador | tester (solo con QA_TESTERS_ENABLED)"),
     username: str = typer.Option("", "--username", help="Usuario alternativo de login (opcional)"),
 ) -> None:
     """Crea un admin. `master` es superusuario (bypass); el resto usa permisos."""
@@ -85,9 +85,16 @@ def create(
     from core.db.models import Admin
     from core.db.session import get_session
 
-    if role not in ("master", "colaborador"):
-        console.print("[red]--role debe ser master o colaborador[/red]")
+    if role not in ("master", "colaborador", "tester"):
+        console.print("[red]--role debe ser master, colaborador o tester[/red]")
         raise typer.Exit(1)
+    if role == "tester":
+        from core.admin.roles import testers_habilitados
+
+        if not testers_habilitados():
+            # El rol tester solo existe en test (ADR-0134).
+            console.print("[red]El rol tester no está habilitado: falta QA_TESTERS_ENABLED=true.[/red]")
+            raise typer.Exit(1)
     generated = not password
     password = password or secrets.token_urlsafe(12)
 
@@ -184,18 +191,25 @@ def link(
 def grant(
     email: str = typer.Option(..., "--email", help="Email del admin"),
     section: str = typer.Option(..., "--section", help="Sección (ej. costs, conversations)"),
-    access: str = typer.Option("read", "--access", help="read | write"),
+    access: str = typer.Option("read", "--access", help="read | write | none (denegado, solo con --tenant)"),
     tenant: str = typer.Option("", "--tenant", help="Slug del tenant (vacío = global, todos)"),
 ) -> None:
-    """Concede un permiso de sección. Sin `--tenant` el permiso es global."""
+    """Concede un permiso de sección. Sin `--tenant` el permiso es global.
+
+    `--access none` deniega la sección (o el pack completo) en ESE negocio aunque el rol la
+    heredara (ADR-0136); una denegación global no existe.
+    """
     from sqlalchemy import select
 
     from core.db.models import AdminPermission
     from core.db.session import get_session
 
     _validate_section(section)
-    if access not in ("read", "write"):
-        console.print("[red]--access debe ser read o write[/red]")
+    if access not in ("read", "write", "none"):
+        console.print("[red]--access debe ser read, write o none[/red]")
+        raise typer.Exit(1)
+    if access == "none" and not tenant:
+        console.print("[red]--access none exige --tenant: una denegación es por negocio[/red]")
         raise typer.Exit(1)
 
     async def _run() -> None:
@@ -236,7 +250,8 @@ def revoke(
     section: str = typer.Option(..., "--section", help="Sección a revocar"),
     tenant: str = typer.Option("", "--tenant", help="Slug del tenant (vacío = global)"),
 ) -> None:
-    """Revoca un permiso explícito de sección."""
+    """Borra la fila explícita de una sección (vuelve al default del rol). Para quitar una
+    sección que el rol hereda, usá `grant --access none --tenant <slug>` (ADR-0136)."""
     from sqlalchemy import delete
 
     from core.db.models import AdminPermission
@@ -311,3 +326,34 @@ def list_admins(
         console.print(table)
 
     asyncio.run(_run())
+
+
+@app.command("kill-switch")
+def kill_switch(
+    activar: bool | None = typer.Option(
+        None, "--activar/--desactivar", help="Activa o desactiva el interruptor global de la plataforma"
+    ),
+    motivo: str = typer.Option("", "--motivo", help="Por qué (obligatorio al activar; queda en el historial)"),
+) -> None:
+    """Interruptor global (HU-ARCH-38, ADR-0200): detiene todos los agentes y los envíos automáticos de todos los
+    negocios en segundos, sin desplegar. Lo que escribe una persona sigue saliendo. Sin opciones, muestra el estado
+    y los últimos cambios."""
+    if activar and not motivo.strip():
+        console.print("[red]✗ Indica --motivo al activar.[/red]")
+        raise typer.Exit(1)
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from core.admin import kill_switch_service as svc
+
+        if activar is None:
+            return await svc.estado()
+        return await svc.fijar(activar, motivo, admin_id=None, etiqueta="cli", fuente="cli")
+
+    estado = asyncio.run(_run())
+    texto = "[red bold]ACTIVO[/red bold]" if estado.active else "[green]apagado[/green]"
+    console.print(f"Interruptor global {texto} {estado.reason or ''}")
+    if estado.history:
+        table = Table("Cuándo", "Acción", "Quién", "Fuente", "Motivo")
+        for e in estado.history[:10]:
+            table.add_row(f"{e.created_at:%Y-%m-%d %H:%M}", e.action, e.actor_label or "—", e.source, e.reason or "")
+        console.print(table)

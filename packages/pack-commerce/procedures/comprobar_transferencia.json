@@ -1,0 +1,96 @@
+{
+  "contract": "procedure/1",
+  "id": "pack_commerce.comprobar_transferencia",
+  "version": "1.2.0",
+  "title": "Comprobar transferencia",
+  "triggers": {
+    "description": "El cliente pagó o va a pagar un pedido por transferencia: manda el comprobante, dice que ya transfirió o pregunta si le llegó su transferencia.",
+    "examples": [
+      "ya hice la transferencia",
+      "te mando el comprobante",
+      "ahí va el comprobante de pago",
+      "ya transferí",
+      "les llegó mi transferencia"
+    ]
+  },
+  "slots": {
+    "order_id": {
+      "type": "string",
+      "setBy": "action:consultar_estado_pedido"
+    },
+    "comprobante": {
+      "type": "string",
+      "enum": ["recibido"],
+      "setBy": "action:comprobar_comprobante"
+    },
+    "resultado": {
+      "type": "string",
+      "enum": ["pagado", "en_revision", "rechazado"],
+      "setBy": "action:comprobar_comprobante"
+    },
+    "pago_confirmado": {
+      "type": "string",
+      "enum": ["confirmado"],
+      "setBy": "action:comprobar_comprobante"
+    }
+  },
+  "stages": [
+    {
+      "id": "elegir_pedido",
+      "goal": "Identificar el pedido por transferencia del que habla el cliente con consultar_estado_pedido (el número de Referencias vigentes o el que dé el cliente).",
+      "actions": ["consultar_estado_pedido"],
+      "exitWhen": { "slots": ["order_id"] }
+    },
+    {
+      "id": "pedir_comprobante",
+      "goal": "Si el cliente aún no mandó la foto o captura del comprobante, pedírsela. Cuando la mande, revisarla con comprobar_comprobante. Nunca des el pago por hecho sin esa respuesta.",
+      "actions": ["comprobar_comprobante"],
+      "exitWhen": { "slots": ["comprobante"] }
+    },
+    {
+      "id": "analizar_comprobante",
+      "goal": "El servidor ya comparó el comprobante con el pedido. Si el cliente manda otra foto o dice que mandó el comprobante de nuevo o el correcto, vuelve a llamar comprobar_comprobante: el servidor dice si es nueva o la misma.",
+      "actions": ["comprobar_comprobante"],
+      "exitWhen": { "slots": ["resultado"] }
+    },
+    {
+      "id": "resultado",
+      "goal": "Contar el resultado tal como lo dijo el servidor: confirmado, en revisión por una persona o que no coincide (ofrecer hablar con una persona). Si después el cliente manda otra foto o dice que la mandó de nuevo, llama comprobar_comprobante otra vez antes de responder; nunca le digas que no hace falta revisarla. Nunca repitas datos de la foto ni de las cuentas.",
+      "actions": [
+        "consultar_estado_pedido",
+        "comprobar_comprobante"
+      ]
+    }
+  ],
+  "completion": {
+    "events": ["pack_commerce.order.paid"],
+    "returnControl": true
+  },
+  "recovery": {
+    "actionError": "explicar"
+  },
+  "claims": [
+    {
+      "kind": "amount",
+      "mustMatch": ["action:comprobar_comprobante.total", "action:consultar_estado_pedido.total"]
+    },
+    {
+      "kind": "status",
+      "phrases": [
+        "pago confirmado",
+        "tu pago quedó confirmado",
+        "ya recibimos tu pago",
+        "tu transferencia quedó confirmada"
+      ],
+      "requires": "slot:pago_confirmado"
+    },
+    {
+      "kind": "status",
+      "phrases": [
+        "quedó en revisión",
+        "tu comprobante está en revisión"
+      ],
+      "requires": "slot:resultado"
+    }
+  ]
+}

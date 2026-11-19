@@ -1,36 +1,24 @@
-"""Onboarding de tenants (multi-tenant, ADR-0001).
+"""Artefactos de los tenants (multi-tenant, ADR-0001, ADR-0085).
 
-Dar de alta un cliente en agent-core es 100% configuración: tenant + AgentSpec +
-AppSettings + conexión de canal + enablement de packs. Cero código por cliente.
-
-Los artefactos de cada tenant (catálogo, evals, documentación) viven en
+Los artefactos de cada tenant (catálogo, evals, documentación, voz de marca) viven en
 `TENANTS_ROOT/<slug>/` (default `./tenants`, gitignored) — fuera del código del
 framework, para que agent-core no mezcle documentación ni datos de sus clientes.
+
+El alta de un negocio (`onboard_tenant`) vive en `core/alta_negocio.py` (ADR-0121): este
+módulo lo usan también los packs (`tenant_dir`), así que no puede llevarla.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
-from copy import deepcopy
 from pathlib import Path
 
-from agentcore_contracts import AgentSpec
 from sqlalchemy import select
 
-from core.agents.flow import seed_tenant_flow
-from core.agents.spec import DEFAULT_SPEC
 from core.config import get_settings
-from core.db.models import (
-    Admin,
-    AgentSpecRecord,
-    AppSettings,
-    ChannelConnection,
-    Tenant,
-    TenantUser,
-)
+from core.db.models import AppSettings
 from core.db.session import get_session
-from core.plugin_manager import plugin_manager
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 
@@ -118,53 +106,6 @@ def _pack_playbook_refs(packs: list[str]) -> list[dict[str, str]]:
     return refs
 
 
-def _default_spec_for(
-    slug: str,
-    tenant_id: uuid.UUID,
-    persona: dict | None,
-    packs: list[str] | None,
-) -> dict:
-    spec = deepcopy(DEFAULT_SPEC)
-    spec["tenantId"] = str(tenant_id)
-    if persona:
-        spec["persona"].update(persona)
-    if packs:
-        spec["packs"] = list(packs)
-        existing = {p["name"] for p in spec.get("playbooks", [])}
-        for ref in _pack_playbook_refs(packs):
-            if ref["name"] not in existing:
-                spec["playbooks"].append(ref)
-    # El contrato congelado es rey: un spec inválido NO llega a la BD (evita que
-    # /admin/spec reviente al renderizar con model_validate).
-    try:
-        AgentSpec.model_validate(spec)
-    except Exception as exc:
-        raise ValueError(f"AgentSpec inválido para {slug}: {exc}") from exc
-    return spec
-
-
-async def _resolve_admin(email: str | None) -> Admin | None:
-    if not email:
-        return None
-    email = email.strip().lower()
-    async with get_session() as session:
-        return (
-            await session.execute(select(Admin).where(Admin.email == email))
-        ).scalar_one_or_none()
-
-
-async def _phone_owner(phone_number_id: str) -> uuid.UUID | None:
-    """Tenant dueño de un phone_number_id (SECURITY DEFINER, exento de RLS).
-
-    Evita que dos tenants reclamen el mismo número: `resolve_tenant_for_phone`
-    (LIMIT 1 sin ORDER BY) devolvería un tenant arbitrario y el webhook se
-    procesaría bajo el tenant equivocado.
-    """
-    from core.shared.tenant import resolve_tenant_for_phone
-
-    return await resolve_tenant_for_phone(phone_number_id)
-
-
 def _validate_slug(slug: str) -> None:
     """Slug seguro para usar como path (TENANTS_ROOT/<slug>/). Evita traversal."""
     import re
@@ -173,189 +114,159 @@ def _validate_slug(slug: str) -> None:
         raise ValueError(f"Slug inválido (solo minúsculas, números y guiones): {slug!r}")
 
 
-async def onboard_tenant(
-    *,
-    name: str,
-    slug: str,
-    business_description: str = "",
-    language: str = "es",
-    persona: dict | None = None,
-    escalation_triggers: list[str] | None = None,
-    packs: list[str] | None = None,
-    admin_email: str | None = None,
-    admin_password: str | None = None,
-    whatsapp: dict | None = None,
-    tenant_id: uuid.UUID | None = None,
-) -> tuple[uuid.UUID, list[str]]:
-    """Da de alta un tenant con su asistente. Idempotente.
+# Carpeta de lo que quedó en disco de un negocio purgado cuyo slug se vuelve a dar de alta.
+CUARENTENA = ".purgados"
 
-    `whatsapp`: {"label", "phone_number_id", "app_secret", "access_token",
-    "verify_token"}. Si se pasa, las credenciales se cifran y se persisten
-    (se espera que el llamador las haya verificado contra Meta antes). El
-    `phone_number_id` no puede pertenecer ya a OTRO tenant (evita ruteo
-    cross-tenant del webhook). Devuelve (tenant_id, pasos ejecutados).
-    """
+
+def carpeta_del_tenant(slug: str) -> Path:
+    """`TENANTS_ROOT/<slug>/` validado: nunca la raíz ni algo fuera de ella."""
     _validate_slug(slug)
+    raiz = tenants_root().resolve()
+    carpeta = (raiz / slug).resolve()
+    if carpeta.parent != raiz:
+        raise ValueError(f"Carpeta de tenant fuera de TENANTS_ROOT: {slug!r}")
+    return carpeta
 
-    if whatsapp and whatsapp.get("phone_number_id"):
-        owner = await _phone_owner(whatsapp.get("phone_number_id", ""))
-        if owner is not None and owner != tenant_id:
-            raise ValueError(
-                f"phone_number_id {whatsapp.get('phone_number_id')} ya pertenece a otro tenant"
-            )
 
-    tenant_id = tenant_id or uuid.uuid4()
-    steps: list[str] = []
+def borrar_carpeta_del_tenant(slug: str) -> bool:
+    """Borra `TENANTS_ROOT/<slug>/` (docs, playbooks, evidencias, conocimiento) al purgar el
+    negocio (ADR-0145 §6). True si había algo que borrar.
 
-    plugin_manager.scan()
-    await plugin_manager.sync_registry()
+    Primero la renombra a `TENANTS_ROOT/.purgados/<slug>-<sello>` (atómico en el mismo volumen):
+    desde ahí el slug queda libre y limpio aunque el borrado falle a la mitad. Después la borra.
+    Un error del renombre se propaga (el slug sigue con archivos: alerta). Si falla el borrado,
+    lo que queda está en `.purgados/` y no lo hereda nadie."""
+    import shutil
+    from datetime import UTC, datetime
 
-    admin_email = admin_email.strip().lower() if admin_email else None
-    if admin_password is not None and len(admin_password) < 8:
-        raise ValueError("La contraseña del administrador necesita 8+ caracteres")
-    admin = await _resolve_admin(admin_email)
-    if admin is None and admin_email and admin_password:
-        # Alta del administrador del tenant (ADR-0048): si el email no existe y
-        # se dio contraseña, se crea. Sin contraseña, se mantiene el
-        # comportamiento histórico (solo vincula un admin preexistente).
-        from core.admin.auth import hash_password
+    carpeta = carpeta_del_tenant(slug)
+    if not carpeta.exists():
+        return False
+    destino_dir = tenants_root() / CUARENTENA
+    destino_dir.mkdir(parents=True, exist_ok=True)
+    apartada = destino_dir / f"{slug}-purgado-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}"
+    carpeta.rename(apartada)
+    shutil.rmtree(apartada, ignore_errors=True)
+    if apartada.exists():
+        log.warning("tenant_carpeta_purgada_sin_borrar", slug=slug, destino=apartada.name)
+    return True
 
-        async with get_session() as session:
-            admin = Admin(
-                email=admin_email,
-                password_hash=hash_password(admin_password),
-                role="colaborador",
-            )
-            session.add(admin)
-            await session.flush()
-        steps.append("admin del tenant creado")
 
-    async with get_session() as session:
-        tenant = (
-            await session.execute(select(Tenant).where(Tenant.slug == slug))
-        ).scalar_one_or_none()
-        if tenant is None:
-            tenant = Tenant(
-                id=tenant_id, name=name, slug=slug, status="active", settings={"language": language}
-            )
-            session.add(tenant)
-            await session.flush()
-            steps.append(f"tenant creado ({slug})")
-        else:
-            tenant_id = tenant.id
-            steps.append(f"tenant ya existía ({slug})")
+# Subcarpetas con datos de clientes que un negocio NUEVO nunca hereda: documentos de
+# conocimiento (ADR-0145) y evidencias de cobranza. `docs/` no: se puede preparar antes del alta.
+CARPETAS_DE_DATOS = ("conocimiento", "evidencias")
 
+
+def cuarentena_de_datos_huerfanos(slug: str) -> list[Path]:
+    """Al dar de alta un negocio NUEVO con un slug que ya tiene datos de clientes en disco (la
+    purga no los pudo borrar, o la base de desarrollo se recreó), los mueve a
+    `TENANTS_ROOT/.purgados/` para que el negocio nuevo no herede archivos de otro. Devuelve los
+    destinos (vacío si no había nada)."""
+    from datetime import UTC, datetime
+
+    carpeta = carpeta_del_tenant(slug)
+    movidas: list[Path] = []
+    sello = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%f")
+    for nombre in CARPETAS_DE_DATOS:
+        datos = carpeta / nombre
+        if not datos.is_dir() or not any(datos.iterdir()):
+            continue
+        destino_dir = tenants_root() / CUARENTENA
+        destino_dir.mkdir(parents=True, exist_ok=True)
+        destino = destino_dir / f"{slug}-{nombre}-{sello}"
+        datos.rename(destino)
+        movidas.append(destino)
+        log.warning("tenant_datos_huerfanos_en_cuarentena", slug=slug, carpeta=nombre, destino=destino.name)
+    return movidas
+
+
+async def ensure_brand_voice(tenant_id: uuid.UUID, slug: str, *, sobrescribir: bool = False) -> bool:
+    """Siembra `AppSettings.brand_voice` desde `TENANTS_ROOT/<slug>/docs/voz-de-marca.md`
+    si está vacío (#158). La voz de marca es la fuente de verdad de políticas; un
+    asistente sin ella alucina. Devuelve True si la sembró.
+
+    `sobrescribir=True` (HU-SH-01) la reemplaza aunque ya tenga texto: el archivo
+    versionado del negocio manda y el runbook lo reaplica tras corregirlo.
+    """
+    _validate_slug(slug)  # nunca salir de TENANTS_ROOT con un slug armado (auditoría HU-SH-01)
+    voice_path = tenant_dir(slug) / "docs" / "voz-de-marca.md"
+    if not voice_path.exists():
+        return False
+    content = voice_path.read_text(encoding="utf-8").strip()
+    if not content:
+        return False
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            settings_row = (
+            settings = (
                 await session.execute(
                     select(AppSettings).where(
-                        AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None)
+                        AppSettings.tenant_id == tenant_id,
+                        AppSettings.deleted_at.is_(None),
                     )
                 )
             ).scalar_one_or_none()
-            if settings_row is None:
-                session.add(
-                    AppSettings(
-                        tenant_id=tenant_id,
-                        assistant_name=name,
-                        business_description=business_description,
-                        language=language,
-                        behavior_config={"tono": persona.get("tone", "calido") if persona else "calido"},
-                        # `escalation.triggers` del AgentSpec nunca se lee en runtime
-                        # (core/orchestrator/consumer.py lee este campo) -- ver
-                        # `_default_spec_for`, que ya NO escribe ahí.
-                        escalation_config={"keywords": list(escalation_triggers)}
-                        if escalation_triggers
-                        else {},
-                    )
-                )
-                steps.append("app_settings creados")
-            else:
-                steps.append("app_settings ya existían")
+            if settings is None:
+                settings = AppSettings(tenant_id=tenant_id)
+                session.add(settings)
+                await session.flush()
+            if settings.brand_voice and settings.brand_voice.strip():
+                if not sobrescribir or settings.brand_voice.strip() == content:
+                    return False
+            settings.brand_voice = content
+    return True
 
-            spec_row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tenant_id,
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if spec_row is None:
-                session.add(
-                    AgentSpecRecord(
-                        tenant_id=tenant_id,
-                        version="1.0.0",
-                        is_active=True,
-                        spec=_default_spec_for(slug, tenant_id, persona, packs),
-                    )
-                )
-                steps.append("agent_spec creado")
-            else:
-                steps.append("agent_spec ya existía")
+async def sembrar_catalogo(tenant_id: uuid.UUID, data: dict) -> list[str]:
+    """Importa un `catalog.json` de pack_commerce al negocio. Idempotente.
 
-            if admin is not None:
-                link = (
-                    await session.execute(
-                        select(TenantUser).where(
-                            TenantUser.tenant_id == tenant_id, TenantUser.admin_id == admin.id
-                        )
-                    )
-                ).scalar_one_or_none()
-                if link is None:
-                    session.add(TenantUser(tenant_id=tenant_id, admin_id=admin.id, role="owner"))
-                    steps.append("tenant_user (admin → tenant) creado")
-                else:
-                    steps.append("tenant_user ya existía")
-            else:
-                steps.append("sin admin (se omite tenant_user)")
+    Lo delega en `seed_data` del pack (ADR-0110): el core no importa packs."""
+    from core.plugin_manager import plugin_manager
 
-            if whatsapp:
-                conn = (
-                    await session.execute(
-                        select(ChannelConnection).where(
-                            ChannelConnection.tenant_id == tenant_id,
-                            ChannelConnection.external_id == whatsapp.get("phone_number_id", ""),
-                        )
-                    )
-                ).scalar_one_or_none()
-                if conn is None:
-                    from core.gateway.connections import save_connection
+    plugin_manager.scan()
+    module = plugin_manager.get("pack_commerce")
+    if module is None:
+        raise RuntimeError("pack_commerce no está instalado")
+    return await module.seed_data(tenant_id, data)
 
-                    await save_connection(
-                        whatsapp.get("label") or name,
-                        {
-                            "phone_number_id": whatsapp.get("phone_number_id", ""),
-                            "app_secret": whatsapp.get("app_secret", ""),
-                            "access_token": whatsapp.get("access_token", ""),
-                            "verify_token": whatsapp.get("verify_token", ""),
-                        },
-                    )
-                    steps.append("conexión WhatsApp creada")
-                else:
-                    steps.append("conexión WhatsApp ya existía")
-            from core.billing.service import ensure_free_subscription
 
-            await ensure_free_subscription(session, tenant_id)
-            steps.append("suscripción free creada")
-            await session.commit()
+async def sembrar_packs(tenant_id: uuid.UUID, slug: str) -> list[str]:
+    """Seed genérico por pack (ADR-0083, issue #154): `TENANTS_ROOT/<slug>/<pack>.json` de
+    cada pack instalado que tenga uno (commerce usa `catalog.json`, por eso se excluye).
+    Un archivo que no es JSON válido se ignora con un aviso en el log."""
+    from core.plugin_manager import plugin_manager
 
-    for pack in packs or []:
-        async with tenant_scope(tenant_id):
-            await plugin_manager.save_config(pack, {})
-            await plugin_manager.activate(pack)
-        steps.append(f"pack {pack} configurado y activo")
+    _validate_slug(slug)
+    pasos: list[str] = []
+    for module in plugin_manager.list_modules():
+        if module.id == "pack_commerce":
+            continue
+        # `<pack>.json`, más los nombres propios que el pack declare (`archivos_de_seed`, p. ej. `planes.json`).
+        for nombre in (f"{module.id}.json", *getattr(module, "archivos_de_seed", ())):
+            path = tenant_dir(slug) / nombre
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                log.warning("seed_pack_json_invalido", pack=module.id, slug=slug, archivo=nombre)
+                continue
+            pasos.extend(await module.seed_data(tenant_id, data))
+            pasos.append(f"{nombre} importado")
+    return pasos
 
-    # Flujo de atención del pack (ADR-0054): al habilitar un pack, el tenant recibe
-    # una base de flujo editable en TENANTS_ROOT/<slug>/flow.json. Best-effort: un
-    # fallo de filesystem no puede tumbar el alta (el runtime cae al default del pack).
-    if packs:
-        try:
-            steps.extend(seed_tenant_flow(slug, list(packs)))
-        except Exception:
-            log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
 
-    ensure_tenant_docs(slug, name, business_description)
-    return tenant_id, steps
+async def sembrar_artefactos(tenant_id: uuid.UUID, slug: str, *, voz_de_marca: bool = False) -> list[str]:
+    """Lo que hace `agent-core tenant seed`: catálogo, seed de cada pack y voz de marca desde
+    `TENANTS_ROOT/<slug>/` (HU-SH-01). Lo usan el CLI y el runner de journeys, que arma una
+    réplica del asistente de un negocio con sus artefactos (HU-SH-08)."""
+    _validate_slug(slug)
+    pasos: list[str] = []
+    data = load_tenant_catalog(slug)
+    if data is not None:
+        if data.get("pack") == "pack_commerce":
+            pasos.extend(await sembrar_catalogo(tenant_id, data))
+        else:
+            log.warning("seed_catalogo_sin_pack_conocido", slug=slug, pack=str(data.get("pack")))
+    pasos.extend(await sembrar_packs(tenant_id, slug))
+    if await ensure_brand_voice(tenant_id, slug, sobrescribir=voz_de_marca):
+        pasos.append("brand_voice sembrada desde docs/voz-de-marca.md")
+    return pasos

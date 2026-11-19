@@ -1,0 +1,138 @@
+[importlinter]
+# El core y los packs del repo. Se declaran todos porque los packs viven en
+# paquetes separados (`packages/pack-*/pack_*`): grimp debe escanearlos para
+# poder verificar que ninguno importa de otro.
+root_packages =
+    core
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_knowledge
+    pack_payments
+    pack_subscriptions
+    agentcore_contracts
+# Incluye lo que esté instalado (por ejemplo, para `forbidden` con `cli`).
+include_external_packages = True
+
+# Invariante 5: ningún pack importa de otro pack. Los packs solo dependen del core
+# y se coordinan por registros del core (payment_registry, subscription_registry)
+# o por eventos.
+[importlinter:contract:pack-independencia]
+name = Ningún pack importa de otro pack
+type = independence
+modules =
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_knowledge
+    pack_payments
+    pack_subscriptions
+
+[importlinter:contract:packs-sin-cli]
+name = Los packs no importan la CLI
+type = forbidden
+source_modules =
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_knowledge
+    pack_payments
+    pack_subscriptions
+forbidden_modules =
+    cli
+
+[importlinter:contract:contracts-sin-dependencias]
+name = agentcore_contracts no importa del runtime
+type = forbidden
+source_modules =
+    agentcore_contracts
+forbidden_modules =
+    core
+    cli
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_knowledge
+    pack_payments
+    pack_subscriptions
+
+# ADR-0121 (HU-SH-03, «Sin el LLM»): crear negocios es solo del master (panel, API de
+# plataforma, CLI) y del consumidor del core sobre `subscription.activated`. Ninguna tool
+# (core o pack), ni el host MCP, ni el loop del LLM importan el alta: `core.alta_negocio`
+# (`onboard_tenant`), el consumidor ni el owner. Los packs pueden usar `core.provisioning.fuentes`
+# y `core.provisioning.antiabuso` (HU-SH-07), que no llegan al alta (contrato
+# `antiabuso-sin-alta`), y `core.onboarding` (utilidades de artefactos) sigue libre.
+[importlinter:contract:alta-fuera-del-llm]
+name = Las tools y los packs no dan de alta negocios
+type = forbidden
+source_modules =
+    pack_calendar
+    pack_cobranza
+    pack_commerce
+    pack_knowledge
+    pack_payments
+    pack_subscriptions
+    core.tools
+    core.mcp
+    core.subscriptions
+    core.orchestrator
+    core.kernel
+forbidden_modules =
+    core.alta_negocio
+    core.alta_acceso
+    core.provisioning.consumer
+    core.provisioning.owner
+# Solo imports directos: todo pack llega al despachador del outbox por `core.tasks.celery_app`
+# (crons y push), y el despachador registra el consumidor. Lo que importa es que ninguna
+# tool lo llame; `tests/test_provisioning_sin_llm.py` lo revisa también dentro de funciones.
+allow_indirect_imports = True
+
+# HU-AOS-10 (adenda de ADR-0112): el kernel decide y el orquestador despacha. El kernel no
+# conoce el loop, el consumer ni el debounce: así sus políticas no dependen de quién lo llama.
+# `core.orchestrator.escalation` (escalar) y el verificador sí son piezas que el kernel usa.
+[importlinter:contract:kernel-sin-orquestador]
+name = El kernel no importa el loop, el consumer ni el debounce
+type = forbidden
+source_modules =
+    core.kernel
+forbidden_modules =
+    core.orchestrator.loop
+    core.orchestrator.consumer
+    core.orchestrator.debounce
+allow_indirect_imports = True
+
+# SPEC-40 (ADR-0172): el resolver del toque es puro; lo que solo el orquestador sabe (release, spec, la
+# ejecución de la tool, el envío) llega por `Bordes`/`Entorno` desde `core/orchestrator/opciones_toque.py`.
+[importlinter:contract:opciones-sin-orquestador]
+name = Las opciones directas del kernel no importan el orquestador
+type = forbidden
+source_modules =
+    core.kernel.opciones
+forbidden_modules =
+    core.orchestrator
+allow_indirect_imports = True
+
+# ADR-0125 (HU-SH-07): lo que un pack o una ruta de la API usan del aprovisionamiento no llega
+# al alta, ni siquiera de forma indirecta: así el camino pack → antiabuso → consumidor no existe.
+[importlinter:contract:antiabuso-sin-alta]
+name = Lo que usan los packs y la API del aprovisionamiento no da de alta negocios
+type = forbidden
+source_modules =
+    core.provisioning.fuentes
+    core.provisioning.antiabuso
+    core.provisioning.legal
+    core.provisioning.interruptor
+    core.provisioning.revision
+    core.provisioning.vendedores
+forbidden_modules =
+    core.alta_negocio
+    core.alta_acceso
+    core.provisioning.consumer
+    core.provisioning.owner
+# El único eslabón que se ignora es el registro del consumidor como suscriptor del outbox
+# (`core.events.core_handlers` lo enlaza a `subscription.activated`). Por ese registro no se
+# llama al alta: el alta corre solo cuando llega el evento. Sin esta excepción, cualquier
+# módulo que toque `core.agents.spec` (que llega a `core.tasks.celery_app` por los packs)
+# rompería el contrato. Todo otro camino, directo o indirecto, sigue prohibido.
+ignore_imports =
+    core.events.core_handlers -> core.provisioning.consumer

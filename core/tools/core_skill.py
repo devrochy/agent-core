@@ -13,19 +13,31 @@ resultado tipado (no se lanzan al runtime).
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from typing import Any, ClassVar
 
 from sqlalchemy import func, select
 
 from core.agents.playbooks import load_playbook
 from core.agents.spec import load_active_spec
+from core.datos_cliente.guardar import guardar as guardar_datos
 from core.db.models import Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
+from core.kernel.opciones.bandera import oferta_habilitada
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
+from core.memory import perfil as perfil_cliente
 from core.memory import vector as vector_memory
+from core.memory.facts import (
+    PERFIL,
+    HechoInvalido,
+    NamespaceNoConcedido,
+    validar_recuerdo_del_agente,
+)
 from core.orchestrator.escalation import escalate
+from core.orchestrator.motivos_escalacion import MOTIVOS_TOOL, motivo_de_tool
 from core.shared.tenant import get_current_tenant_id
+from core.tools import sandbox as sandbox_prueba
 
 
 async def conversation_spent(conversation_id: uuid.UUID) -> float:
@@ -41,6 +53,35 @@ async def conversation_spent(conversation_id: uuid.UUID) -> float:
         return float(total or 0)
 
 
+async def hay_canal_que_pide_contacto(tipos_de_conexion: set[str]) -> bool:
+    """Predicado de oferta de `pedir_telefono` (ADR-0199 §10): el negocio tiene activa una conexión con la capacidad
+    `pedir_contacto` (hoy solo Telegram) y, si es Telegram, el kill-switch del canal está encendido. Es por negocio: en
+    las conversaciones de otro canal del mismo negocio la tool se ofrece y responde que no aplica."""
+    from core.gateway.connection_types import CAPACIDADES_POR_TIPO, SOLO_TEXTO, TELEGRAM
+    from core.gateway.telegram.habilitado import habilitado
+
+    return any(
+        CAPACIDADES_POR_TIPO.get(t, SOLO_TEXTO).pedir_contacto and (t != TELEGRAM or habilitado())
+        for t in tipos_de_conexion
+    )
+
+
+async def _pedido_de_contacto_en_cola(id_mensaje: str) -> bool:
+    """Ya hay un pedido de teléfono de esta llamada que salió o está en cola (un reintento no lo duplica). Uno
+    `failed` no salió: se puede volver a intentar."""
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(Message.id).where(
+                    Message.tenant_id == get_current_tenant_id(),
+                    Message.client_message_id == id_mensaje,
+                    Message.status != "failed",
+                )
+            )
+        ).first()
+    return fila is not None
+
+
 class CoreSkill(BaseSkill):
     name = "core"
     description = "Herramientas del núcleo: memoria del cliente, escalamiento, playbooks y presupuesto."
@@ -48,31 +89,79 @@ class CoreSkill(BaseSkill):
 
     # ------------------------------------------------------------ handlers
     async def _escalate_to_human(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        reason = str(args.get("reason", "manual"))[:80]
-        summary = str(args.get("summary", ""))[:500]
-        await escalate(ctx.conversation_id, reason=f"tool:{reason}", summary=summary)
+        # Código cerrado (HU-UX-17): un `reason` fuera del catálogo queda como `otro` y su texto
+        # pasa al detalle, que se guarda junto al resumen (no hay columna aparte).
+        codigo, detalle = motivo_de_tool(str(args.get("reason") or ""))
+        detalle = str(args.get("detalle") or "").strip() or detalle
+        summary = str(args.get("summary", "")).strip()[:500]
+        if detalle:
+            summary = "\n\n".join(p for p in (summary, f"Detalle del motivo: {detalle[:200]}") if p)
+        await escalate(ctx.conversation_id, reason=f"tool:{codigo}", summary=summary)
         return {"status": "escalated", "bot_paused": True}
 
     async def _get_customer_profile(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         profile = await entity_memory.get_profile(ctx.customer_id)
-        return {"profile": profile}
+        normalizado = perfil_cliente.leer_perfil(
+            profile,
+            telefono=profile.get("contact_phone") or profile.get("phone"),
+            nombre_cliente=profile.get("name"),
+        )
+        return {"profile": normalizado}
 
     async def _update_customer_profile(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         attributes = dict(args.get("attributes") or {})
         if not attributes:
             return {"error": "attributes vacío: no hay nada que actualizar"}
-        await entity_memory.upsert_attributes(ctx.customer_id, attributes)
-        return {"status": "ok", "updated": list(attributes.keys())}
+        try:
+            guardado = await guardar_datos(
+                ctx.customer_id,
+                attributes,
+                source="agent",
+                concedidos=ctx.write_namespaces,
+                agent_id=ctx.agent_id,
+            )
+        except NamespaceNoConcedido:
+            return {"error": "este agente no puede guardar datos en el perfil del cliente"}
+        except HechoInvalido:
+            return {
+                "error": "dato no admitido en el perfil: claves cortas de una línea, sin datos de pago, "
+                "salud ni contraseñas"
+            }
+        if guardado.requiere_aceptacion:
+            # Aviso de datos activo y el cliente aún no aceptó (HU-CRM-16): lo operativo ya quedó guardado,
+            # el resto no. El aviso se lo muestra el sistema; el modelo no lo redacta ni lo repite.
+            return {
+                "status": "requiere_aceptacion",
+                "updated": sorted(guardado.guardados),
+                "no_guardado": guardado.diferidos,
+                "estado_aviso": guardado.estado_aviso,
+                "hint": "Esos datos se guardan solo si el cliente acepta el aviso de datos. No se los vuelvas a pedir.",
+            }
+        # Ordenado: el orden de los argumentos no es estable (y la salida va al prompt).
+        return {"status": "ok", "updated": sorted(attributes)}
 
     async def _remember_fact(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         content = str(args.get("content", "")).strip()
         if not content:
             return {"error": "content vacío"}
+        # HU-ARCH-35: un agente v3 solo guarda recuerdos con el namespace del perfil concedido (en
+        # legacy `write_namespaces` es None y no se chequea), y lo guardado es corto y no sensible.
+        # Errores de negocio, no excepciones: el pack no se autodeshabilita.
+        if ctx.write_namespaces is not None and PERFIL not in ctx.write_namespaces:
+            return {"error": "este agente no puede guardar recuerdos del cliente"}
+        try:
+            validar_recuerdo_del_agente(content)
+        except HechoInvalido:
+            return {
+                "error": "recuerdo no admitido: una sola línea de hasta 200 caracteres, sin datos de pago, "
+                "salud ni contraseñas"
+            }
         await vector_memory.store_memory(
             content=content,
             customer_id=ctx.customer_id,
             conversation_id=ctx.conversation_id,
             meta={"source": "core:remember_fact"},
+            kind="fact",
         )
         return {"status": "stored"}
 
@@ -111,7 +200,7 @@ class CoreSkill(BaseSkill):
         if not note:
             return {"error": "note vacío"}
         async with get_session() as session:
-            conversation = await session.get(Conversation, ctx.conversation_id)
+            conversation = await session.get(Conversation, ctx.conversation_id, with_for_update=True)
             if conversation is None:
                 return {"error": "conversación no encontrada"}
             state = dict(conversation.state)
@@ -124,97 +213,96 @@ class CoreSkill(BaseSkill):
     async def _send_email(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
         """Encola un correo saliente por el canal de correo del negocio (ADR-0071).
 
-        Reutiliza la cola/reintentos de `outbound_send`: crea el `Customer` y la
-        `Conversation` del canal email si no existen, persiste el `Message` y lo
+        Delega en `queue_outbound_email` (mismo camino que la confirmación de citas
+        de HU-CAL-02): resuelve Customer/Conversation, persiste el `Message` y lo
         encola. La tool solo llega al modelo si hay una conexión email activa
         (`requires_connection_types`).
         """
+        from core.gateway.outbound_email import EmailOutboxError, queue_outbound_email
+
         to = str(args.get("to", "")).strip()
-        from core.gateway.channels.email import single_recipient
-
-        recipient = single_recipient(to)
-        if recipient is None:
-            return {"error": "email destino inválido"}
-        to = recipient
         body = str(args.get("body", "")).strip()
-        if not body:
-            return {"error": "body vacío"}
         subject = str(args.get("subject", "") or "").strip()
-        if any(c in subject for c in "\r\n"):
-            return {"error": "asunto inválido"}
+        try:
+            message_id = await queue_outbound_email(to, subject, body)
+        except EmailOutboxError as exc:
+            return {
+                "no_connection": "No hay una conexión de correo configurada para este negocio.",
+                "invalid_recipient": "email destino inválido",
+                "empty_body": "body vacío",
+            }.get(exc.reason, f"No se pudo enviar el correo ({exc.reason}).")
+        return {"status": "queued", "to": to, "message_id": message_id}
 
-        tenant_id = get_current_tenant_id()
-        if tenant_id is None:
-            return {"error": "sin contexto de tenant"}
+    async def _enviar_plantilla_opciones(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        """Envía a la conversación actual una plantilla de opciones YA publicada (SPEC-40, HU-OPC-02). Solo envía:
+        no crea ni edita definiciones, no elige a quién (la conversación es la del turno) ni qué datos lleva (el
+        servidor arma el contexto). La cascada de vías, la bandera y el rastro están en `send_options_to_conversation`."""
+        from core.gateway.sender import send_options_to_conversation
+        from core.kernel.opciones.envio import para_el_agente
 
-        from core.gateway.connections import get_active_connection
+        resultado = await send_options_to_conversation(
+            ctx.conversation_id,
+            str(args.get("clave") or "").strip(),
+            clave_idempotencia=ctx.idempotency_key,
+            actor="agent",
+        )
+        return para_el_agente(resultado)
 
-        connection = await get_active_connection("email_smtp")
-        if connection is None:
-            return {"error": "No hay una conexión de correo configurada para este negocio."}
+    async def _pedir_telefono(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
+        """Envía al cliente de esta conversación un botón para compartir su teléfono (HU-CONN-26, ADR-0199 §10). El
+        texto y la etiqueta los pone el agente. No envía nada en un canal sin la capacidad `pedir_contacto` (el agente
+        decide su playbook si lo pide de otra forma) ni si el cliente ya tiene teléfono (el consumer no pisa uno distinto). El
+        número que comparta lo guarda el consumer en `contact_phone`; esta tool nunca lo lee ni lo devuelve."""
+        from sqlalchemy.exc import IntegrityError
 
+        from core.gateway.connection_types import capacidades_del_canal
+        from core.gateway.sender import send_interactive_to_conversation
+
+        texto = str(args.get("texto") or "").strip()
+        etiqueta = str(args.get("etiqueta") or "").strip()
+        if not texto or not etiqueta:
+            return {"error": "texto_o_etiqueta_vacios"}
+        if not capacidades_del_canal(ctx.channel).pedir_contacto:
+            return {
+                "error": "canal_sin_pedir_contacto",
+                "mensaje": "Este canal no permite pedir el teléfono con un botón.",
+            }
         async with get_session() as session:
-            customer = (
-                await session.execute(
-                    select(Customer).where(
-                        Customer.tenant_id == tenant_id,
-                        Customer.channel == "email",
-                        Customer.external_id == to,
-                        Customer.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if customer is None:
-                customer = Customer(tenant_id=tenant_id, channel="email", external_id=to)
-                session.add(customer)
-                await session.flush()
-
-            conversation = (
-                await session.execute(
-                    select(Conversation)
-                    .where(
-                        Conversation.tenant_id == tenant_id,
-                        Conversation.customer_id == customer.id,
-                        Conversation.connection_id == connection.id,
-                        Conversation.status == "open",
-                        Conversation.deleted_at.is_(None),
-                    )
-                    .order_by(Conversation.started_at.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if conversation is None:
-                conversation = Conversation(
-                    tenant_id=tenant_id,
-                    customer_id=customer.id,
-                    channel="email",
-                    connection_id=connection.id,
-                    status="open",
-                )
-                session.add(conversation)
-                await session.flush()
-
-            content = f"Subject: {subject or '(sin asunto)'}\n\n{body}"
-            message = Message(
-                tenant_id=tenant_id,
-                conversation_id=conversation.id,
-                direction="outbound",
-                sender_type="agent",
-                content=content,
-                status="queued",
-                client_message_id=str(uuid.uuid4()),
+            # El cliente sale de la conversación del turno, a la que va el botón.
+            conversacion = await session.get(Conversation, ctx.conversation_id)
+            cliente = await session.get(Customer, conversacion.customer_id) if conversacion is not None else None
+            if cliente is None or cliente.tenant_id != get_current_tenant_id():
+                return {"error": "cliente_no_encontrado"}
+            if cliente.contact_phone:
+                return {"status": "ya_tiene_telefono"}
+        id_mensaje = f"pedir_tel:{ctx.idempotency_key}"
+        if await _pedido_de_contacto_en_cola(id_mensaje):
+            return {"status": "ya_enviado"}
+        interactivo = {"type": "contacto", "body": texto, "button": etiqueta}
+        try:
+            enviado = await send_interactive_to_conversation(
+                ctx.conversation_id,
+                interactivo,
+                fallback_text=texto,
+                sin_degradar=True,
+                client_message_id=id_mensaje,
             )
-            session.add(message)
-            await session.flush()
-            message_id = message.id
-
-        from core.tasks.outbound_send import outbound_send_task
-
-        outbound_send_task.delay(str(message_id), str(tenant_id))
-        return {"status": "queued", "to": to, "message_id": str(message_id)}
+        except IntegrityError as exc:
+            # Dos llamadas con la misma clave a la vez: la otra ya lo encoló. Cualquier otra violación (un CHECK) es
+            # un defecto y se propaga.
+            if "uq_messages_tenant_client_message_id" not in str(exc.orig):
+                raise
+            return {"status": "ya_enviado"}
+        if not enviado:
+            return {"error": "no_enviado", "mensaje": "No se pudo enviar el botón para pedir el teléfono."}
+        return {"status": "enviado"}
 
     # ------------------------------------------------------------ definición
     def get_tools(self) -> list[MCPTool]:
+        """Tools del core: siempre disponibles, fuera del flujo (HU-FWK-01, ADR-0109)."""
+        return [replace(t, always_available=True) for t in self._build_tools()]
+
+    def _build_tools(self) -> list[MCPTool]:
         return [
             MCPTool(
                 name="escalate_to_human",
@@ -226,12 +314,22 @@ class CoreSkill(BaseSkill):
                 parameters={
                     "type": "object",
                     "properties": {
-                        "reason": {"type": "string", "description": "Motivo de la escalación"},
+                        "reason": {
+                            "type": "string",
+                            "enum": list(MOTIVOS_TOOL),
+                            "description": "Motivo de la escalación",
+                        },
+                        "detalle": {
+                            "type": "string",
+                            "description": "Detalle del motivo, sobre todo si es 'otro'",
+                        },
                         "summary": {"type": "string", "description": "Resumen para el asesor"},
                     },
                     "required": ["reason"],
                 },
                 handler=self._escalate_to_human,
+                side_effects=True,
+                simular=sandbox_prueba.simular_escalar,
             ),
             MCPTool(
                 name="get_customer_profile",
@@ -241,6 +339,7 @@ class CoreSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self._get_customer_profile,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="update_customer_profile",
@@ -259,6 +358,8 @@ class CoreSkill(BaseSkill):
                     "required": ["attributes"],
                 },
                 handler=self._update_customer_profile,
+                side_effects=True,
+                permite_en_prueba=True,
             ),
             MCPTool(
                 name="remember_fact",
@@ -273,6 +374,8 @@ class CoreSkill(BaseSkill):
                     "required": ["content"],
                 },
                 handler=self._remember_fact,
+                side_effects=True,
+                permite_en_prueba=True,
             ),
             MCPTool(
                 name="search_memories",
@@ -289,6 +392,7 @@ class CoreSkill(BaseSkill):
                     "required": ["query"],
                 },
                 handler=self._search_memories,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="load_playbook",
@@ -303,6 +407,7 @@ class CoreSkill(BaseSkill):
                     "required": ["name"],
                 },
                 handler=self._load_playbook,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="get_conversation_usage",
@@ -312,6 +417,7 @@ class CoreSkill(BaseSkill):
                 ),
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self._get_conversation_usage,
+                solo_lectura=True,
             ),
             MCPTool(
                 name="set_conversation_note",
@@ -325,6 +431,8 @@ class CoreSkill(BaseSkill):
                     "required": ["note"],
                 },
                 handler=self._set_conversation_note,
+                side_effects=True,
+                permite_en_prueba=True,
             ),
             MCPTool(
                 name="send_email",
@@ -343,20 +451,106 @@ class CoreSkill(BaseSkill):
                     "required": ["to", "body"],
                 },
                 handler=self._send_email,
+                side_effects=True,
+                simular=sandbox_prueba.simular_email,
                 requires_connection_types=["email_smtp"],
+            ),
+            MCPTool(
+                name="enviar_plantilla_opciones",
+                description=(
+                    "Envía al cliente de esta conversación una plantilla de opciones (botones) ya publicada, "
+                    "para que elija con un toque. Úsala solo con la clave de una plantilla que el negocio te "
+                    "indicó. NO crea ni edita plantillas ni inventa opciones."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "clave": {
+                            "type": "string",
+                            "pattern": "^[a-z0-9_]{1,40}$",
+                            "maxLength": 40,
+                            "description": "Clave de la plantilla de opciones publicada",
+                        }
+                    },
+                    "required": ["clave"],
+                    "additionalProperties": False,
+                },
+                handler=self._enviar_plantilla_opciones,
+                side_effects=True,
+                simular=sandbox_prueba.simular_plantilla_opciones,
+                # Solo se ofrece (y se ejecuta) con la bandera `opciones_directas` del negocio encendida.
+                connection_predicate=oferta_habilitada,
+                # NO `apta_para_opcion` (default False): una opción no puede enviar otra plantilla de opciones
+                # (evita bucles de botón que envía botones), y el lint la rechaza como `tool_no_apta`.
+            ),
+            MCPTool(
+                name="pedir_telefono",
+                description=(
+                    "Envía al cliente un botón para que comparta su teléfono con un toque (hoy solo en Telegram). "
+                    "Úsala cuando necesites su número y no lo tengas. El texto ya hace el pedido: no lo repitas en tu "
+                    "respuesta. En otros canales no envía nada."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "texto": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 1024,
+                            "description": "Mensaje al cliente que explica para qué necesitas su teléfono",
+                        },
+                        "etiqueta": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64,
+                            "description": "Texto del botón, por ejemplo «Compartir mi teléfono»",
+                        },
+                    },
+                    "required": ["texto", "etiqueta"],
+                    "additionalProperties": False,
+                },
+                handler=self._pedir_telefono,
+                side_effects=True,
+                simular=sandbox_prueba.simular_pedir_telefono,
+                connection_predicate=hay_canal_que_pide_contacto,
             ),
         ]
 
 
 def register_core_skills(host) -> None:
-    """Registra la skill del core en el MCPHost (idempotente)."""
-    if any(name == "core" for name, _ in getattr(host, "_skills", {}).items()):
+    """Registra las skills del core en el MCPHost (idempotente)."""
+    registradas = {name for name, _ in getattr(host, "_skills", {}).items()}
+    if registradas >= {"core", "subscriptions", "datos_cliente", "historial_cliente", "aviso_datos", "lead_skill"}:
         return
     host.begin_activation("core")
     try:
-        host.register_skill(CoreSkill())
+        if "core" not in registradas:
+            host.register_skill(CoreSkill())
+        if "subscriptions" not in registradas:
+            from core.subscriptions.tools import SubscriptionSkill
+
+            host.register_skill(SubscriptionSkill())
+        if "datos_cliente" not in registradas:
+            from core.datos_cliente.tools import DatosClienteSkill
+
+            host.register_skill(DatosClienteSkill())
+        if "historial_cliente" not in registradas:
+            from core.memory.historial_tool import HistorialClienteSkill
+
+            host.register_skill(HistorialClienteSkill())
+        if "aviso_datos" not in registradas:
+            from core.datos_cliente.aviso_tool import AvisoDatosSkill
+
+            host.register_skill(AvisoDatosSkill())
+        if "lead_skill" not in registradas:
+            # Captar leads (ADR-0193 §2): del core, pero solo para los agentes con su binding.
+            from core.leads.tools import LeadSkill
+
+            host.register_skill(LeadSkill())
     finally:
         host.end_activation()
+    # El lead en la vista de Clientes (ADR-0193): importar el provider lo registra.
+    import core.leads.providers  # noqa: F401
 
 
 def register_core_skills_lazy() -> None:

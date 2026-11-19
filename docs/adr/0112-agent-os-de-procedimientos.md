@@ -1,0 +1,234 @@
+# ADR-0112 — Agent OS de procedimientos: Coordinador por conexión, un hilo por conversación y agentes especialistas
+
+- **Estado:** aceptado (2026-10-09, HU-AOS-01)
+- **Nota de estado:** ADR-0191 (propuesto, 2026-11-12): el orden de banderas queda sin `runtime`; `legacy` se retira del código.
+- **Fecha:** 2026-10-08
+- **Contexto:** HU-AOS-01 (SPEC-26 en `solvershub-docs`, decisiones D-27 y D-28). Responde la pregunta P-10.
+  No cambia la topología (rige ADR-0021). Los contratos cambian en ADR-0113.
+
+## Contexto
+
+- Hoy hay **un agente por negocio**: un solo `AgentSpec` activo (`core/agents/spec.py`), que el loop carga sin conexión (`load_active_spec()` en `run_turn`, `core/orchestrator/loop.py`); un playbook decide entre vender o agendar (`core/playbooks/enrutamiento.md`).
+- El negocio quiere vender un sistema operativo de agentes: N conexiones por negocio y varios agentes especialistas por conexión que colaboran.
+- El problema principal es la **consistencia**, no la cantidad de agentes: la línea base de evals quedó en 34/35 y 7/8, tres guardrails heurísticos escalaban compras válidas (ADR-0119 retiró dos; `calendar_completion_check` sigue en medición) y las secciones del flujo no restringen qué acción se llama. Desde HU-ARCH-28 la consistencia se mide con pass^k.
+- La evidencia externa va en el mismo sentido: partir el contexto entre agentes produce decisiones incompatibles (Cognition, jun-2025); el multiagente gasta ≈ 15× los tokens de un chat y encaja mal cuando las tareas comparten contexto (Anthropic, jun-2025); los agentes de atención al cliente son inconsistentes entre intentos (τ-bench, jun-2024).
+
+## Decisión
+
+Cada conexión tiene un Coordinador que ejecuta procedimientos tipados sobre un estado único, y los agentes especialistas atienden en el mismo hilo.
+
+1. **La conexión es la unidad de ejecución.** Cada conexión conversacional tiene **exactamente un Coordinador** (el Agente Core: un kernel determinista) y N agentes especialistas. Hay una conversación abierta por (conexión, cliente) (ADR-0115).
+2. **El Coordinador ejecuta procedimientos tipados sobre un estado único** (ADR-0113 y ADR-0114). El LLM entiende y redacta; el kernel decide y actúa (datos validados, acciones permitidas por etapa, confirmación, efectos idempotentes); un verificador comprueba lo que se dice (ADR-0119). El LLM es coprocesador del kernel, no su dueño.
+   Una conexión pausada (ADR-0122) no ejecuta el Coordinador: el mensaje se guarda sin IA, como hoy.
+3. **Los especialistas son agentes del mismo hilo**, con una voz por conexión. La colaboración entre agentes (handoff, delegación, consulta, broadcast y colaboración) usa mecanismos deterministas (ADR-0116).
+4. **Lo asíncrono va aparte.** Seguimiento, conciliación, resúmenes y auditoría corren en el worker y solo proponen (ADR-0116; los seguimientos de `pack_commerce.jobs` que hoy escriben directo al cliente son la excepción conocida hasta HU-AOS-30). Un agente con contexto propio se suma ahí cuando un caso real lo exija.
+5. **Monolito modular**, el mismo binario: módulos nuevos `core/kernel/`, `core/releases/`, y `core/backoffice/`. No hay microservicios.
+6. **Topología sin cambios.** Rige ADR-0021: si su disparador se cumple, se separan `panel` y `gateway+consumer` por `AGENT_CORE_ROLE`. El Coordinador corre donde corre el consumer, y el back-office en el worker.
+
+## Alternativas consideradas
+
+| Opción | Por qué no |
+|---|---|
+| Especialistas LLM independientes conversando entre sí frente al cliente | El error se compone por salto y el contexto se parte; es la causa de inconsistencia documentada; además, más tokens y latencia |
+| Microservicios (gateway, kernel, runtime, broker) | Un salto de red por operación entre agentes y una operación que 1–3 personas no sostienen |
+| Reescribir sobre un framework de agentes | Pierde las invariantes, el RLS, los golden sets y las habilidades existentes |
+| Seguir con un agente y playbooks | No mejora la consistencia ni permite vender varios agentes por conexión |
+
+## Consecuencias
+
+**Positivas:**
+- Varios agentes por conexión con una sola voz y un solo estado: el cliente no repite datos.
+- La lógica de negocio queda en código y la consistencia se mide (pass^k).
+- Reutiliza el loop, el RLS, el outbox, los ledgers y el panel.
+
+**Negativas / lo que aceptamos pagar:**
+- Contratos nuevos (major, ADR-0113).
+- Autoría de procedimientos por habilidad.
+- Las HU nuevas de SPEC-26 en el backlog (`tasks.md` de SPEC-26).
+- La "autonomía" frente al cliente es menor que con agentes independientes.
+
+**Qué haría que revisáramos esto:**
+- Que pass^k no mejore frente a la línea base de un agente: el pass^4 que mide HU-ARCH-28 en el nocturno con k = 4 antes de encender `AOS_PROCEDURES` (valor y fecha se anotan en la bitácora de SPEC-26).
+- Que los procedimientos frustren conversaciones naturales: frases sin disparador o datos repetidos en aumento.
+- Que un caso real exija agentes con contexto propio frente al cliente.
+
+## Impacto en el código
+
+- Módulos nuevos:
+  - `core/kernel/`: `ingress`, `router`, `procedures`, `state`, `a2a`, `egress`, `decisions`. El verificador sigue en `core/orchestrator/verificador/` (ADR-0119) y suma la evidencia de las tareas; no hay un segundo verificador;
+  - `core/agents/runtime.py` y `compiler.py`;
+  - `core/releases/` y `core/backoffice/`;
+  - `CLAUDE.md` (Estructura) y `docs/architecture/c4.md`.
+- `core/orchestrator/consumer.py` y `loop.py` se refactorizan detrás de banderas (`AOS_PROCEDURES`, `AOS_CONNECTION_ROUTING`, `AOS_RUNTIME`), sin cambio de conducta hasta encenderlas.
+  - `AOS_PROCEDURES` y `AOS_RUNTIME` son configuración de plataforma **por negocio**, guardada en base de datos y editable solo por el master: se encienden negocio por negocio sin redeploy.
+  - `AOS_CONNECTION_ROUTING` es global por entorno, porque su *contract* (ADR-0115) es global.
+  - Orden de encendido: `AOS_CONNECTION_ROUTING` (global, encendida/apagada) → `AOS_RUNTIME` (`legacy` | `v3`, por negocio; `v3` exige `AOS_CONNECTION_ROUTING` encendida) → `AOS_PROCEDURES` (por negocio; exige `AOS_RUNTIME = v3`). Se apagan en orden inverso: apagar `AOS_CONNECTION_ROUTING` exige `AOS_RUNTIME = legacy` en todos los negocios. El panel del master rechaza las combinaciones inválidas.
+
+## Adenda de implementación (2026-10-10, HU-AOS-10): ledger del Coordinador y trazas
+
+Revisada por el agente `arquitecto` antes de escribir código. Es la primera parte de HU-AOS-10; no cambia contratos,
+invariantes ni banderas de conducta.
+
+- **Qué es un turno:** lo que el Coordinador hace con lo que entró: bloquearlo por una política, escalarlo o
+  enrutarlo al hilo del agente. Deja dos filas append-only:
+  - `core_decisions` (cabecera, `id = turn_id`) **al decidir**, antes de cualquier efecto del turno (respuesta fija,
+    escalamiento, LLM). Las políticas del preámbulo deciden `blocked` (`kill_switch`, `escalated_conversation`,
+    `quota`, `budget`, `connection_paused`, `out_of_hours`) o `escalated` (`escalation_keyword`); lo demás se decide
+    `routed` (`route_source = default`, sin router todavía) justo antes de la primera llamada al LLM, así un
+    presupuesto agotado en la primera vuelta queda `blocked/budget`.
+  - `turn_outcomes` al cerrar, después de la entrega: `replied` (encolado, no entregado), `neutral` (ADR-0092),
+    `escalated` (también si el envío falla y se escala), `silent` o `failed` (excepción; una tarea cancelada no
+    escribe). Lleva tokens y costo del turno y el veredicto del verificador (`[{kind, verdict, count}]`, sin texto).
+  - Agendar un debounce no es un turno: decide el disparo. El reintento de un inbound que falló no genera turno nuevo
+    (el inbound ya está duplicado). El playground (canal `test`) escribe filas; el tablero (HU-AOS-29) lo filtra por
+    canal.
+  - **Sin fila** (no hay conversación y `conversation_id` es NOT NULL): negocio no operativo en el consumer o en el
+    disparo del debounce, `QuotaExceeded` al crear el cliente o la conversación, y conversación inexistente.
+- **Costo:** dos INSERT por turno y ninguna lectura extra (la conexión sale del objeto en memoria, los tokens del uso
+  que ya se acumula para `usage_ledger`). Medido en local: p95 de 8,4 ms por turno para las dos escrituras.
+- **`turn_id` en las filas del turno:** `messages`, `usage_ledger` (y `trace_id`) y `audit_log` lo toman por default
+  de columna desde `core/shared/turno.py`, que solo se fija con la cabecera ya commiteada (las FKs son diferidas al
+  COMMIT, pero cada sesión es su propia transacción). Significa "causado por el turno", no "de la conversación del
+  turno". **Guarda de negocio:** si la fila es de otro negocio (cobro de plataforma, packs que cambian de
+  `tenant_scope`), queda NULL; la FK compuesta nunca hace fallar una escritura que antes funcionaba. El inbound se
+  guarda antes de decidir y queda NULL: lo enlaza `core_decisions.inbound_message_ids`. **Pendiente:** los ids del
+  inbound en el camino debounce (la ráfaga vive en Redis como texto) y el `turn_id` dentro de las tareas Celery
+  (`run_async` corre la corrutina en otro hilo y el contexto no viaja).
+- **Trazas:** el turno abre `kernel.turn` como span actual; el hilo (`turn`, `llm_call`), las acciones
+  (`tool_execute`) y la salida comparten `trace_id`. Con OTel apagado se adjunta un span no grabado con
+  `trace_id = turn_id`. A Celery viaja en `traceparent` (señales `before_task_publish`/`task_prerun`/`task_postrun`,
+  `core/observability/celery_trazas.py`), sin dependencias nuevas.
+- **Best-effort mientras el runtime sea legacy:** un fallo de escritura se loguea y el turno sigue igual, también en
+  latencia (cada INSERT tiene un tope de 2 s). Desde `AOS_PROCEDURES` el design (§5.3) pide fail-closed; llega con el
+  motor de procedimientos.
+- **Turno de un solo negocio:** el turno abierto solo es visible bajo el `tenant_scope` de su negocio; un turno de otro
+  negocio anidado abre el suyo. El span `kernel.turn` no registra la excepción (su mensaje puede repetir datos del
+  cliente), solo `error.type`. A Celery solo viaja W3C TraceContext, nunca baggage. Una tarea que el turno lance con
+  `create_task` hereda su `turn_id` (mismo negocio): es ruido aceptado en el ledger.
+- **Bandera:** `KERNEL_LEDGER_ENABLED` (entorno, global, encendida por defecto) es la bandera de la HU. Es
+  observabilidad y no cambia la conducta ni el prompt (el gate de evals en replay pasa sin regrabar), así que no va
+  detrás de `AOS_RUNTIME`/`AOS_PROCEDURES`, que quedan para cambios de conducta. Apagada, no hay filas y el `turn_id`
+  queda NULL.
+- **Kernel y orquestador:** `core/kernel/decisions.py` (ledger), `ingress.py` (políticas de entrada) y `egress.py`
+  (un mensaje por turno, antes duplicado en consumer y debounce). El kernel no importa el loop, el consumer ni el
+  debounce (contrato `kernel-sin-orquestador` en `.importlinter`). `ingress` tiene todas las políticas deterministas,
+  con el mismo orden, lecturas y textos de antes (traslado sin cambio de conducta, parte 2 de la HU):
+  - al entrar el mensaje, ya guardado (`politicas_de_entrada`, la llama el consumer): conexión pausada de ADR-0122
+    (con el aviso a los dueños), kill-switch en tres niveles o conversación escalada, palabras de escalamiento y
+    horario de atención;
+  - al disparar un turno diferido (`conexion_pausada`, la llama el debounce, sin aviso);
+  - en el preámbulo del loop (`conversacion_bloqueada`, `politicas_del_turno`): pausada o escalada, cuota y
+    presupuesto.
+
+  Se quedan en el orquestador: la **velocidad de respuesta** (es despacho, inmediato o debounce: `debounce_or_now` del
+  design §3.5), y los descartes previos a la conversación (negocio no operativo en el consumer, negocio inactivo en
+  el disparo del debounce, `QuotaExceeded` al crear el cliente o la conversación), que no son turno. La salida de
+  horario sigue enviando ella misma (con su escalamiento si el envío falla) en vez de pasar por `egress.entregar`:
+  unificarlas llega con la respuesta por plantilla del design (`egress.template_reply`).
+
+## Adenda de implementación (2026-10-10, HU-AOS-05): motor de procedimientos y modo sombra
+
+- **Motor activo** con `tenants.aos_procedures`. Las convenciones del motor están en la adenda de
+  ADR-0113 de la misma fecha.
+- **Modo sombra** sin bandera nueva: la ventana es `aos_runtime = 'v3'` con `aos_procedures`
+  apagada (el CHECK de 0070 ya ordena las dos).
+  - El turno sigue con el flujo de siempre. El motor observa cada acción ejecutada sobre una
+    tarea sombra en Redis (`aos:sombra:{negocio}:{conversación}`, TTL de un episodio).
+  - La tarea sombra no guarda valores del cliente: solo nombres de datos llenos, la etapa y los
+    booleanos de los `requiredWhen`.
+  - No ejecuta precondiciones ni *resolvers*.
+  - Registra las diferencias (códigos y conteos) en `audit_log` (`core:motor_sombra`,
+    `diferencias`), una fila por lote de acciones.
+  - Sin procedimientos registrados cuesta un chequeo en memoria. El replay del gate (runtime
+    legacy) no la ejecuta.
+- **Pendiente para HU-AOS-15:** el fail-closed de `core_decisions` con `aos_procedures`
+  encendida. El motor no lo necesita: un `turn_id` NULL en `task_events` es válido.
+
+## Adenda de implementación (2026-10-11, HU-AOS-10, seguimientos #438 y #439)
+
+Revisada por el agente `arquitecto` antes de escribir código. Deja sin efecto el **Pendiente** de la adenda de
+HU-AOS-10 (ids del inbound en el camino debounce y `turn_id` dentro de las tareas Celery). Sin migración, sin bandera
+nueva y sin cambio de conducta (gate en replay sin regrabar).
+
+- **Ids del inbound en el debounce (#438).** Cada inbound agendado empuja su id a
+  `debounce:inbound:{tenant_id}:{conversation_id}` (lista, mismo RPUSH/LTRIM/EXPIRE de 5 min y mismo pipeline que el
+  texto de la ráfaga). Al disparar, el turno diferido los anota antes de la primera decisión, así
+  `core_decisions.inbound_message_ids` lleva todos los mensajes de la ráfaga, sin duplicados. El reencolado por
+  `TurnQueueTimeout` los vuelve a empujar desde el payload, como el texto; si entra un mensaje entre el claim y el
+  reencolado, el orden del arreglo no es cronológico (no se promete orden). La recuperación de conversaciones
+  huérfanas al arrancar pasa el id del último inbound. Al disparar, payload, texto e ids se leen y borran en una
+  transacción (antes eran comandos sueltos y un mensaje que llegara en medio podía perder su texto). La clave lleva el UUID del negocio primero
+  (`docs/MULTITENANT.md`): la purga del negocio y su reintento (`tenant purge-redis`) la barren sin enumerar
+  conversaciones; no es una familia solo por conversación. Se escribe siempre (son UUIDs sin datos del cliente),
+  también con `KERNEL_LEDGER_ENABLED` apagada.
+- **`turn_id` dentro de las tareas Celery (#439).** Diagnóstico corregido: `run_async` sí lleva los ContextVars del
+  hilo de la tarea a la corrutina (`run_coroutine_threadsafe` copia el contexto del llamador); lo que no viaja es el
+  **proceso**: la tarea corre en el worker, donde el turno nunca se fijó. Se propaga en **headers** del mensaje
+  (`agentcore_turn_id`, `agentcore_turn_tenant_id`, `agentcore_turn_trace_id`, en
+  `core/observability/celery_trazas.py`, el mismo patrón que `traceparent`), no como argumentos de cada tarea: las
+  firmas de las tareas (también las de los packs) no cambian, y un worker viejo ignora los headers y una tarea en
+  cola sin ellos queda NULL.
+  - **Al encolar:** solo si hay turno vigente del negocio en `tenant_scope` (la guarda del default de columna) y
+    no es heredado. Nunca pisa headers de turno que ya traiga el mensaje.
+  - **En el worker:** `task_prerun` fija el turno de los headers, validado (UUIDs, `trace_id` de 32 hex), o lo
+    limpia si no viene; `task_postrun` lo suelta. Los defaults de columna aplican la guarda por fila: lo que la
+    tarea escribe para otro negocio queda NULL. La FK compuesta no falla por esto: el turno solo viaja
+    después de commitear su cabecera, y el header no se re-verifica contra `core_decisions` en el worker (sería una
+    lectura por tarea). **Supuesto:** el broker es de confianza; un header forjado con un `turn_id` inexistente haría
+    fallar en el COMMIT la escritura de esa tarea, pero escribir en el broker ya permite encolar cualquier tarea.
+    Caso límite aceptado: si un negocio se purga y se vuelve a dar de alta con el mismo id (alta automática
+    determinista, ADR-0121) mientras sigue en cola una tarea suya con headers de turno (p. ej. un reintento con
+    `countdown`), esa escritura falla por la FK; antes habría pasado.
+  - Las tareas genéricas de los packs (`enqueue`, `task_queue`) que un turno encola heredan su `turn_id` en todo lo
+    que escriben del mismo negocio: atribución de más, nunca hacia otro negocio.
+  - **Reintento:** `self.retry` republica con los headers del mensaje (comprobado con un worker real), así que
+    conserva el turno. **Tareas nuevas encoladas desde el worker** (p. ej. `_enqueue_next` de `outbound_send`, que
+    encola el siguiente mensaje, quizá de otro turno) **no** lo heredan: NULL antes que mal atribuido. La
+    reprogramación por política (`_handle_policy_defer`, `apply_async` con otro id) es la misma tarea en sentido
+    de negocio y aun así queda NULL; se acepta.
+  - `traceparent` sí viaja a las tareas encadenadas: una tarea puede compartir `trace_id` con el turno y tener
+    `turn_id` NULL. Es intencional; no se deben igualar.
+
+
+## Adenda HU-AOS-17: bandera de enrutamiento (2026-10-18)
+
+Tercera bandera por negocio, `tenants.aos_routing` (`off` | `shadow` | `active`, migración 0094), con el CHECK
+`aos_routing = 'off' OR aos_runtime = 'v3'`. Orden de encendido: `AOS_CONNECTION_ROUTING` → `aos_runtime = v3` →
+(`aos_procedures`) → `aos_routing`; `migrar-a-v3 --volver` la apaga en el mismo UPDATE. `route_source` deja de ser
+siempre `default` cuando está en `active`. Detalle en ADR-0138.
+
+## Adenda HU-AOS-15: panel del master y escritor único de las banderas (2026-10-20)
+
+Implementa lo que este ADR ya decidió («editable solo por el master; el panel rechaza las combinaciones
+inválidas»), criterio «Orden de banderas» de HU-AOS-15:
+
+- **Escritor único.** `aos_fijar_banderas(tenant, runtime, procedures, routing, admin_id, actor)` (migración
+  0097, `SECURITY DEFINER`, `search_path` fijo, `REVOKE ALL FROM PUBLIC`, `EXECUTE` a `app_runtime`) escribe
+  las tres banderas de una vez, valida el orden (procedimientos y enrutamiento exigen v3; los CHECK de 0070 y
+  0094 quedan de respaldo) y deja la fila `agent_os.banderas` de `audit_log` (antes, después y actor) en la
+  misma transacción. Con `admin_id` exige un admin activo `master`; sin él, la sesión del rol
+  dueño (CLI `migrar-a-v3` y `ruteo`, «Preparar mis datos»). Todo pasa por `core.kernel.banderas.fijar_banderas`.
+  El `admin_id` no autentica (desde `app_runtime` se podría pasar el de cualquier master): da integridad a la
+  auditoría, porque el actor sale de `admins`. La autorización es la de la API.
+- **De convención a garantía.** «`app_runtime` no escribe las banderas» deja de ser un docstring: el trigger
+  `tenants_aos_banderas_guard` (`BEFORE INSERT OR UPDATE OF` las tres) rechaza el cambio si quien escribe no
+  es el dueño de `tenants` ni superusuario. Se descartó quitar `UPDATE (aos_*)` a `app_runtime`: tiene
+  `UPDATE` sobre toda la tabla (0003), un `REVOKE` por columna no le resta nada y acotar el GRANT por columnas
+  haría nacer sin permiso a cada columna nueva. Excepción conocida: los journeys de evals y algunos tests
+  escriben directo con el rol dueño, que el trigger permite.
+- **Rol.** Las rutas `/api/v1/admin/platform/tenants/{id}/agent-os` (GET, PUT y `/simular`) son **solo del
+  master**, también en test (decisión del dueño, 2026-10-20): excepción a ADR-0134 §2, como la purga. El tester
+  (que tiene «Preparar mis datos» para su negocio `qa-`), un colaborador o un dueño de negocio reciben 403, y la
+  función rechaza un `admin_id` que no sea master.
+- **Qué hace el PUT** (`core.admin.agent_os`): un planificador puro rechaza el objetivo fuera de orden (422) y
+  ordena los pasos (encender runtime → procedimientos → ruteo; apagar al revés). El orden rige las
+  **precondiciones**, no tres escrituras: se escribe el estado final en una sola llamada. Legacy → v3 corre
+  los backfills del negocio (idempotentes y neutros en legacy) y `migrar_a_v3` (fail-closed, 409 con los
+  bloqueos); `construir` (construye y promueve) es opt-in del master porque cambia la release activa. Volver a
+  legacy apaga todo. Apagar solo los procedimientos no fuerza el ruteo a `off` (el CHECK de 0094 solo pide v3).
+  Un candado por negocio, compartido con «Preparar mis datos», evita backfills o builds intercalados.
+- **Avisos, no bloqueos:** el pass^4 (HU-ARCH-28) antes de encender procedimientos; una semana en `shadow` con
+  `reporte-ruteo` antes de `active`; enrutamiento sin procedimientos (el reporte de sombra queda vacío y en
+  `active` las reglas `start` no inician nada). Rechazarlo cambiaría ADR-0138.
+- **Fuera de alcance:** apagar `AOS_CONNECTION_ROUTING` con negocios en v3 es un cambio de entorno, no de un
+  endpoint por negocio; el GET la muestra y el PUT bloquea v3 sin ella.

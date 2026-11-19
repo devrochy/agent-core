@@ -2,6 +2,7 @@
 
 - **Estado:** aceptado
 - **Fecha:** 2026-09-10
+- **Nota de estado:** ADR-0193 (propuesto, 2026-11-13): el enriquecimiento del lead (hoy `pack_commerce_leads`) pasa al core; el `Customer` sigue siendo la identidad.
 
 ## Contexto
 

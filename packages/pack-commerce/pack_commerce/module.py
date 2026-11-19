@@ -1,6 +1,6 @@
 """CRMModule: el BaseModule del plugin.
 
-Registra skills (catalog, order, lead), guardrail de montos, eventos y el
+Registra skills (catalog, order, lead), afirmaciones de cierre, eventos y el
 panel admin del CRM (Leads, Productos, Categorías, Promociones, Pedidos).
 
 El pipeline de venta es: lead -> cotización (con promoción) -> pedido.
@@ -15,7 +15,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -29,10 +29,17 @@ from sqlalchemy import func, select
 # plugin esté activo (guard del decorador).
 import pack_commerce.jobs  # noqa: F401
 from core.db.session import get_owned, get_session
-from core.mcp.types import BaseModule, GuardrailResult
-from core.shared.events import ON_CONVERSATION_STARTED
+from core.leads import servicio as leads_core
+from core.mcp.types import Afirmacion, BaseModule, config_de_agente
+from core.shared.dinero import MONEY_IN_TEXT, MONEY_KEYS, parse_money  # noqa: F401 (API del pack)
+from core.shared.events import ON_PROCEDURE_SLOTS_SET
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
+from core.shared.test_mode import TEST_CHANNEL
+from pack_commerce import api as leads_api
+
+# Registra las columnas y filtros del pack en la vista global de clientes (ADR-0056, HU-UX-16).
+from pack_commerce import providers as _lead_provider  # noqa: F401
 from pack_commerce.admin_api import router as admin_api_router
 from pack_commerce.api import router as leads_router
 from pack_commerce.config import CRMConfig
@@ -40,7 +47,6 @@ from pack_commerce.models import (
     Category,
     CategoryComplement,
     Inventory,
-    Lead,
     Order,
     OrderItem,
     Product,
@@ -48,38 +54,37 @@ from pack_commerce.models import (
     Promotion,
     Quote,
 )
-from pack_commerce.skills import CatalogSkill, LeadSkill, OrderSkill, classify_customer
+from pack_commerce.skills import (
+    CatalogSkill,
+    OrderSkill,
+    classify_customer,
+    referencias_vigentes,
+)
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
+    from core.primeros_pasos.contrato import ContenidoCargado
+    from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+    from core.qa.contrato_importacion import (
+        ContextoDeImportacion,
+        PlantillaDeImportacion,
+        ResultadoDeImportacion,
+    )
 
 log = get_logger(__name__)
 
 PLUGIN_ID = "pack_commerce"
 
-MONEY_IN_TEXT = re.compile(r"\$\s?[\d.,]+")
-
-# Claves bajo las que un resultado de tool puede traer un monto real (puerto
-# directo de MONEY_KEYS/walkForKeys de agent-sale, src/shared/observability/
-# priceGuardrail.ts) -- por NOMBRE de clave, no "cualquier número", para no
-# confundir un stock/quantity numérico con un monto verificado.
-MONEY_KEYS = {"price", "unit_price", "line_total", "subtotal", "total", "discount"}
-
-# Clave reservada del core (docs/SAFE-RENDERER.md, core/orchestrator/safe_renderer.py)
-# -- se usa el literal, NO se importa: los packs no pueden importar de
-# core.orchestrator.* (invariante nº5/allowlist de CLAUDE.md), mismo criterio ya
-# usado acá para "_safe_append".
-_TOOL_NAME_KEY = "_tool_name"
-
 # Frases que afirman que una acción de negocio quedó resuelta -> deben
-# corresponder a una tool REALMENTE llamada en ESTE turno, o es una "phantom
+# corresponder a una tool REALMENTE llamada en ESTE turno (lo comprueba el
+# verificador del core, ADR-0119, con estas afirmaciones), o es una "phantom
 # completion": el modelo dice que hizo algo sin haberlo hecho. Encontrado en
 # vivo (tenant yopoldo, 2026-09-11): tras 2 intentos fallidos de generar_cotizacion
 # (variant_id inventado), el modelo terminó diciendo "cerré tu pedido, en un
 # momentico el asesor te pasa el link" sin haber llamado crear_pedido NI
-# generar_link_pago NI escalado de verdad -- el cliente quedaba esperando algo
-# que nunca iba a pasar. Mismo principio que _amount_guardrail, pero para
-# acciones en vez de montos.
+# al generar el link NI escalado de verdad -- el cliente quedaba esperando algo
+# que nunca iba a pasar. Mismo principio que la verificación de montos, pero
+# para acciones.
 #
 # Los patrones usan raíces (`\w*`) en vez de conjugaciones exactas: la primera
 # versión de este guardrail (solo "cerré tu pedido"/"te envío el link") la
@@ -91,24 +96,106 @@ _TOOL_NAME_KEY = "_tool_name"
 COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     "pedido": (
         re.compile(
-            r"cerr\w*\s+(?:tu|el|los?|la)?\s*pedido|"
-            r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cerrad\w*|cread\w*|generad\w*)",
+            # El artículo va con su propio espacio: `(?:tu)?\s*` era cuadrático ante
+            # una racha de espacios (revisión de seguridad de HU-ARCH-29).
+            r"cerr\w*\s+(?:(?:tu|su|el|los?|la)\s+)?pedido|"
+            # Voz activa en pasado: "Ya creé tu pedido".
+            r"\b(?:cre|gener|registr)é\s+(?:(?:tu|su|el)\s+)?pedido|"
+            r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cerrad\w*|cread\w*|generad\w*)|"
+            # Más lejos (hasta 6 palabras), solo con el auxiliar pegado al participio en
+            # masculino. Test, tenant solvershub (2026-10-11): "Tu pedido del plan Premium quedó
+            # creado" sin `crear_pedido` pasó con el tope de 3. El auxiliar y el masculino dejan
+            # fuera los resúmenes ("…ya quedó generada la cotización", "datos confirmados").
+            r"pedido\b(?:\W+\w+){0,5}\W+(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?"
+            r"(?:confirmad|cerrad|cread|generad)o\b|"
+            # El participio antes del sustantivo: "quedó creado tu pedido".
+            r"\b(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?(?:confirmad|cerrad|cread|generad)o\s+"
+            r"(?:tu|su|el)\s+pedido",
             re.IGNORECASE,
         ),
-        {"crear_pedido", "consultar_estado_pedido"},
+        {"crear_pedido", "consultar_estado_pedido", "confirmar_pago_pedido"},
     ),
     "link_de_pago": (
-        # Cualquier mención de "link de/para pago(ar)" en el texto LIBRE del
-        # modelo (nunca en el _safe_append, que corre después de los
-        # guardrails) implica que se está anunciando -- si no llamó la tool,
-        # es una promesa vacía sin importar el verbo que haya usado.
-        re.compile(r"link\s+(?:de\s+pago|para\s+pagar)", re.IGNORECASE),
-        {"generar_link_pago"},
+        # Anunciar o presentar un link en el texto LIBRE del modelo (nunca en el
+        # _safe_append, que corre después de los guardrails): "te envío el link de pago",
+        # "aquí tienes tu link de pago", "link de pago: …", "tu link de pago está listo".
+        # Nombrar la forma de pago no es anunciar un link: con «Pago en línea» entre las
+        # formas del agente (SPEC-48), "lo pagas con link de pago" o "pago por link de
+        # pago" son un resumen del pedido; antes escalaban la venta (journeys de pagos,
+        # 2026-11-17).
+        re.compile(
+            r"\b(?:env[ií]\w*|mand[eéoa]\w*|compart\w*|pas[eéo]\b|paso|dej[eéo]\b|dejo|gener[eéoa]\w*|"
+            r"adjunt\w*|reenv[ií]\w*|aqu[ií]\s+(?:est[aá]|tienes|va|te\s+dejo))\s+(?:\w+\s+){0,3}?"
+            r"link\s+(?:de\s+pago|para\s+pagar)|"
+            r"link\s+(?:de\s+pago|para\s+pagar)\s*:|"
+            r"\blink\s+(?:de\s+pago|para\s+pagar)\b(?:\W+\w+){0,3}\W+"
+            r"(?:es\s+(?:este|[eé]ste|el\s+siguiente)|est[aá]\s+(?:list|aqu)|qued[oó]\s+(?:list|gener|cread)|"
+            r"(?:enviad|generad|compartid|cread)\w*)",
+            re.IGNORECASE,
+        ),
+        # Además de `confirmar_pago_pedido`, lo respalda cualquier tool del turno que
+        # haya devuelto un link (`_LINK_CON_URL`): el de una suscripción, el de un
+        # cambio de plan o el de pagos en línea. Así el pack no lista tools de otros
+        # packs y un link nuevo no exige tocar esta lista (HU-ARCH-29).
+        {"confirmar_pago_pedido"},
     ),
+    # HU-ARCH-29 (journeys, 2026-10-09): "Ya dejé tu cotización aceptada" sin haber
+    # llamado ninguna tool. Armar la cotización y aceptarla son dos acciones distintas.
+    "cotizacion_generada": (
+        re.compile(
+            r"\b(?:arm|gener)[eé]\s+(?:de\s+nuevo\s+)?(?:tu|la)\s+cotizaci[oó]n|"
+            r"\bcotizaci[oó]n\b(?:\W+\w+){0,2}\W+(?:armad|generad)\w*|"
+            # El participio antes del sustantivo, anclado a un auxiliar: "quedó generada
+            # la cotización" afirma; "una vez generada la cotización…" no (2026-10-10).
+            r"\b(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?(?:armad|generad)a\s+(?:tu|la)\s+cotizaci[oó]n",
+            re.IGNORECASE,
+        ),
+        {"generar_cotizacion"},
+    ),
+    "cotizacion_aceptada": (
+        re.compile(
+            r"\b(?:acept|confirm)[eé]\s+(?:tu|la)\s+cotizaci[oó]n|"
+            r"\bcotizaci[oó]n\b(?:\W+\w+){0,2}\W+(?:aceptad|confirmad)\w*|"
+            # Test, tenant solvershub (2026-10-10): "ya quedó confirmada la cotización"
+            # sin `confirmar_cotizacion` pasó el verificador (`cierres: 0`).
+            r"\b(?:qued[oó]|est[aá]|fue)\s+(?:ya\s+)?(?:aceptad|confirmad)a\s+(?:tu|la)\s+cotizaci[oó]n",
+            re.IGNORECASE,
+        ),
+        {"confirmar_cotizacion"},
+    ),
+    # Test, tenant solvershub (2026-10-10): con el `ya_pagado` de `generar_link_pago` (un
+    # error: la referencia era la del Basic ya pagado) el modelo dijo "el pedido OC-0001 ya
+    # figura como pagado, así que no hace falta generar otro", y luego "el pago sí quedó
+    # registrado", sobre una compra del Premium que no tenía ni pedido. El estado de pago
+    # se afirma con una consulta del turno; el bloque de referencias no es evidencia.
+    "pago_registrado": (
+        re.compile(
+            r"\b(?:figur|aparec|qued|est|consta)\w*\s+(?:ya\s+)?(?:como\s+)?pagad[oa]s?\b|"
+            r"\bya\s+(?:est[aá]|qued[oó])\s+pag[oa]\b|"
+            # Con verbo: "medio de pago registrado: Nequi" no afirma nada.
+            r"\bpago\s+(?:(?:ya|s[ií])\s+)*(?:qued[oó]|fue|est[aá]|ha\s+sido)\s+(?:ya\s+)?"
+            r"(?:registrad|aprobad|acreditad)\w*|"
+            r"\b(?:recib(?:imos|[ií]|i[oó])|se\s+(?:registr|acredit)[oó])\s+(?:tu|el)\s+pago\b|"
+            # "Si ya pagaste, mandame el comprobante" es un condicional.
+            r"(?<!si\s)\bya\s+(?:pagaste|(?:realizaste|hiciste)\s+el\s+pago)\b",
+            re.IGNORECASE,
+        ),
+        {"consultar_estado_pedido", "sub_consultar"},
+    ),
+    # Smoke de test, tenant solvershub (2026-10-20): con la escalación ya resuelta y el bot de
+    # vuelta, el modelo dijo «ya le pasé tu caso a una persona del equipo… en cuanto se conecte,
+    # te escribe» sin llamar `escalate_to_human`: nadie lo iba a atender. Un traspaso se afirma
+    # con la tool del turno (adenda 2026-10-20 de ADR-0119).
     "asesor_humano": (
         re.compile(
             r"comuniqu\w*\s+con\s+un\s+asesor|un\s+asesor\s+te\s+\w*|"
-            r"pas[eé]\s+con\s+un\s+(?:asesor|humano)|en\s+un\s+momentico\s+te\s+contactan",
+            r"pas[eé]\s+con\s+un\s+(?:asesor|humano)|en\s+un\s+momentico\s+te\s+contactan|"
+            r"\bpas[eé]\s+(?:tu|el|su)\s+(?:caso|solicitud|consulta)\b|"
+            r"\b(?:te|lo|la)\s+(?:comunico|paso|transfiero|conecto)\s+con\s+(?:una\s+persona|un\s+humano|"
+            r"alguien\s+del\s+equipo|nuestro\s+equipo|el\s+equipo)\b|"
+            r"\bescal[eé]\s+(?:tu|el|su)\s+(?:caso|solicitud)\b|\bqued[oó]\s+escalad[oa]\b|"
+            r"\buna\s+persona\s+(?:del?\s+(?:nuestro\s+)?equipo\s+)?(?:te\s+(?:contacta|escribe|va\s+a\s+"
+            r"(?:contactar|escribir))|va\s+a\s+(?:contactarte|escribirte))\b",
             re.IGNORECASE,
         ),
         {"escalate_to_human"},
@@ -129,6 +216,16 @@ COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
     ),
 }
 
+
+# Afirmaciones que también respalda una URL devuelta por una tool del turno.
+_LINK_CON_URL = frozenset({"link_de_pago"})
+
+# Datos de contacto de los procedimientos del pack (`tomar_pedido`): con el motor
+# activo, "anoté tu dirección" lo respalda el dato fijado en este turno (`Afirmacion.datos`).
+_DATOS_DE_CONTACTO = frozenset(
+    {"full_name", "id_document", "phone", "email", "address", "city", "municipality"}
+)
+_DATOS_QUE_RESPALDAN = {"dato_de_contacto_guardado": _DATOS_DE_CONTACTO}
 
 _MAX_CUSTOM_COMPLETION_CLAIM_LINES = 50
 
@@ -176,30 +273,6 @@ def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str]
     return result
 
 
-def _extract_monetary_values(node: Any, key: str | None = None) -> list[float]:
-    """Recorre `node` recursivamente (listas y dicts anidados) y colecciona los
-    números que aparecen bajo una clave de `MONEY_KEYS`.
-
-    Antes, `_amount_guardrail` solo miraba los valores de primer nivel del
-    dict de resultado de cada tool -- `consultar_inventario`/`recomendar_producto`
-    devuelven el precio anidado dentro de `matches`/`recommendations` (una
-    lista), así que el guardrail nunca podía verificarlo y bloqueaba CUALQUIER
-    respuesta que mencionara un precio de catálogo real (encontrado en vivo:
-    tenant yopoldo, "Pollo Broaster" a $60.000 escalaba siempre, no de forma
-    intermitente). El escaneo por nombre de clave (no "cualquier número")
-    también evita que un `stock`/`quantity` se cuele como monto verificado.
-    """
-    values: list[float] = []
-    if isinstance(node, list):
-        for item in node:
-            values.extend(_extract_monetary_values(item))
-    elif isinstance(node, dict):
-        for child_key, child_value in node.items():
-            values.extend(_extract_monetary_values(child_value, child_key))
-    elif isinstance(node, (int, float)) and key is not None and key in MONEY_KEYS:
-        values.append(float(node))
-    return values
-
 admin_router = APIRouter(prefix="/crm", tags=[PLUGIN_ID])
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -244,22 +317,32 @@ async def crm_dashboard(request: Request):
     if ctx is None:
         return _login_redirect()
     tenant_id = get_current_tenant_id()
+    from core.db.models import Customer
+
     async with get_session() as session:
-        leads = (
-            await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
-        ).scalars().all()
+        de_prueba = select(Customer.id).where(
+            Customer.tenant_id == tenant_id, Customer.channel == TEST_CHANNEL
+        )
+        cantidad_de_leads = await leads_core.contar_vivos(session, tenant_id, excluir_canal=TEST_CHANNEL)
         products = (
-            await session.execute(select(Product).where(Product.tenant_id == tenant_id))
+            await session.execute(
+                select(Product).where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+            )
         ).scalars().all()
         promotions = (
             await session.execute(select(Promotion).where(Promotion.tenant_id == tenant_id))
         ).scalars().all()
         orders = (
-            await session.execute(select(Order).where(Order.tenant_id == tenant_id))
+            await session.execute(
+                select(Order).where(
+                    Order.tenant_id == tenant_id,
+                    ~Order.customer_id.in_(de_prueba),
+                )
+            )
         ).scalars().all()
     ctx.update(
         kpi={
-            "leads": len(leads),
+            "leads": cantidad_de_leads,
             "productos": len(products),
             "promociones": len(promotions),
             "pedidos": len(orders),
@@ -293,7 +376,11 @@ async def _leads_list() -> list[dict[str, Any]]:
         customers = (
             await session.execute(
                 select(Customer)
-                .where(Customer.tenant_id == tenant_id, Customer.deleted_at.is_(None))
+                .where(
+                    Customer.tenant_id == tenant_id,
+                    Customer.deleted_at.is_(None),
+                    Customer.channel != TEST_CHANNEL,
+                )
                 .order_by(Customer.created_at.desc())
                 .limit(200)
             )
@@ -357,15 +444,7 @@ async def _leads_list() -> list[dict[str, Any]]:
                 )
             ).all()
         }
-        leads_by_customer = {
-            lead.customer_id: lead
-            for lead in (
-                await session.execute(select(Lead).where(Lead.tenant_id == tenant_id))
-            )
-            .scalars()
-            .all()
-            if lead.customer_id is not None
-        }
+        leads_by_customer = await leads_core.por_cliente(session, tenant_id)
 
     rows: list[dict[str, Any]] = []
     for c in customers:
@@ -383,7 +462,7 @@ async def _leads_list() -> list[dict[str, Any]]:
         rows.append(
             {
                 "_id": str(c.id),
-                "name": (lead.name if lead else None) or c.name or c.external_id,
+                "name": c.name or (lead.name if lead else None) or c.external_id,  # perfil primero (ADR-0149)
                 "interest": (lead.interest if lead else "") or "",
                 "segment": await classify_customer(c.id),
                 "estado": estado,
@@ -396,45 +475,22 @@ async def _leads_list() -> list[dict[str, Any]]:
 
 
 async def _leads_save(record_id: str | None, values: dict[str, Any]) -> None:
-    """`record_id` es el `customer.id` (no un `lead.id`): estado/segmento ya se
-    calculan solos, lo único editable a mano es el enriquecimiento de
-    nombre/interés — se crea la fila de `Lead` si todavía no existía."""
+    """`record_id` es el `customer.id` (no un `lead.id`): estado/segmento ya se calculan solos, lo único editable a mano
+    es el enriquecimiento de nombre/interés. El lead es del core (ADR-0193): lo asegura su servicio."""
     if record_id is None:
         return
     try:
         customer_uuid = uuid.UUID(record_id)
     except ValueError:
         return
-    from core.db.models import Customer
-
-    tenant_id = get_current_tenant_id()
     async with get_session() as session:
-        # customer_id es FK lógica (sin constraint física) — validar que el
-        # customer exista y sea de este tenant antes de crear/tocar el Lead,
-        # para no dejar una referencia colgante hacia otro tenant.
-        customer = (
-            await session.execute(
-                select(Customer).where(
-                    Customer.id == customer_uuid, Customer.tenant_id == tenant_id
-                )
-            )
-        ).scalar_one_or_none()
-        if customer is None:
-            return
-
-        lead = (
-            await session.execute(
-                select(Lead).where(Lead.customer_id == customer_uuid, Lead.tenant_id == tenant_id)
-            )
-        ).scalar_one_or_none()
-        if lead is None:
-            lead = Lead(customer_id=customer_uuid, idempotency_key=f"manual:{customer_uuid}")
-            session.add(lead)
-        if "name" in values:
-            lead.name = str(values["name"]) or None
-        if "interest" in values:
-            lead.interest = str(values["interest"] or "")
-        lead.last_activity_at = datetime.now(UTC)
+        await leads_core.fijar_datos(
+            session,
+            get_current_tenant_id(),
+            customer_uuid,
+            name=values.get("name") if "name" in values else None,
+            interest=values.get("interest") if "interest" in values else None,
+        )
 
 
 # ------------------------------------------------------------------ productos
@@ -447,7 +503,9 @@ async def crm_products(request: Request):
     async with get_session() as session:
         products = (
             await session.execute(
-                select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+                select(Product)
+                .where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+                .order_by(Product.name)
             )
         ).scalars().all()
         variants = (
@@ -813,7 +871,9 @@ async def crm_promotions(request: Request):
         ).scalars().all()
         products = (
             await session.execute(
-                select(Product).where(Product.tenant_id == tenant_id).order_by(Product.name)
+                select(Product)
+                .where(Product.tenant_id == tenant_id, Product.deleted_at.is_(None))
+                .order_by(Product.name)
             )
         ).scalars().all()
     ctx.update(
@@ -921,10 +981,15 @@ async def crm_orders(request: Request):
         return _login_redirect()
     tenant_id = get_current_tenant_id()
     async with get_session() as session:
+        from core.db.models import Customer
+
+        de_prueba = select(Customer.id).where(
+            Customer.tenant_id == tenant_id, Customer.channel == TEST_CHANNEL
+        )
         orders = (
             await session.execute(
                 select(Order)
-                .where(Order.tenant_id == tenant_id)
+                .where(Order.tenant_id == tenant_id, ~Order.customer_id.in_(de_prueba))
                 .order_by(Order.created_at.desc())
                 .limit(200)
             )
@@ -936,7 +1001,11 @@ async def crm_orders(request: Request):
             await session.execute(
                 select(ProductVariant, Product)
                 .join(Product, Product.id == ProductVariant.product_id)
-                .where(ProductVariant.tenant_id == tenant_id, Product.tenant_id == tenant_id)
+                .where(
+                    ProductVariant.tenant_id == tenant_id,
+                    Product.tenant_id == tenant_id,
+                    Product.deleted_at.is_(None),
+                )
             )
         ).all()
     var_by_id = {v.id: p for v, p in variants}
@@ -986,12 +1055,45 @@ async def order_update_status(request: Request, order_id: uuid.UUID, status: str
 
 # ------------------------------------------------------------------ módulo
 class CRMModule(BaseModule):
+    tipo = "especialidad"  # ADR-0190 §1
+    grupos_de_acciones: ClassVar[dict[str, str]] = {
+        "crear_pedido": "pedidos",
+        "agregar_item_pedido": "pedidos",
+        "consultar_estado_pedido": "pedidos",
+        "confirmar_pago_pedido": "pagos",
+        "verificar_pago_pedido": "pagos",
+        "consultar_inventario": "catalogo",
+        "recomendar_producto": "catalogo",
+        "aplicar_promocion": "catalogo",
+        "generar_cotizacion": "cotizaciones",
+        "confirmar_cotizacion": "cotizaciones",
+    }
+    # Lo que es de CADA agente de este tipo; el resto de `CRMConfig` es del negocio (SPEC-44, design.md §2).
+    config_agente = config_de_agente(CRMConfig, ("scoring_mode", "monto_alto_threshold", "order_status_visible", "order_confirmed_message", "order_confirmed_transfer_message", "completion_claims_disabled", "completion_claims_custom", "payment_forms", "transfer_accounts", "transfer_proof_required", "transfer_ocr_enabled",), "ConfigDeAgenteDeVentas")
     id = PLUGIN_ID
     name = "CRM"
-    version = "2.0.0"
-    description = "Leads, catálogo (menú), promociones y pedidos para el negocio"
+    version = "4.3.0"  # 4.3: pago_en_linea no atiende la mensualidad de una suscripción. SPEC-48: segundo comprobante (4.1 instrucciones, 4.2 la acción en «resultado»). ADR-0193: los leads pasan al core (LeadSkill, crons y provider de leads salen del pack)
+    description = "Catálogo (menú), promociones, cotizaciones y pedidos para el negocio"
+    display_name = "Comercio"
+    category = "Ventas"
+    min_plan = "basic"
+    action_summary: ClassVar[list[str]] = ["Cotizar", "Tomar pedidos", "Aplicar promociones"]
+    # Dominios de superpoderes (SPEC-48, HU-AOS-83): "Pago en línea" y "Comprobar transferencia"
+    # no son poderes sueltos, son del dominio Formas de pago. Los dos nacen en HU-COM-23/24.
+    grupos_de_procedimientos: ClassVar[dict[str, str]] = {
+        "pack_commerce.tomar_pedido": "ventas",
+        "pack_commerce.pago_en_linea": "formas_de_pago",
+        "pack_commerce.comprobar_transferencia": "formas_de_pago",
+    }
+    etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {
+        "ventas": "Ventas",
+        "formas_de_pago": "Formas de pago",
+    }
+    setup_guide = "Carga tu catálogo (CSV o a mano) y define cómo cierras pedidos y cobras."
     requires_config = True
     config_schema = CRMConfig
+    # Salida a red (ADR-0052): solo el `siteverify` de Turnstile del intake de leads.
+    network_allowlist: ClassVar[tuple[str, ...]] = leads_api.NETWORK
     admin_menu: list[dict[str, str]] = [  # noqa: RUF012
         {"label": "Dashboard", "path": "/crm/"},
         {"label": "Leads", "path": "/admin/packs/pack_commerce/leads"},
@@ -1006,7 +1108,6 @@ class CRMModule(BaseModule):
         """API admin consumida por el panel nuevo (ADR-0079)."""
         return [admin_api_router]
     declared_skills: list[type] = [  # noqa: RUF012
-        LeadSkill,
         CatalogSkill,
         OrderSkill,
     ]
@@ -1015,21 +1116,117 @@ class CRMModule(BaseModule):
         """API pública del pack (ADR-0057): intake de leads desde landings."""
         return [leads_router]
 
+    async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+        """Catálogo de ejemplo o del negocio (ADR-0083, ADR-0110). Idempotente."""
+        from pack_commerce.seed import seed_catalog
+
+        return await seed_catalog(tenant_id, data)
+
+    def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
+        """Catálogo del agente de ventas (HU-QA-10). Los planes son del pack de Suscripciones."""
+        from pack_commerce.datos_de_prueba import formas
+
+        return formas()
+
+    async def sembrar_datos_de_prueba(
+        self, tenant_id: uuid.UUID, modo: str, datos: Any, contexto: ContextoDeNegocio
+    ) -> list[RegistroSembrado]:
+        from pack_commerce.datos_de_prueba import sembrar
+
+        return await sembrar(tenant_id, modo, datos, contexto)
+
+    async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
+        from pack_commerce.datos_de_prueba import retirar
+
+        return await retirar(tenant_id, registros)
+
+    async def describir_registros(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[Any]:
+        """Lo sembrado o importado en palabras, para «Lo cargado» del asistente (HU-QA-16)."""
+        from pack_commerce.datos_de_prueba import describir
+
+        return await describir(tenant_id, registros)
+
+    def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
+        """Importar productos desde un CSV (HU-QA-12, ADR-0180)."""
+        from pack_commerce.importacion import plantillas
+
+        return plantillas()
+
+    async def importar_filas(
+        self,
+        tenant_id: uuid.UUID,
+        plantilla_id: str,
+        filas: list[Any],
+        contexto: ContextoDeImportacion,
+        *,
+        simular: bool,
+    ) -> ResultadoDeImportacion:
+        from pack_commerce.importacion import importar
+
+        return await importar(tenant_id, plantilla_id, filas, contexto, simular=simular)
+
+    async def sembrar_escenario(self, tenant_id: uuid.UUID, escenario: str, entrada: Any) -> Any:
+        """Pedidos, leads y promoción de los escenarios de datos de prueba (HU-QA-13)."""
+        from pack_commerce.escenarios import sembrar_escenario
+
+        return await sembrar_escenario(tenant_id, escenario, entrada)
+
+    async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
+        """Productos a la venta (con alguna variante activa) para el paso «catálogo o servicios»
+        de los primeros pasos (HU-SH-06, ADR-0124). Solo lee."""
+        from core.primeros_pasos.contrato import ContenidoCargado
+        from core.shared.tenant import tenant_scope
+
+        a_la_venta = (
+            select(ProductVariant.id)
+            .where(
+                ProductVariant.tenant_id == tenant_id,
+                ProductVariant.product_id == Product.id,
+                ProductVariant.active.is_(True),
+            )
+            .exists()
+        )
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                cantidad, primero = (
+                    await session.execute(
+                        select(func.count(Product.id), func.min(Product.created_at)).where(
+                            Product.tenant_id == tenant_id,
+                            Product.deleted_at.is_(None),
+                            a_la_venta,
+                        )
+                    )
+                ).one()
+        return ContenidoCargado(tipo="catalogo", cantidad=int(cantidad or 0), primero_en=primero, seccion=PLUGIN_ID)
+
     def on_activate(self, host: MCPHost) -> None:
-        host.register_skill(LeadSkill())
         host.register_skill(CatalogSkill())
         host.register_skill(OrderSkill())
-        host.register_guardrail("crm_amount_check", self._amount_guardrail, priority=5)
-        host.register_guardrail("crm_completion_check", self._completion_guardrail, priority=6)
+        # Montos y afirmaciones de cierre los verifica el core (ADR-0119, HU-ARCH-29);
+        # reemplaza a `crm_amount_check` y `crm_completion_check`.
+        host.register_afirmaciones(self._afirmaciones)
+        # Procedimientos de comercio (HU-AOS-07): datos del pack (`procedures/*.json`), sus
+        # resolvers y el resumen de `confirmar_cotizacion`. Solo los usa el motor del core.
+        from pack_commerce.procedimientos import registrar as registrar_procedimientos
+
+        registrar_procedimientos(host)
+        # La cotización en curso y el último pedido de la conversación, para el prompt
+        # (ADR-0130): sin esto el modelo no ve el `quote_id` en el turno siguiente.
+        host.register_referencias(referencias_vigentes)
+        # Cuentas de transferencia del negocio para los avisos de cobro de suscripciones
+        # (HU-SUB-24, adenda de ADR-0067): una sola fuente, sin que suscripciones importe este pack.
+        from core.payments.transferencia import transfer_registry
+        from pack_commerce.transferencia import CuentasDeTransferenciaDelNegocio
+
+        transfer_registry.register(PLUGIN_ID, CuentasDeTransferenciaDelNegocio())
 
         # Vistas por descriptor (Fase D, Sprint 4): la del panel se sirve con HTML
         # genérico — cero plantillas/rutas propias del pack.
         self._register_views()
 
-        # La suscripción se registra SIEMPRE: la decisión de auto_create_lead se
-        # evalúa por tenant en el evento (la config activada no es global — vive
-        # en plugin_configs y un tenant puede desactivarla sin afectar al resto).
-        host.subscribe(ON_CONVERSATION_STARTED, self._on_conversation_started)
+        # El lead de cada conversación lo asegura el core en el turno (ADR-0193 §2): ya no hay `auto_create_lead`.
+        # Datos que el cliente dio en un recorrido de este pack (smoke de test 2026-10-20).
+        host.subscribe(ON_PROCEDURE_SLOTS_SET, self._on_procedure_slots_set)
 
         # Coordinación con pack-payments SIN importarlo (invariante nº5, ADR-0023):
         # el nombre del evento es el contrato real, un string literal acordado en
@@ -1102,66 +1299,70 @@ class CRMModule(BaseModule):
         )
 
     # ------------------------------------------------------------ eventos
-    async def _on_conversation_started(self, conversation_id: uuid.UUID, customer_id: uuid.UUID) -> None:
-        """Crea un lead borrador cuando arranca una conversación nueva.
-
-        Solo si el pack está habilitado para el tenant (ADR-0019) y su config
-        tiene auto_create_lead activo (decisión por tenant, no global): sin esto,
-        un tenant sin el pack o con la config apagada recibiría leads fantasma.
-        """
+    async def _on_procedure_slots_set(
+        self,
+        tenant_id: uuid.UUID,
+        conversation_id: uuid.UUID,
+        customer_id: uuid.UUID,
+        procedure_id: str,
+        datos: dict[str, Any],
+    ) -> None:
+        """Completa el lead del cliente con los datos de contacto de un recorrido de ESTE pack
+        (`tomar_pedido`): con foco, `crear_lead`/`actualizar_lead` no se
+        ofrecen. Solo si el pack está habilitado para el negocio; nunca crea un lead."""
         from core.agents.spec import enabled_packs, load_active_spec
-        from core.plugin_manager import plugin_manager
-        from core.shared.tenant import get_current_tenant_id
 
-        tenant_id = get_current_tenant_id()
-        if tenant_id is None:
+        if not str(procedure_id).startswith(f"{self.id}.") or not isinstance(datos, dict):
             return
-        spec = await load_active_spec(tenant_id)
-        if self.id not in enabled_packs(spec):
+        from core.db.models import Conversation
+        from core.shared.test_mode import is_panel_test
+
+        actual = get_current_tenant_id()
+        if actual is None or actual != tenant_id or not any(datos.get(n) for n in ("full_name", "email", "phone")):
             return
-        config = await plugin_manager.load_config(self.id)
-        if config is None or not getattr(config, "auto_create_lead", True):
-            return
-
-        from sqlalchemy import select
-
-        from pack_commerce.models import Lead
-
         async with get_session() as session:
-            existing = (
-                await session.execute(
-                    select(Lead).where(
-                        Lead.customer_id == customer_id, Lead.tenant_id == tenant_id
-                    )
+            if is_panel_test(await session.get(Conversation, conversation_id)):
+                return
+        from core.leads import servicio as leads
+
+        try:
+            if self.id not in enabled_packs(await load_active_spec(actual)):
+                return
+            async with get_session() as session:
+                await leads.completar_contacto(
+                    session,
+                    actual,
+                    customer_id,
+                    nombre=datos.get("full_name"),
+                    email=datos.get("email"),
+                    telefono=datos.get("phone"),
                 )
-            ).scalar_one_or_none()
-            if existing is None:
-                session.add(
-                    Lead(
-                        customer_id=customer_id,
-                        conversation_id=conversation_id,
-                        status="nuevo",
-                        idempotency_key=f"auto:{conversation_id}",
-                    )
-                )
-                log.info("lead_draft_created", conversation_id=str(conversation_id))
+        except Exception as exc:  # el payload trae datos personales: el log solo lleva el tipo
+            log.warning("lead_completar_fallo", error=type(exc).__name__)
 
     async def _on_payment_confirmed(
         self, reference: str, provider: str, provider_reference: str, amount: float
     ) -> None:
-        await self._update_order_payment_status(reference, "pagado")
+        await self._update_order_payment_status(reference, "pagado", amount)
 
     async def _on_payment_rejected(
         self, reference: str, provider: str, provider_reference: str, amount: float
     ) -> None:
-        await self._update_order_payment_status(reference, "rechazado")
+        await self._update_order_payment_status(reference, "rechazado", amount)
 
-    async def _update_order_payment_status(self, reference: str, payment_status: str) -> None:
+    async def _update_order_payment_status(
+        self, reference: str, payment_status: str, amount: float | None = None
+    ) -> None:
         """Reacciona a eventos de `pack-payments` (ADR-0023) sin importarlo: por
-        convención, `reference` es el `public_order_number` que `crear_pedido`
-        le pasó a `generar_link_pago`. Si no matchea ninguna Order, se loggea y
-        se ignora -- pack-payments no sabe qué es una Order, la correlación es
-        responsabilidad de este lado.
+        convención, `reference` es el `public_order_number` (o su versión `-rN`)
+        que `confirmar_pago_pedido` le pasó al link. Si no matchea ninguna Order,
+        se loggea y se ignora.
+
+        Validaciones de HU-COM-01:
+        - **monto**: un `paid` con monto distinto al total NO marca el pedido
+          pagado (se alerta al negocio).
+        - **rechazo tardío**: un `rejected` sobre un pedido ya pagado no cambia
+          su estado.
         """
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
@@ -1170,6 +1371,15 @@ class CRMModule(BaseModule):
 
         spec = await load_active_spec(tenant_id)
         if self.id not in enabled_packs(spec):
+            return
+
+        # La referencia puede venir versionada (`OC-0001-r2`): se normaliza a la
+        # base para localizar el pedido.
+        base_reference = reference.split("-r", 1)[0] if "-r" in reference else reference
+
+        # `sub-<cargo>` es un cobro de suscripción (pack de Suscripciones) y `sub-<tenant>-…` uno de
+        # la plataforma: nunca es un pedido de este pack. Se ignora sin alarma (HU-COM-17).
+        if reference.startswith("sub-"):
             return
 
         async with get_session() as session:
@@ -1177,101 +1387,87 @@ class CRMModule(BaseModule):
                 await session.execute(
                     select(Order).where(
                         Order.tenant_id == tenant_id,
-                        Order.public_order_number == reference,
+                        Order.public_order_number == base_reference,
                     )
                 )
             ).scalar_one_or_none()
             if order is None:
                 log.warning("payment_event_no_matching_order", reference=reference, payment_status=payment_status)
                 return
+            # Rechazo tardío: un pedido ya pagado no vuelve atrás.
+            if payment_status == "rechazado" and order.payment_status == "pagado":
+                log.info("order_payment_rejected_after_paid", order_id=str(order.id))
+                return
+            # Monto: solo se marca pagado si coincide con el total del servidor.
+            if payment_status == "pagado" and amount is not None:
+                expected = round(float(order.total), 2)
+                received = round(float(amount), 2)
+                if abs(expected - received) > 0.01:
+                    log.warning(
+                        "order_payment_amount_mismatch",
+                        order_id=str(order.id),
+                        expected=expected,
+                        received=received,
+                    )
+                    order.status_reason = (
+                        f"pago con monto distinto al total ({received} != {expected})"
+                    )
+                    return
+            ya_pagado = order.payment_status == "pagado"
             order.payment_status = payment_status
             order.status_changed_at = datetime.now(UTC)
             log.info("order_payment_status_updated", order_id=str(order.id), payment_status=payment_status)
+            if payment_status == "pagado" and not ya_pagado:
+                await self._emitir_pedido_pagado(session, tenant_id, order)
 
-    # ------------------------------------------------------------ guardrail
-    async def _amount_guardrail(
-        self, response_text: str, tool_results: list[dict[str, Any]]
-    ) -> GuardrailResult:
-        """Si la respuesta menciona montos ($) que no salieron de una tool, bloquear.
+    @staticmethod
+    async def _emitir_pedido_pagado(session, tenant_id, order: Order) -> None:  # type: ignore[no-untyped-def]
+        """`order.paid` al outbox (ADR-0107) en la MISMA transacción que marca el pedido pagado,
+        solo en esa transición y con el monto ya validado: cierra las tareas de `tomar_pedido`
+        que esperan el pago (HU-AOS-07), por el `order_id` que fijó `crear_pedido`.
+        Idempotente por pedido (un webhook repetido o un reintento del despachador no duplica)."""
+        from core.events.outbox import emit_domain
+        from core.shared.events import ON_ORDER_PAID
 
-        Mismo principio que el price guardrail de agent-sale: el LLM no inventa cifras.
-        """
-        amounts_in_text = MONEY_IN_TEXT.findall(response_text)
-        if not amounts_in_text:
-            return GuardrailResult(passed=True)
+        await emit_domain(
+            session,
+            tenant_id=tenant_id,
+            topic=ON_ORDER_PAID,
+            dedupe_key=f"{ON_ORDER_PAID}:{order.id}",
+            payload={"order_id": str(order.id), "public_order_number": order.public_order_number},
+        )
 
-        known: set[str] = set()
-        for result in tool_results:
-            for value in _extract_monetary_values(result):
-                known.add(f"{value:g}")
-
-        def normalize(amount: str) -> str:
-            return amount.replace("$", "").replace(".", "").replace(",", "").strip()
-
-        for amount in amounts_in_text:
-            cleaned = normalize(amount)
-            if cleaned and not any(cleaned == normalize(k) or cleaned in k for k in known):
-                return GuardrailResult(
-                    passed=False,
-                    reason=f"Monto no verificado en la respuesta: {amount}",
-                    retry_instruction=(
-                        "Mencionaste un monto que no proviene de ninguna herramienta. "
-                        "No cites cifras específicas salvo que una herramienta las haya devuelto."
-                    ),
-                )
-        return GuardrailResult(passed=True)
-
-    async def _resolved_completion_claims(self) -> dict[str, tuple[re.Pattern[str], set[str]]]:
-        """Combina `COMPLETION_CLAIMS` (incorporados) con la config de ESTE
-        tenant (ADR-0025): quita los deshabilitados
-        (`completion_claims_disabled`), agrega/reemplaza los custom
-        (`completion_claims_custom`). Fail-open ante config ausente/inválida
-        -- nunca debe romper el guardrail (mismo criterio que
-        `_plugin_config()` en `skills.py`)."""
+    # ------------------------------------------------------------ verificador
+    async def _afirmaciones(self) -> list[Afirmacion]:
+        """Afirmaciones de cierre del pack para el verificador del core (ADR-0119):
+        las incorporadas (`COMPLETION_CLAIMS`) menos las que este negocio desactivó
+        (`completion_claims_disabled`), más las propias (`completion_claims_custom`,
+        ADR-0025, siempre frases literales). Fail-open ante config ausente o
+        inválida: quedan las incorporadas."""
         from core.plugin_manager import plugin_manager
 
         claims = dict(COMPLETION_CLAIMS)
         try:
             config = await plugin_manager.load_config(PLUGIN_ID)
         except Exception:
+            log.warning("afirmaciones_config_fallo", plugin=PLUGIN_ID)
             config = None
-        if config is None:
-            return claims
-        disabled = {
-            n.strip() for n in (config.completion_claims_disabled or "").split(",") if n.strip()
-        }
-        for name in disabled:
-            claims.pop(name, None)
-        claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
-        return claims
-
-    async def _completion_guardrail(
-        self, response_text: str, tool_results: list[dict[str, Any]]
-    ) -> GuardrailResult:
-        """Si la respuesta afirma que una acción de negocio quedó resuelta
-        (pedido confirmado, link de pago enviado, asesor contactado) pero
-        ninguna tool que respalde esa afirmación corrió en este turno, bloquear.
-
-        No es infalible (es texto libre, no todas las formas de decirlo están
-        cubiertas), pero corta el caso real encontrado: el modelo prometiendo
-        algo que nunca iba a pasar, dejando al cliente esperando en el vacío.
-        Los claims son los incorporados + los que este tenant haya
-        configurado/desactivado (ADR-0025, `_resolved_completion_claims`).
-        """
-        called_tools = {
-            result.get(_TOOL_NAME_KEY) for result in tool_results if isinstance(result, dict)
-        }
-        claims = await self._resolved_completion_claims()
-        for label, (pattern, required_tools) in claims.items():
-            if pattern.search(response_text) and not (called_tools & required_tools):
-                return GuardrailResult(
-                    passed=False,
-                    reason=f"Afirmación de '{label}' sin la tool correspondiente en este turno",
-                    retry_instruction=(
-                        f"Dijiste que se completó una acción de '{label}' pero no llamaste la "
-                        "herramienta correspondiente en este turno. Llamala ahora mismo, o si no "
-                        "podés completarla de verdad, decilo explícitamente en vez de prometer "
-                        "algo que no vas a cumplir."
-                    ),
-                )
-        return GuardrailResult(passed=True)
+        if config is not None:
+            disabled = {
+                n.strip() for n in (config.completion_claims_disabled or "").split(",") if n.strip()
+            }
+            for name in disabled:
+                claims.pop(name, None)
+            claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
+        return [
+            Afirmacion(
+                label=label,
+                patron=pattern,
+                tools=frozenset(tools),
+                basta_url=label in _LINK_CON_URL,
+                # Solo la afirmación incorporada: una etiqueta que el negocio reescribe con frases
+                # propias no hereda los datos (revisión de seguridad, 2026-10-18).
+                datos=_DATOS_QUE_RESPALDAN.get(label, frozenset()) if pattern is COMPLETION_CLAIMS.get(label, (None,))[0] else frozenset(),
+            )
+            for label, (pattern, tools) in claims.items()
+        ]

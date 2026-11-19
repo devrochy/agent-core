@@ -15,6 +15,7 @@ import pytest
 
 import core.gateway.meta_production_readiness as readiness_mod
 from core.gateway.meta_production_readiness import (
+    check_meta_app_configured,
     check_no_secret_leak_in_templates,
     check_prod_secret_differs_from_dev,
     check_rls_tests_pass,
@@ -43,6 +44,45 @@ class _FakeClient:
 
     async def get(self, url, params=None):
         return self._response
+
+
+@pytest.mark.asyncio
+async def test_handshake_sin_https_falla_sin_llamar(monkeypatch):
+    def _prohibido(**_k):
+        raise AssertionError("no debe llamar a una URL sin HTTPS")
+
+    monkeypatch.setattr(httpx, "AsyncClient", _prohibido)
+
+    check = await check_webhook_handshake("http://example.test/webhooks/whatsapp", "verify-tok")
+
+    assert check.ok is False
+    assert "HTTPS" in check.detail
+
+
+def _settings_meta(monkeypatch, **valores):
+    from core.config import get_settings
+
+    for nombre, valor in valores.items():
+        monkeypatch.setattr(get_settings(), nombre, valor)
+
+
+def test_variables_de_la_app_de_meta_completas(monkeypatch):
+    _settings_meta(monkeypatch, meta_app_id="app", meta_app_secret="s3cr3t-no-sale", meta_config_id="cfg")
+
+    check = check_meta_app_configured()
+
+    assert check.ok is True
+    assert "s3cr3t-no-sale" not in check.detail
+
+
+def test_variables_de_la_app_de_meta_nombra_las_que_faltan(monkeypatch):
+    _settings_meta(monkeypatch, meta_app_id="app", meta_app_secret="", meta_config_id="")
+
+    check = check_meta_app_configured()
+
+    assert check.ok is False
+    assert "META_APP_SECRET" in check.detail and "META_CONFIG_ID" in check.detail
+    assert "META_APP_ID" not in check.detail.replace("META_APP_SECRET", "")
 
 
 @pytest.mark.asyncio
@@ -154,6 +194,10 @@ class FakeRedis:
     async def xlen(self, key):
         return self._dlq_size
 
+    async def xrange(self, key, count=None):
+        # Entradas reales (sin la marca de los escenarios de prueba, HU-QA-13).
+        return [(f"{n}-0", {"tenant_id": "t"}) for n in range(self._dlq_size)]
+
 
 @pytest.mark.asyncio
 async def test_heartbeat_ausente_falla(monkeypatch):
@@ -186,24 +230,29 @@ async def test_dlq_con_eventos_pendientes_falla(monkeypatch):
     assert check.ok is False
 
 
-def test_rls_tests_pass_exit_distinto_de_cero_falla(monkeypatch):
-    class FakeResult:
-        returncode = 1
-        stdout = "1 failed"
+def test_rls_tests_pass_no_corre_pytest_en_el_contenedor(monkeypatch):
+    """La imagen desplegada no trae pytest ni tests/, y los tests de integración crean
+    negocios en la base configurada: correrlos en un entorno real ensuciaría datos.
+    El check informa (ok=None) dónde corren: en CI."""
 
-    monkeypatch.setattr(readiness_mod.subprocess, "run", lambda *a, **k: FakeResult())
+    def _prohibido(*args, **kwargs):
+        raise AssertionError("no debe lanzar subprocesos")
+
+    monkeypatch.setattr("subprocess.run", _prohibido)
+    monkeypatch.setenv("SOURCE_COMMIT", "a2c60a3d1b11d160b61fd6caf0d2c9914c5dd1d6")
+    monkeypatch.setenv("COOLIFY_BRANCH", "develop")
     check = check_rls_tests_pass()
-    assert check.ok is False
+    assert check.ok is None
+    assert "CI" in check.detail
+    assert "a2c60a3" in check.detail and "develop" in check.detail
 
 
-def test_rls_tests_pass_exit_cero_pasa(monkeypatch):
-    class FakeResult:
-        returncode = 0
-        stdout = "10 passed"
-
-    monkeypatch.setattr(readiness_mod.subprocess, "run", lambda *a, **k: FakeResult())
+def test_rls_tests_pass_sin_commit_conocido(monkeypatch):
+    monkeypatch.delenv("SOURCE_COMMIT", raising=False)
+    monkeypatch.delenv("COOLIFY_BRANCH", raising=False)
     check = check_rls_tests_pass()
-    assert check.ok is True
+    assert check.ok is None
+    assert "CI" in check.detail
 
 
 def test_no_secret_leak_detecta_interpolacion_sospechosa(tmp_path, monkeypatch):
@@ -255,3 +304,160 @@ def test_no_secret_leak_detecta_access_token_con_guion_bajo(tmp_path, monkeypatc
     monkeypatch.setattr(readiness_mod, "ROOT", tmp_path)
     check = check_no_secret_leak_in_templates()
     assert check.ok is False
+
+
+# ------------------------------------------------------------------ HU-CONN-07
+def _sub(object_, active=True, fields=None):
+    from types import SimpleNamespace
+
+    from core.gateway.meta_subscriptions import OBJECT_FIELDS
+
+    return SimpleNamespace(object=object_, active=active, fields=OBJECT_FIELDS[object_] if fields is None else fields)
+
+
+def _fake_subscriptions(monkeypatch, rows):
+    async def _list(meta_app_id=None):
+        return rows
+
+    monkeypatch.setattr("core.gateway.meta_subscriptions.list_app_subscriptions", _list)
+
+
+@pytest.mark.asyncio
+async def test_app_subscriptions_solo_whatsapp_pasa_sin_page_ni_instagram(monkeypatch):
+    """Una app que solo usa WhatsApp pasa: `page` e `instagram` no son obligatorios."""
+    from core.gateway.meta_production_readiness import check_app_subscriptions_complete
+
+    _fake_subscriptions(monkeypatch, [_sub("whatsapp_business_account")])
+
+    check = await check_app_subscriptions_complete("app-1")
+
+    assert check.ok is True
+    assert "page" in check.detail and "instagram" in check.detail  # se informan, no fallan
+
+
+@pytest.mark.asyncio
+async def test_app_subscriptions_whatsapp_inactiva_falla(monkeypatch):
+    from core.gateway.meta_production_readiness import check_app_subscriptions_complete
+
+    _fake_subscriptions(
+        monkeypatch, [_sub("whatsapp_business_account", active=False), _sub("page"), _sub("instagram")]
+    )
+
+    check = await check_app_subscriptions_complete("app-1")
+
+    assert check.ok is False
+    assert "whatsapp_business_account" in check.detail
+
+
+@pytest.mark.asyncio
+async def test_app_subscriptions_whatsapp_sin_fields_falla(monkeypatch):
+    from core.gateway.meta_production_readiness import check_app_subscriptions_complete
+
+    _fake_subscriptions(monkeypatch, [_sub("whatsapp_business_account", fields=["messages"])])
+
+    check = await check_app_subscriptions_complete("app-1")
+
+    assert check.ok is False
+    assert "faltan fields" in check.detail
+
+
+@pytest.mark.asyncio
+async def test_app_subscriptions_sin_app_configurada_falla(monkeypatch):
+    from core.gateway.meta_production_readiness import check_app_subscriptions_complete
+
+    check = await check_app_subscriptions_complete("")
+
+    assert check.ok is False
+
+
+@pytest.mark.asyncio
+async def test_checklist_de_plataforma_sin_pytest_ni_subprocesos_ni_checks_de_negocio(monkeypatch):
+    """La corrida de plataforma no lanza procesos y no incluye la salud de conexiones de un
+    negocio (eso es el checklist por conexión)."""
+    from core.gateway.meta_production_readiness import PLATFORM_CHECK_LABELS, run_platform_checks
+
+    def _prohibido(*args, **kwargs):
+        raise AssertionError("no debe lanzar subprocesos")
+
+    monkeypatch.setattr("subprocess.run", _prohibido)
+    monkeypatch.setattr("subprocess.Popen", _prohibido)
+    _fake_subscriptions(monkeypatch, [_sub("whatsapp_business_account")])
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **k: _FakeClient(_FakeResponse("otro")))
+    monkeypatch.setattr("core.memory.working.get_redis", lambda: FakeRedis(heartbeat=None))
+
+    async def _rls_ok():
+        return readiness_mod.PreflightCheck(key="rls_forced", ok=True, detail="ok", checked_at=datetime.now(UTC))
+
+    monkeypatch.setattr(readiness_mod, "check_rls_forced", _rls_ok)
+    monkeypatch.setenv("META_APP_ID", "app-plataforma")
+    from core.config import get_settings
+
+    get_settings.cache_clear()
+    try:
+        checks = await run_platform_checks()
+    finally:
+        monkeypatch.delenv("META_APP_ID")
+        get_settings.cache_clear()
+
+    assert [c.key for c in checks] == list(PLATFORM_CHECK_LABELS)
+    assert "connections_health" not in {c.key for c in checks}
+    assert next(c for c in checks if c.key == "app_subscriptions_complete").ok is True
+
+
+@pytest.mark.asyncio
+async def test_un_check_que_revienta_queda_sin_evaluar_y_no_tumba_la_corrida(monkeypatch):
+    from core.gateway.meta_production_readiness import run_platform_checks
+
+    async def _boom(*a, **k):
+        raise RuntimeError("se cayó la base")
+
+    monkeypatch.setattr(readiness_mod, "check_rls_forced", _boom)
+    monkeypatch.setattr(readiness_mod, "check_webhook_handshake", _boom)
+    monkeypatch.setattr(readiness_mod, "check_app_subscriptions_complete", _boom)
+    monkeypatch.setattr(readiness_mod, "check_worker_heartbeat_and_dlq", _boom)
+
+    checks = {c.key: c for c in await run_platform_checks()}
+
+    assert checks["rls_forced"].ok is None
+    assert "RuntimeError" in checks["rls_forced"].detail
+    assert "se cayó" not in checks["rls_forced"].detail  # el mensaje crudo no se expone
+    assert checks["token_keys_configured"].ok is not None
+
+
+def _pc(key, ok, detail="d", repair=None):
+    return readiness_mod.PreflightCheck(key=key, ok=ok, detail=detail, checked_at=datetime.now(UTC), repair_action=repair)
+
+
+def test_combinar_checks_falla_si_alguno_falla():
+    from core.gateway.meta_production_readiness import combine_checks
+
+    item = combine_checks("webhook", [_pc("a", True, "bien"), _pc("b", None, "sin dato"), _pc("c", False, "mal", "x")])
+
+    assert item.ok is False
+    assert item.detail == "mal"
+    assert item.repair_action == "x"
+
+
+def test_combinar_checks_sin_dato_si_ninguno_falla_pero_alguno_no_se_evaluo():
+    from core.gateway.meta_production_readiness import combine_checks
+
+    item = combine_checks("webhook", [_pc("a", True), _pc("b", None, "todavía no corrió")])
+
+    assert item.ok is None
+    assert item.detail == "todavía no corrió"
+
+
+def test_combinar_checks_pasa_con_todos_en_verde():
+    from core.gateway.meta_production_readiness import combine_checks
+
+    assert combine_checks("token", [_pc("a", True), _pc("b", True)]).ok is True
+    assert combine_checks("token", []).ok is None
+
+
+def test_items_por_canal():
+    from core.gateway.meta_production_readiness import connection_item_keys
+
+    assert connection_item_keys("whatsapp") == [
+        "token", "number_registered", "waba_subscribed", "webhook", "templates_approved",
+    ]
+    assert connection_item_keys("messenger") == ["token", "webhook"]

@@ -112,9 +112,9 @@ async def test_encolar_envio_wamid_y_statuses_sin_degradar(moto_setup, monkeypat
         assert sent.external_message_id == wamid
 
         # Webhook de estado: delivered -> read -> un delivered tardío no degrada.
-        await apply_status_update({"id": wamid, "status": "delivered", "timestamp": "1900000000"})
-        await apply_status_update({"id": wamid, "status": "read", "timestamp": "1900000100"})
-        await apply_status_update({"id": wamid, "status": "delivered", "timestamp": "1900000050"})
+        await apply_status_update({"id": wamid, "status": "delivered", "timestamp": "1900000000"}, expected_tenant_id=t1)
+        await apply_status_update({"id": wamid, "status": "read", "timestamp": "1900000100"}, expected_tenant_id=t1)
+        await apply_status_update({"id": wamid, "status": "delivered", "timestamp": "1900000050"}, expected_tenant_id=t1)
 
         async with get_session() as session:
             final = await session.get(Message, sent.id)

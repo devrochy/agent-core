@@ -14,10 +14,16 @@ from __future__ import annotations
 
 import base64
 import io
+import os
 import tarfile
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Protocol
+
+from core.shared.logger import get_logger
+
+log = get_logger(__name__)
 
 
 class SessionStore(Protocol):
@@ -56,6 +62,34 @@ def unpack_dir(data: bytes, work_dir: Path) -> None:
         tar.extractall(work_dir)
 
 
+def _base_escribible(base: Path) -> Path:
+    """Devuelve una raíz donde el proceso pueda crear sesiones.
+
+    El `tmpfs` de despliegue puede montarse `root:root 0755` y el conector corre
+    como `app`: `mkdir` fallaba con `PermissionError` y no se emitía ningún QR
+    (visto en test 2026-10-28). Antes de romper el vínculo, se usa una raíz
+    efímera bajo `/tmp` (también escribible por `app`) y se deja traza.
+    """
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        probe = base / f".escritura-{os.getpid()}"
+        try:
+            probe.write_bytes(b"")
+        finally:
+            probe.unlink(missing_ok=True)
+        return base
+    except OSError as exc:
+        fallback = Path(tempfile.gettempdir()) / f"waweb-sessions-{os.getpid()}"
+        fallback.mkdir(parents=True, exist_ok=True)
+        log.error(
+            "waweb_session_dir_no_escribible",
+            base=str(base),
+            fallback=str(fallback),
+            detail=str(exc),
+        )
+        return fallback
+
+
 class DbEncryptedSessionStore:
     """Store durable: `tar.gz` cifrado en `waweb_sessions.creds_encrypted`.
 
@@ -63,7 +97,7 @@ class DbEncryptedSessionStore:
     """
 
     def __init__(self, base_dir: Path) -> None:
-        self._base_dir = Path(base_dir)
+        self._base_dir = _base_escribible(Path(base_dir))
 
     def work_dir(self, tenant_id: uuid.UUID) -> Path:
         return self._base_dir / str(tenant_id)
@@ -91,9 +125,30 @@ class DbEncryptedSessionStore:
         await self._write_blob(tenant_id, None)
 
     # --- acceso a BD (aislado para testear el resto sin Postgres) ---
-    async def _read_blob(self, tenant_id: uuid.UUID) -> str | None:
+    def _session_query(self):  # type: ignore[no-untyped-def]
+        """Sesión viva de la conexión `waweb` VIVA (una sola).
+
+        Se une con `channel_connections` para no tomar una sesión vieja de una
+        conexión borrada: con dos sesiones por tenant (incidente 2026-10-04),
+        `.first()` por tenant materializaba credenciales ajenas y el connector
+        reautenticaba sin emitir QR.
+        """
         from sqlalchemy import select
 
+        from core.db.models import ChannelConnection, WaWebSession
+
+        return (
+            select(WaWebSession)
+            .join(ChannelConnection, ChannelConnection.id == WaWebSession.connection_id)
+            .where(
+                WaWebSession.deleted_at.is_(None),
+                ChannelConnection.deleted_at.is_(None),
+            )
+            .order_by(WaWebSession.created_at)
+            .limit(1)
+        )
+
+    async def _read_blob(self, tenant_id: uuid.UUID) -> str | None:
         from core.db.models import WaWebSession
         from core.db.session import get_session
         from core.shared.tenant import tenant_scope
@@ -104,10 +159,7 @@ class DbEncryptedSessionStore:
             async with get_session() as session:
                 row = (
                     await session.execute(
-                        select(WaWebSession).where(
-                            WaWebSession.tenant_id == tenant_id,
-                            WaWebSession.deleted_at.is_(None),
-                        )
+                        self._session_query().where(WaWebSession.tenant_id == tenant_id)
                     )
                 ).scalars().first()
                 if row is None or not row.creds_encrypted:
@@ -120,8 +172,6 @@ class DbEncryptedSessionStore:
                     return None
 
     async def _write_blob(self, tenant_id: uuid.UUID, value: str | None) -> None:
-        from sqlalchemy import select
-
         from core.db.models import WaWebSession
         from core.db.session import get_session
         from core.shared.crypto import get_secret_box
@@ -132,10 +182,7 @@ class DbEncryptedSessionStore:
             async with get_session() as session:
                 row = (
                     await session.execute(
-                        select(WaWebSession).where(
-                            WaWebSession.tenant_id == tenant_id,
-                            WaWebSession.deleted_at.is_(None),
-                        )
+                        self._session_query().where(WaWebSession.tenant_id == tenant_id)
                     )
                 ).scalars().first()
                 if row is not None:

@@ -15,6 +15,10 @@ ROLE="${AGENT_CORE_ROLE:-api}"
 # contenedores comparten de verdad (/tmp es privado de cada contenedor).
 PLUGIN_LOCK="plugins/.install.lock"
 
+# Artefactos por tenant (flow.json, playbooks, catalog.json) — ADR-0085:
+# viven en TENANTS_ROOT (volumen persistente); se asegura el directorio.
+mkdir -p "${TENANTS_ROOT:-/app/tenants}"
+
 install_plugins() {
   # El lock vive en ./plugins: si el dir no existe (imagen sin bind-mounts,
   # ej. Coolify) hay que crearlo antes de flock.
@@ -40,6 +44,16 @@ if [ "$ROLE" = "api" ]; then
     echo "[entrypoint] ERROR: las migraciones fallaron. El servicio no arranca." >&2
     exit 1
   fi
+  # Base `agentcore_eval` del gate de pass^k (HU-AOS-21 parte 3b), si está configurada. Nunca frena el
+  # arranque: sin ella el gate no mide, pero el negocio sigue sirviendo.
+  if [ -n "${EVAL_MIGRATIONS_DATABASE_URL:-}" ]; then
+    echo "[entrypoint] migrando la base de eval..."
+    agent-core db migrate --eval || echo "[entrypoint] AVISO: la migración de agentcore_eval falló (ver el log)" >&2
+  fi
+  # Versiones de las habilidades en `pack_versions` (HU-AOS-14), con el rol dueño. Nunca frena
+  # el arranque: un contenido cambiado sin subir la versión alerta en el log y no se registra.
+  echo "[entrypoint] registrando versiones de habilidades..."
+  agent-core db sync-packs || echo "[entrypoint] AVISO: sync-packs reportó problemas (ver el log)" >&2
 fi
 
 exec "$@"

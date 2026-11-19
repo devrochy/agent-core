@@ -37,4 +37,4 @@ def test_memory_retention_noop_si_desactivado() -> None:
     from core.tasks.memory_retention import purge_expired_memory
 
     result = asyncio.run(purge_expired_memory())
-    assert result == {"purged": 0, "tenants": 0}
+    assert result == {"purged": 0, "tenants": 0, "facts": 0}

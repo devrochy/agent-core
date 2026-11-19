@@ -21,7 +21,9 @@ class WaWebInbound(InboundAdapter):
     provider = "waweb"
     channel = "whatsapp"
 
-    def verify_request(self, raw_body: bytes, headers: dict[str, str], secret: str) -> bool:
+    def verify_request(
+        self, raw_body: bytes, headers: dict[str, str], secret: str, *, url: str | None = None
+    ) -> bool:
         # El canal no recibe webhooks: no hay firma que verificar. El inbound lo
         # inyecta el proceso `connector` directamente al stream del core.
         return True
@@ -41,9 +43,24 @@ class WaWebOutbound(OutboundAdapter):
     ) -> str:
         return await self._send(credentials, to_external_id, caption, image_url=image_url)
 
+    async def send_audio(
+        self,
+        credentials: dict[str, str],
+        to_external_id: str,
+        audio_url: str,
+        caption: str = "",
+    ) -> str:
+        return await self._send(
+            credentials, to_external_id, caption, image_url=None, audio_url=audio_url
+        )
+
     @staticmethod
     async def _send(
-        credentials: dict[str, str], to_external_id: str, text: str, image_url: str | None
+        credentials: dict[str, str],
+        to_external_id: str,
+        text: str,
+        image_url: str | None,
+        audio_url: str | None = None,
     ) -> str:
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
@@ -55,4 +72,5 @@ class WaWebOutbound(OutboundAdapter):
             to=to,
             text=text,
             image_url=image_url,
+            audio_url=audio_url,
         )

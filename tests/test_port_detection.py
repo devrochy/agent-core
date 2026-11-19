@@ -54,8 +54,12 @@ def test_find_free_port_excluye_los_ya_asignados() -> None:
     assert primero != segundo
 
 
-def test_find_free_port_evita_puertos_de_contenedores_parados() -> None:
+def test_find_free_port_evita_puertos_de_contenedores_parados(monkeypatch: pytest.MonkeyPatch) -> None:
     """Un contenedor parado no ocupa el socket, pero reclamará el puerto."""
+    # Hermético: 49300+ es el rango de puertos efímeros, y en un host con contenedores o jobs del CI
+    # levantándose a la vez cualquiera de esos puertos puede estar ocupado de verdad. Aquí se prueba
+    # la exclusión por `docker_ports`, no el estado de los sockets de la máquina.
+    monkeypatch.setattr("cli.preflight.port_available", lambda _port: True)
     reclamados = {49300: "otro-proyecto-postgres-1", 49301: "otro-proyecto-redis-1"}
     elegido = find_free_port(49300, "Postgres", set(), docker_ports=reclamados)
     assert elegido == 49302
@@ -129,9 +133,12 @@ def test_choose_port_conserva_el_puerto_del_propio_asistente() -> None:
     assert elegido == 5435
 
 
-def test_choose_port_ignora_un_previo_que_ya_no_es_nuestro() -> None:
+def test_choose_port_ignora_un_previo_que_ya_no_es_nuestro(monkeypatch: pytest.MonkeyPatch) -> None:
+    import cli.preflight
     from cli.preflight import choose_port
 
+    # Determinista: en el runner compartido el 49600 puede estar ocupado por otro proceso.
+    monkeypatch.setattr(cli.preflight, "port_available", lambda *a, **k: True)
     elegido = choose_port(
         start=49600, label="API", previous=49999,
         own_ports=set(), reserved=set(), docker_ports={},

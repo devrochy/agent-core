@@ -1,0 +1,68 @@
+{
+  "key": "ventas",
+  "nombre": "Ventas",
+  "descripcion": "Vende el catálogo del negocio: pedidos, cotizaciones y links de pago.",
+  "captar_leads": true,
+  "seccion": "Ventas",
+  "habilidades": [
+    "pack_commerce"
+  ],
+  "opcionales": [
+    "pack_payments"
+  ],
+  "procedimientos": [
+    "pack_commerce.tomar_pedido",
+    "pack_commerce.pago_en_linea",
+    "pack_commerce.comprobar_transferencia"
+  ],
+  "playbooks": [
+    "ventas",
+    "seguimiento",
+    "pagos"
+  ],
+  "preguntas": [
+    {
+      "id": "largo_respuesta",
+      "texto": "¿Qué tan largas quieres sus respuestas?",
+      "ayuda": "Es un tope blando: el agente intenta no pasarse. Puedes cambiarlo después en el editor.",
+      "tipo": "opcion",
+      "defecto": "normal",
+      "opciones": [
+        {
+          "id": "cortas",
+          "texto": "Cortas",
+          "ayuda": "Directas, pensadas para el celular.",
+          "largo_maximo": 300
+        },
+        {
+          "id": "normal",
+          "texto": "Normales",
+          "ayuda": "Lo habitual de tu negocio."
+        },
+        {
+          "id": "detalladas",
+          "texto": "Detalladas",
+          "ayuda": "Explica con más detalle.",
+          "largo_maximo": 900
+        }
+      ]
+    }
+  ],
+  "preguntas_retiradas": [
+    "que_vendes"
+  ],
+  "reglas": [
+    {
+      "id": "preset_ventas_palabras",
+      "when": {
+        "keywordAny": [
+          "comprar",
+          "hacer un pedido",
+          "precio",
+          "cotización",
+          "link de pago"
+        ]
+      }
+    }
+  ]
+}

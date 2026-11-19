@@ -31,7 +31,7 @@ async def _login(app_client) -> str:
 
 
 async def _new_tenant() -> uuid.UUID:
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Tenant master {_uniq('x')}",

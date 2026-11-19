@@ -27,18 +27,89 @@ modelos de Claude no están, así que su costo cae a cero. Existe
 `BaseLLMProvider.estimate_cost_usd()` (`core/llm/base.py:37-41`) precisamente para
 esto, pero nadie la llama. El panel `/admin/costos` subestima el gasto real.
 
-**La firma del webhook es opcional en la práctica**
-`core/gateway/webhooks.py:65` solo verifica el HMAC `X-Hub-Signature-256` si hay
-`app_secret` configurado. Sin él, cualquiera que conozca la URL puede inyectar
-mensajes. Debería fallar cerrado, o al menos gritar en los logs.
+**Confirmar el secreto de la plataforma antes de desplegar ADR-0100**
+`connections.platform_app_secret` usa `WHATSAPP_APP_SECRET or META_APP_SECRET`, y desde ADR-0100 es la única llave
+que autoriza eventos de cualquier negocio en el webhook genérico. Antes de desplegar, confirmar en el `.env` de
+producción que no es el de la app de un cliente concreto (heredado del monolito). Además, Embedded Signup firma con
+`META_APP_SECRET`: si los dos están definidos y son distintos, sus entregas al genérico dan 401. Decidir si la
+plataforma es solo `META_APP_SECRET` (ADR-0094) y `WHATSAPP_APP_SECRET` queda como respaldo del endpoint por slug.
 
-**El pedido de monto alto nunca escala**
-`plugins/pack_commerce/pack_commerce/skills.py:989` devuelve `{"escalate": True}`
-cuando el monto supera `monto_alto_threshold`. Ningún punto de `core/` lee esa clave:
-`core/orchestrator/safe_renderer.py` solo interpreta `_safe_append` e `_image_url`.
-La señal se pierde y el LLM solo ve un error genérico.
+**La migración `crm_0009` falla con un negocio de 10.000 pedidos o más**
+El backfill de `packages/pack-commerce/alembic/versions/0009_orders_numero_publico.py` arma
+`'OC-' || lpad(order_seq::text, 4, '0')`, y `lpad` **trunca** a 4 caracteres: el pedido 10000 queda `OC-1000`, igual
+que el 1000. El índice único `uq_crm_orders_tenant_number` aborta la migración y, con ella, la activación del pack
+(`PluginError: Activación falló`). En local se reproduce con pedidos de prueba de `order_seq` ≥ 10000:
+`test_admin_rbac`, `test_crm_playbooks` y `test_crm_tenant::test_numeracion_pedidos_por_tenant` fallan al activar
+`pack_commerce`. Arreglo: en el backfill, `lpad` solo por debajo de 10000 y el número completo desde ahí (o una
+migración nueva si `crm_0009` ya corrió en algún entorno). Visto el 2026-10-07 al correr la integración de
+`feat/registrar-numero`.
 
-## Media
+**Otros que deciden por `status` sin seguir ADR-0101**
+- `core/api/routers/connections.py:121` y `core/admin/views.py:1788` muestran `active = status == "connected"`: una
+  conexión `degraded`/`error` que recibe y responde aparece como inactiva.
+- `core/admin/meta_health_service.py:144`: las conexiones `degraded`/`error` desaparecen de la tabla de suscripciones,
+  justo cuando la suscripción es el problema.
+- `core/gateway/meta_preflight.py::resolve_app_credentials` no filtra por estado, no prefiere `origin = 'byok'` y
+  ordena por `created_at`: puede devolver el `app_access` de una conexión `revoked` y elegir una conexión distinta de la
+  que elige `_resolve_byok_token` (auditor-multitenant, 2026-10-06). Usar el mismo selector. (El filtro de
+  `deleted_at` ya está, core #271.)
+- Al tomar una conexión BYOK, el wizard de Embedded Signup (`meta_onboarding.exchange_code`) no revoca su
+  `app_access`/`webhook_verify_token` ni desuscribe la app BYOK de la WABA. Meta sigue mandando eventos firmados por
+  esa app; ADR-0101 los acepta, pero lo limpio es revocarlos y desuscribir.
+
+- Resueltos por ADR-0122 (HU-CONN-03): `revoked` ya pausa (entrada sin IA, sin envío), el sender falla cerrado con
+  `meta_connection_id` sin credenciales y "Activar" exige el diagnóstico verificado.
+- Fuera de ADR-0122: los mensajes a un número pausado crean clientes y conversaciones que cuentan para la cuota, y
+  pack-commerce marca un seguimiento como hecho aunque `send_to_conversation` devuelva `False` (se consumen durante
+  una pausa).
+
+**Lo que quedó fuera de ADR-0102 (la conexión se recupera sola)**
+- `check_webhook_subscribed` solo pide que la WABA tenga alguna app suscrita, no la de la conexión. En BYOK,
+  `own_app_subscribed` lo cubre con `WabaAccount.subscribed`, que es lo que se guardó al suscribir; no ve una
+  desuscripción posterior hecha en Meta. Verificar el id de la app en `subscribed_apps`
+  (`whatsapp_business_api_data.id`; comprobar antes la forma de la respuesta de Meta) lo cerraría.
+- `check_app_subscription` solo mira `active`, no que el `callback_url` sea de este sistema ni que `fields` incluya
+  `messages`. Una BYOK cuya app apunta a otro destino pasa el requisito de `next_status`. Exigir las dos cosas para que
+  una BYOK mejore (aceptando la URL por slug y la genérica de ADR-0100). Auditor-multitenant, 2026-10-06.
+- `meta_subscriptions_health._check_group` no persiste nada para un objeto que Meta omite en la respuesta, y
+  `check_app_subscription` no mira la antigüedad de `last_checked_at`: un `active=True` viejo sobrevive aunque la
+  suscripción ya no exista o el cron se haya parado. Desde ADR-0102 pesa más, porque `next_status` depende de él.
+- Un alta BYOK interrumpida (reinicio del proceso o un `CancelledError`, que `except Exception` no captura) queda en
+  `pending` con el número y quizá con `app_access`. En `_resolve_byok_token`, `pending` va con `connected` y gana por
+  `connected_at`, y ningún cron revisa `pending`: le quita el secreto a la sana. Residuo de ADR-0101; un barrido que
+  pase a `error` las `pending` viejas, u ordenarlas después de `connected`.
+- El alta BYOK comprueba el token con el App Secret, pero no que el `app_id` cargado sea de ese secreto. Un negocio
+  puede dar de alta una conexión con el `app_id` de otro: queda en `error`, entra al grupo de esa app en el cron de
+  suscripciones (el respaldo de ADR-0102 evita que trabe la recuperación del dueño) y, si la activa, el panel le
+  muestra la fila de `meta_app_subscriptions` del otro, con su `callback_url` (`/webhooks/whatsapp/<slug>`).
+  Metadatos sin PII ni secretos. Arreglo: validar el par con `fetch_app_access_token(app_id, app_secret)` en el alta,
+  rechazar `app_id == settings.meta_app_id`, y no mostrar un `callback_url` que no sea el del propio negocio
+  (auditor-multitenant, 2026-10-06). Desde ADR-0102 el cron de suscripciones ya no revisa la app de la plataforma.
+- La suscripción de la app de la plataforma no la revisa ningún cron: solo las conexiones BYOK guardan `app_access`.
+  Si Meta la desactiva, todas las conexiones de Embedded Signup dejan de recibir sin aviso.
+- `webhooks._alert_on_firma_ajena` repite a mano la deduplicación de `send_alert_once`; sus tests parchean
+  `webhooks.get_redis`, por eso no se tocó.
+- El candado horario del sync de plantillas es por `(tenant, waba_id)`, pero las plantillas se guardan por fila de
+  WABA: si dos conexiones `connected` comparten la WABA, una de las dos no sincroniza y termina `degraded`.
+- Sentry captura las variables locales por defecto y `_before_send` (`core/observability/sentry_setup.py`) solo
+  tapa los tokens `EAA...`, no los App Secrets (32 hex). Una excepción inesperada en un cron que tiene un secreto en
+  un frame lo mandaría al evento. `include_local_variables=False`, o tapar también los secretos de app. En
+  `meta_subscriptions_health._group_connected_apps` se descifran los secretos de todas las conexiones de la app solo
+  para compararlos: se podría comparar `MetaToken.token_hash` y descifrar solo el que se usa.
+- `run_health_checks` toma la primera WABA de la conexión sin `ORDER BY`: con varias, `credentials_for`,
+  `webhook_subscribed` y `templates` revisan una cualquiera. Elegir la del número vigente.
+
+**Otras dos altas de conversación con la misma carrera que tenía el consumidor**
+El consumidor ya serializa por cliente el get-or-create de la conversación (`pg_advisory_xact_lock`, 2026-10-06).
+`core/gateway/outbound_email.py:72-100` y `core/admin/playground.py:59-96` siguen buscando y creando sin candado.
+- En el correo, turnos concurrentes de pack-calendar (`pack_calendar/skills.py:978`) hacia el mismo buzón pueden
+  dejar dos conversaciones abiertas. La primera alta del cliente puede soltar un `IntegrityError` crudo que
+  `core/tools/core_skill.py:137` no captura, y pack-calendar lo cuenta como `error_envio`.
+- En el playground, dos peticiones simultáneas del mismo negocio pueden crear dos conversaciones de prueba o dar
+  un 500.
+
+Afecta solo al mismo negocio. Arreglo: el mismo candado `conversation:{tenant}:{customer.id}` antes del `select`, y
+`begin_nested` + relectura en el alta del cliente (auditor-multitenant, 2026-10-06).
 
 **El system prompt promete una herramienta que no existe**
 `core/llm/prompt_builder.py:BASE_RULES` dice *"si el cliente pide hablar con una
@@ -102,16 +173,118 @@ repite en `sdd/templates/skills-config.md.j2` §4 y `.opencode/agents/plugin-dev
 
 ## Baja
 
+**Varias integraciones SMTP por negocio, pero se usa una sola**
+Un negocio puede crear varias conexiones `email_smtp`, pero `queue_outbound_email` y `send_email` usan
+siempre la principal o la más nueva (`core/gateway/connections.py:123-140`). No se puede elegir un
+remitente por propósito (ventas, facturación, soporte). Propuesta: un `proposito` en la integración y
+que cada envío pida el suyo, con la principal como respaldo. Encaja con las integraciones con scope de
+Agent OS (ADR-0115). Decidido al enmendar ADR-0123 (2026-10-09).
+
+**`graph_fetch` deja escapar errores de transporte de httpx**
+`core/gateway/meta_graph.py:84-94` solo convierte `TimeoutException` y `ConnectError` en `GraphError`. Un
+`ReadError`/`RemoteProtocolError` sube como excepción no controlada: la ruta da 500 y, con Sentry encendido, el evento
+lleva los frames de httpx/httpcore con el cuerpo del pedido en bytes (p. ej. el PIN de `.../register`), que el
+scrubber por clave no tapa. Arreglo: `except httpx.TransportError` → `GraphError(category="TRANSIENT")` sin
+`http_status`. Hallazgo del `auditor-multitenant` sobre `feat/registrar-numero`, 2026-10-07.
+
 **Follow-ups de auditoría diferidos (BYOK / token)**
 - `core/gateway/meta_token_tools.py::extend_token` usa `httpx` directo → no queda en
   `graph_api_calls`/`graph_api_usage` (endpoint público de tokens, sin `appsecret_proof`).
 - Rutas `POST /admin/conexiones/wizard/whatsapp-byok/token/inspect|extend` no validan que
   `app_id` pertenezca al tenant (en el alta inicial la conexión todavía no existe).
-- `core/shared/events.py::emit_nowait` (fallback sync) no propaga el tenant (hoy sin callers).
-- `meta_token_store.get_token` no filtra `tenant_id` en el WHERE (preexistente; el AAD falla
-  cerrado).
+- `core/shared/events.py::emit_nowait` (fallback sync) no propaga el tenant (hoy sin callers). Desde
+  ADR-0107/HU-SUB-03 los eventos de dominio ya no dependen de esto: van por el outbox `domain_events`
+  con `tenant_id` explícito; el bus in-process queda solo para eventos del core.
+- ~~`meta_token_store.get_token` no filtra `tenant_id` en el WHERE~~: lo filtra desde HU-CONN-05 (ADR-0126).
 - `ix_meta_tokens_tenant` no es índice compuesto (preexistente).
 - `save_byok_connection` tiene un branch de "tenant mismatch" inalcanzable (RLS lo filtra antes).
+
+**Pendientes tras HU-CONN-01 (credenciales por conexión, ADR-0094)**
+- Seguimientos de HU-CONN-05 (ADR-0126): ~~rechazar en el wizard BYOK el `META_APP_ID` de la plataforma~~ y
+  ~~generar un `verify_token` propio por conexión BYOK~~ (resueltos en HU-CONN-06, ADR-0127). Quitar la guarda por
+  `meta_app_id` de `uses_platform_app` cuando la consulta previa al despliegue confirme que no hay filas BYOK con
+  ese App ID. Siguen: revisar los `subscribed_apps` de la WABA al reclamarla (pendiente de ADR-0122); dos negocios
+  con la misma app BYOK se pisan el callback al registrar. (Mover al master el re-registro de la app de la
+  plataforma que hacía el alta de Embedded Signup: resuelto en HU-SH-05, ADR-0128.)
+- Seguimientos de HU-CONN-06 (ADR-0127): alta BYOK de producción contra Meta real documentada por el dueño en test
+  (app en modo Live, token de System User, número real con PIN, "Pasar a producción"); ~~`terminar_promocion` sobre
+  el checklist por conexión de HU-CONN-07 y borrar `checks_de_su_app`~~ (hecho 2026-10-09: `checks_de_produccion`);
+  `check_token_valid` no compara el
+  `app_id` que devuelve `debug_token` con el de la conexión y su `detail` lleva el texto de la excepción de red;
+  el `verify_token` que escribe el admin no tiene largo mínimo, y si el alta falla después de guardarlo el rollback
+  no restaura el anterior; una WABA del alta BYOK que ya está viva en otra conexión del negocio queda con dos filas
+  (preexistente en el alta, señalado por `auditor-multitenant`).
+- ~~Webhook y "Registrar webhook" eligiendo "la" conexión del tenant~~: resuelto en HU-CONN-05 (ADR-0126).
+  Queda `meta_preflight.resolve_app_credentials` (preflight y checklist viejos), que sigue eligiendo una
+  conexión por negocio.
+- Tras una toma por el wizard de ES, `meta_connections.meta_app_id` sigue siendo el de la app BYOK anterior
+  (ningún consumidor deduce el origen de él desde ADR-0094; desde HU-SH-05 tampoco `check_app_subscription`, que
+  mira la app de la plataforma). HU-CONN-05 no lo alineó a propósito: es el
+  `subject_id` con el que se guardó el App Secret de esa app, y el webhook lo sigue aceptando (ADR-0101,
+  ADR-0126). Si se alinea, hay que mover también el secreto o dejar de aceptarlo, y revisar el índice único
+  `uq_meta_connections_tenant_app`.
+- Descarga de media entrante: el core no la hace (`inbound.py` deja `url: ""`); HU-MEDIA-02 debe usar
+  `credentials_for` para el `GET /{media_id}`.
+- Las migraciones asumen un rol con `BYPASSRLS` o superusuario: `0034` falla con un dueño sin bypass
+  ("new row violates row-level security policy for table tenant_subscriptions"). La `0051` sí es segura con
+  cualquier rol (fija `app.tenant_id` por tenant); la `0052` aborta con un mensaje claro si el rol no puede
+  saltar RLS (sus funciones `SECURITY DEFINER` lo necesitan, ADR-0095).
+- `tests/test_meta_byok.py` (7) y `tests/integration/test_api_meta_wizard.py::test_byok_*` /
+  `test_meta_byok_reconnect.py` no stubbean `_token_expiry` → hacen una llamada real a Graph y fallan sin red.
+
+**Pendientes tras HU-SH-05 (Embedded Signup real, ADR-0128)**
+- **Verificación real (la hace el dueño):** aprobar la app de la plataforma en Meta (verificación del negocio, acceso
+  de Tech Provider, App Review de `whatsapp_business_management` y `whatsapp_business_messaging`, app en modo Live),
+  crear la configuración de Embedded Signup y poner `META_APP_ID`, `META_APP_SECRET` y `META_CONFIG_ID` en test;
+  agregar el dominio del panel en "Allowed domains for the JavaScript SDK"; registrar el webhook de la app como
+  master; y hacer un alta real de un número de prueba de punta a punta con video o capturas (criterio de la HU y el
+  de Embedded Signup de HU-CONN-01). Marcar los requisitos en "Plataforma → App de Meta".
+- ~~Enlazar los requisitos de Embedded Signup desde "Plataforma → App de Meta" y sacar los tres datos del servidor~~
+  (hecho 2026-10-09: los revisa la corrida de la plataforma, que suma `meta_app_configured` y HTTPS en el webhook, y
+  `ready` exige esa corrida sin rojos y de hace menos de 30 días).
+- La cadena del alta corre en el request (varias llamadas a Graph después del canje). Si la latencia molesta con
+  Meta real, pasarla a un job de Celery: el estado ya está en `connection_wizards` y el panel puede consultar
+  `GET /wizard/session`.
+- `complete_signup` atrapa `GraphError` y `WizardError`; un error de transporte de httpx que `graph_fetch` deje
+  escapar (ver "`graph_fetch` deja escapar errores de transporte de httpx") daría 500 a mitad de la cadena. El
+  paso queda guardado y "Reintentar" lo retoma.
+- Desde ADR-0128 el wizard ya no toma conexiones BYOK; las que se tomaron antes (si hubiera) siguen con su
+  `app_access` y `meta_app_id` viejos (ADR-0126 §8). Una consulta antes de desplegar lo confirma.
+- `next_status` exige la suscripción de la app de la plataforma solo para `embedded_signup`, no para `manual` (usan
+  la misma app); evaluar extenderlo.
+- La respuesta 422 de FastAPI devuelve el `input` del campo inválido: un `pin` o `code` mal tipado volvería en el
+  error. Un handler de `RequestValidationError` que quite `input` en `/api/v1` (security-reviewer, 2026-10-09).
+- `meta_app_secret` es `str` en `Settings`: pasarlo a `SecretStr` para que no salga en un repr.
+
+**Pendientes tras ADR-0095 (un número o una WABA de un solo negocio)**
+- Antes de desplegar la `0052` en producción: confirmar que `agent_core_migrations` (el `MIGRATIONS_DATABASE_URL`
+  de producción en `docs/despliegue-coolify.md`) es superusuario o tiene `BYPASSRLS`; si no, la migración aborta el
+  arranque a propósito. El mismo documento dice en sus notas que las migraciones corren como superusuario: alinear.
+- `save_connection` para `whatsapp_meta` (panel clásico `/admin/conexiones/guardar`, alta de tenant, CLI) verifica
+  el número contra Graph pero no a qué WABA pertenece. Con la regla de conflicto de ADR-0095 ya no entrega mensajes
+  ajenos, pero es la vía de alta más débil: pedir la WABA y usar `verify_waba_and_phone`, o retirarla a favor de
+  `POST /api/v1/admin/meta/manual`.
+- `soft_delete_connection` (`core/admin/meta_health_service.py`) borra **físicamente** `phone_numbers` y
+  `waba_accounts` de la conexión (y en cascada `message_templates`), contra la invariante 8. Lo cubre
+  `tests/integration/test_meta_byok_numero_ocupado.py::test_eliminar_conexion_libera_numero_y_waba`. Las funciones
+  de ruteo y de reclamo ya ignoran conexiones borradas, así que pasarlo a borrado lógico no rompe el ruteo.
+- `resolve_tenant_for_page`, `resolve_tenant_for_ig_user` (migración `0021`) y la resolución de plantillas por
+  `meta_template_id` (`0026`) siguen con `LIMIT 1` sin desempate. Hoy no hay clientes de Messenger ni Instagram;
+  aplicar la misma regla (conexión viva, NULL si hay más de un dueño) cuando los haya.
+
+**Pendientes tras ADR-0100 (firma por negocio en el webhook)**
+- La respuesta del webhook dice si un número tiene dueño: un negocio que firma un grupo `(su WABA, número X)` recibe
+  `"ignored"` si X es de otro (`tenant_conflict`, o `tenant_mismatch` por slug) y `"ok", "enqueued": 1` si X no
+  tiene dueño (auditor-multitenant, 2026-10-05, preexistente). Responder con un cuerpo constante.
+- `APP_ENV` vale `development` por defecto (`core/config.py`): un despliegue que olvide la variable deja activo el
+  fallback que manda los eventos sin negocio (firmados por la plataforma) al primer negocio activo. Que su falta sea
+  un error, o que el valor por defecto sea `production`.
+- El wizard BYOK no impide que dos negocios carguen la misma app (`app_id`): con el mismo App Secret se autorizan
+  entre sí en el webhook (se registra `webhook_secreto_compartido`). Rechazarlo en el alta, como el reclamo de
+  ADR-0095.
+- Retirar la rama de negocios del webhook genérico: re-registrar al endpoint por slug las suscripciones BYOK
+  anteriores al wizard actual (`meta_subscriptions.upsert_app_subscription`) y, cuando el log
+  `webhook_generico_firmado_por_negocio` llegue a cero, que el genérico solo acepte la firma de la plataforma.
 
 **Código muerto**
 `MCPHost.register_resource()` y `MCPResource` (registrados, nunca leídos);
@@ -126,13 +299,6 @@ no se escribe nunca).
 `core/orchestrator/consumer.py` usa `CONSUMER = "orchestrator-1"` hardcodeado y no hay
 `XAUTOCLAIM`/`XPENDING`. Si un proceso muere entre `xreadgroup` y `xack`, esa entrada
 queda pendiente para siempre. Con varias réplicas, todas comparten nombre de consumidor.
-
-**Prompt caching de Anthropic: un breakpoint desperdiciado**
-`core/llm/anthropic_provider.py:55-61` marca `cache_control` en **todos** los bloques
-de system, incluido el dinámico, que cambia cada turno. Ese breakpoint escribe caché
-que nunca se reutiliza. `docs/PROMPT-CACHING-GUIDE.md` describe el comportamiento
-deseado (no cachear el bloque 4) y dice "usamos 3, queda 1 libre", que no es lo que
-hace el código.
 
 **Documentación con deriva**
 - `docs/PLUGIN-CONTRACT.md` §13 prohíbe importar `core.plugin_manager`, y los dos
@@ -192,3 +358,103 @@ con HTML genérico; leads ya está portado. Las vistas complejas del CRM (produc
 con árbol de categorías, promociones, pedidos con line_items) siguen en plantillas
 propias del pack. → Migrarlas a descriptores cuando el descriptor soporte los casos
 (tabla con árbol, sub-items). [Media — follow-up Fase D]
+
+---
+
+## Asistente SolversHub (2026-09-30)
+
+Requerimientos para que el asistente del tenant `solvershub` venda planes, gestione
+**carteras como suscripciones** y **agende demos** sin alucinar. ADRs: 0082 (cartera
+recurrente), 0083 (`pack_subscriptions`), 0084 (calendario interno), 0085 (persistencia
+de artefactos de tenant).
+
+**Suscripciones** (actualizado 2026-10-07 con ADR-0106 / HU-SUB-01)
+- **Cartera recurrente (Opción 2, ADR-0082)** — `Cartera`/`Cuota` solo modelan un préstamo
+  finito (`pack_cobranza/models.py:336-370`); no hay recurrencia indefinida. → se integra
+  como **segundo proveedor** del contrato v1 de `core/subscriptions` en HU-SUB-15
+  (préstamo rodante, D-SPEC-06-2). [Alta]
+- **`pack_subscriptions` (Opción 1, ADR-0083)** — ✅ **existe desde el 2026-09-30**: pack
+  con `Subscription`/`SubscriptionCharge` (planes como productos de commerce). Desde
+  HU-SUB-01 implementa el contrato v1 (8 operaciones) y las tools `sub_*` viven en el
+  core y despachan a él. [Cerrado]
+- **Metadatos de recurrencia en productos** — `Product/ProductVariant` ya tienen
+  `billing_period`/`trial_days` (se validan por enum en HU-SUB-10). [Cerrado]
+- **Cobro recurrente con `pack_payments`** — la capacidad crea links one-shot
+  (`pack_payments/payments.py`, `create_link`); el cobro por período con link ya existe
+  (`charge_link` del contrato v1, con guard de período futuro); el débito recurrente
+  sigue diferido (HU-SUB-17, Fase 2). [Media]
+- **La suscripción y su evento se confirman en otra transacción que el pedido** —
+  `activar_planes_del_pedido` (`pack_commerce/planes.py:103`) llama a `capability.activate`, y
+  `crear_suscripcion_para` abre su propia sesión (`pack_subscriptions/capability.py:124`): la
+  suscripción y `subscription.activated` quedan confirmadas aunque la transacción del pedido se
+  revierta después (p. ej. un error al registrar la promoción en `crear_pedido`,
+  `pack_commerce/skills.py:1499`). El alta automática lo tolera (exige el pedido visible y pagado;
+  si no aparece en 3 intentos queda en revisión), pero la suscripción huérfana queda. → que el
+  proveedor use la sesión del llamador o que commerce active después del commit. Visto en HU-SH-03
+  (2026-10-09). [Media]
+- ✅ **[Cerrado por HU-SH-04, ADR-0123: el plan cambia en el mismo negocio con su preset, se renueva y se paga por los dos canales]** ~~Un cambio de plan desde el asistente no cambia el plan del negocio aprovisionado~~ — Free →
+  Premium cambia la suscripción en `solvershub`, pero el consumidor de ADR-0121 solo lo audita
+  (`aprovisionamiento_cambio_de_plan`): el negocio sigue en Free y vence a los 30 días. Tampoco aplica
+  el preset que quedó pendiente porque no cabía en Free (ADR-0110 § 3.1). El plan pago aprovisionado
+  tampoco se renueva al vencer `period_end`. → HU-SH-04 (fuente única del cobro de plataforma, renovación
+  y preset pendiente al subir de plan). Hasta entonces, no encender `PROVISIONING_SELLER_TENANTS` en
+  producción. [Alta]
+- ~~**Rotar número y correo sigue permitiendo un Free tras otro**~~ — resuelto en HU-SH-07 (ADR-0125): un
+  Free por persona por teléfono o documento (12 meses, con huellas HMAC), cupo de pedidos de alta por
+  origen y señales de riesgo a revisión. Queda abierto quien rota número, correo **y** documento.
+- **Verificar el documento o el teléfono antes de un Free** — con ADR-0125, quien rota número de WhatsApp,
+  correo y documento sigue sacando un Free (las señales y el cupo lo encarecen, no lo cierran). Si aparecen
+  altas Free fraudulentas que pasan las reglas, verificar el documento o el número con un código. [Media]
+- **Playbook de ventas con los controles del alta** — `crear_pedido` de un plan en `solvershub` ahora puede
+  responder `terminos_pendientes`, `free_no_disponible` o `limite_de_altas` (ADR-0125). El playbook de
+  `solvershub-comercial` tiene que mostrar los tres enlaces y pedir la aceptación explícita, ofrecer un plan
+  pago y explicar la espera; hoy se guía solo por el `hint` de la tool. [Alta]
+- **Textos legales definitivos** — términos, privacidad y DPA dependen del abogado (HU-GTM-02). Al llegar, el
+  master publica cada versión en Plataforma → Alta automática (sin tocar código). Hasta que estén las tres
+  publicadas, toda alta automática va a revisión (ADR-0125 § 2). [Alta]
+- **Confirmar el correo en el chat antes de crear el pedido de un plan** — el acceso del negocio
+  aprovisionado llega solo al correo del pedido (ADR-0121): si el cliente lo escribe mal, se queda sin
+  acceso hasta que una persona lo corrija (`docs/runbooks/altas-en-revision.md`). Es un ajuste del playbook de
+  ventas del tenant `solvershub` (`solvershub-comercial`): repetir el correo y pedir confirmación antes de
+  `crear_pedido`. [Media]
+- **Reactivar el negocio de quien vuelve a comprar después de cancelar** — desde HU-SH-04 (ADR-0123 § 12)
+  el alta queda en revisión en vez de crear un segundo negocio, y una persona reactiva el que tenía. →
+  reactivarlo solo (misma suscripción nueva vinculada al negocio anterior). [Media]
+- **Cambio de plan desde `/plan` para un negocio del asistente** — HU-SH-04 lo bloquea (409
+  `cambio_en_el_asistente`, ADR-0123 § 6): cambiar el plan en el vendedor sin cobrarlo de nuevo exige otra
+  operación del contrato, y el prorrateo es de HU-BILL-12. [Media]
+
+**Calendario / demos**
+- **Calendario interno (ADR-0084)** — las 5 tools requieren `google_calendar`
+  (`pack_calendar/skills.py:100,116,157,178,212`); sin OAuth no se agenda. → modo
+  `interno` con `BusinessHours`/`CalendarBlock` y tools sin Google. [Alta]
+- **`check_availability` sin slots libres** (`skills.py:599-634`) — devuelve ocupados y la
+  ventana, pero el LLM debe razonar los huecos → alucina horarios. → calcular `free_slots[]`.
+  [Alta]
+- **`create_calendar_event` sin duración/tipo** (`skills.py:217-265`) — usa siempre
+  `event_duration_minutes`; no acepta `appointment_type_id`. → parámetros + tipos. [Media]
+- **Flow default de calendar incompleto** (`pack_calendar/flow.json:9`) — solo
+  check/create/send_email; update/cancel/list no llegan al LLM. → ampliarlo + tool
+  `list_appointment_types`. [Media]
+- **Seed de citas/tipos** — `seed_catalog` solo cubre `pack_commerce`
+  (`cli/commands/tenant.py:230-353`). → seed genérico por pack. [Media]
+
+**Framework / plataforma**
+- **Artefactos de tenant efímeros (ADR-0085)** — el contenedor de Coolify no monta
+  `TENANTS_ROOT`; `flow.json`/playbooks/catálogo se pierden en el redeploy (solo `brand_voice`
+  persiste en `AppSettings`). → volumen persistente. [Alta]
+- **Evals no aplican el flow resuelto** — `evals/runner.py:181` pasa todas las skills del
+  `mcp_host`; un escenario pasa aunque el `flow.json` del tenant excluya la tool → los evals
+  no protegen contra ese hueco. → usar `resolve_flow` en el runner. [Media]
+- **`completion_claims` no parametrizables en calendar** — `pack_calendar/module.py:39-72`
+  las tiene fijas (commerce sí las configura, `pack_commerce/config.py:115-136`). → DSL
+  por tenant. [Baja]
+- **Embudo de activación en el panel** (HU-SH-06, ADR-0124) — hoy se mide con `agent-core tenant embudo`
+  y el log `onboarding_hito`. Si se quiere un tablero o alertas, un cron que barra las altas recientes y
+  una vista agregada para el master. [Baja]
+- **Enlace de invitación vencido de una cuenta sin contraseña** — si el owner no usa el enlace en 7 días,
+  «olvidé mi contraseña» le define la contraseña, pero la invitación vencida ya no se muestra: entra sin
+  negocio. Hace falta reenviar la invitación (master) o renovarla al recuperar la contraseña. Visto en
+  HU-SH-06 (2026-10-09). [Media]
+- **`brand_voice` vacío no se detecta** — `AppSettings.brand_voice` puede quedar vacío sin
+  aviso, y es la fuente de verdad de precios. → validación/aviso en el panel. [Baja]

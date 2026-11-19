@@ -23,3 +23,4 @@ plugins/.install.lock
 
 # Datos y documentación de tenants (por despliegue, fuera del framework)
 /tenants/
+evals/reportes/

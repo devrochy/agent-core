@@ -1,0 +1,257 @@
+"""Permisos de colaboración entre agentes y su ledger (ADR-0116, adenda HU-AOS-18).
+
+- `GET /api/v1/admin/a2a/graph` — la versión vigente del grafo (la que congelará la próxima
+  release de cada conexión), sus enlaces y advertencias (ciclos de `handoff`).
+- `PUT /api/v1/admin/a2a/graph` — publica una versión nueva con la lista completa de enlaces.
+  Idempotente: con el mismo contenido devuelve la vigente (`created: false`). 422 con
+  `modo_no_permitido` (broadcast/colaboración son internos del Coordinador), `autollamada`,
+  `enlace_repetido`, `agente_desconocido` o `enlace_invalido`.
+- `GET /api/v1/admin/a2a/graph/versions` — historial.
+- `GET /api/v1/admin/a2a/calls?connection_id=` — una fila por llamada (`call_id`), sin payload.
+- `POST /api/v1/admin/a2a/route-preview` — qué agente y procedimiento atenderían una frase con la
+  release activa de una conexión, y por qué (HU-AOS-26). Sin LLM y sin escribir nada. 409
+  `sin_release_activa` si la conexión no tiene release activa (404 si no es del negocio).
+
+Permisos: la sección `settings`, como los agentes. Publicar no llega a clientes reales hasta que se
+promueve una release (que pide propietario o master).
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+
+from core.agents import grafo_a2a as svc
+from core.api.deps import Principal, require
+from core.api.errors import ApiError
+from core.db.session import get_session
+from core.shared.logger import get_logger
+from core.shared.test_mode import sql_no_es_prueba
+
+log = get_logger(__name__)
+
+router = APIRouter(prefix="/admin/a2a", tags=["admin · colaboración entre agentes"])
+
+
+class Link(BaseModel):
+    from_agent_id: uuid.UUID
+    to_agent_id: uuid.UUID
+    modes: list[str]
+    intents: list[str]
+    max_depth: int
+    timeout_ms: int
+    budget_usd: float
+    budget_tokens: int
+    data_classes: list[str]
+
+
+class GraphVersion(BaseModel):
+    id: uuid.UUID
+    version: int
+    content_hash: str
+    created_at: datetime
+
+
+class Graph(BaseModel):
+    version: GraphVersion | None
+    links: list[Link]
+    warnings: list[str] = Field(description="Ciclos de `handoff` (`ciclo_handoff:a>b`): no bloquean.")
+
+
+class GraphIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    links: list[dict[str, Any]] = Field(max_length=200)
+
+
+class GraphOut(Graph):
+    created: bool
+
+
+class RoutePreviewIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    connection_id: uuid.UUID
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class RouteCandidate(BaseModel):
+    procedure_id: str
+    title: str | None = Field(default=None, description="Título del procedimiento (dato de la habilidad).")
+    owner: str = Field(description="Key del agente que declara el procedimiento.")
+    score: float
+
+
+class RoutePreview(BaseModel):
+    mode: str = Field(description="`active`, o `shadow` si la release de la conexión pide sombra (`routing.shadowMode`).")
+    source: str = Field(description="`rule`, `trigger` o `default`.")
+    agent_key: str
+    agent_id: uuid.UUID
+    procedure_id: str | None
+    procedure_title: str | None = None
+    rule_id: str | None
+    confidence: float | None
+    candidates: list[RouteCandidate]
+    not_evaluated_rules: list[str] = Field(
+        description="Reglas por datos del cliente, etapa u horario: sin conversación no se evalúan."
+    )
+
+
+class Call(BaseModel):
+    call_id: uuid.UUID
+    connection_id: uuid.UUID
+    conversation_id: uuid.UUID | None
+    mode: str
+    from_instance_id: uuid.UUID
+    to_instance_id: uuid.UUID | None
+    intent: str
+    depth: int
+    status: str = Field(description="Último evento de la llamada (`accepted`, `completed`, `denied`, …).")
+    reason: str | None
+    tokens: int
+    cost_usd: float
+    started_at: datetime
+    ended_at: datetime
+
+
+def _tenant(principal: Principal) -> uuid.UUID:
+    if principal.tenant_id is None:
+        raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+    return principal.tenant_id
+
+
+def _link(e: svc.EnlaceA2A) -> Link:
+    return Link(**e.model_dump())
+
+
+def _version(v: svc.VersionDelGrafo) -> GraphVersion:
+    return GraphVersion(id=v.id, version=v.version, content_hash=v.content_hash, created_at=v.created_at)
+
+
+@router.get("/graph", response_model=Graph)
+async def get_graph(principal: Annotated[Principal, Depends(require("settings"))]) -> Graph:
+    vigente = await svc.vigente(_tenant(principal))
+    if vigente is None:
+        return Graph(version=None, links=[], warnings=[])
+    return Graph(
+        version=_version(vigente),
+        links=[_link(e) for e in vigente.enlaces],
+        warnings=svc.advertencias(vigente.enlaces),
+    )
+
+
+@router.put("/graph", response_model=GraphOut)
+async def put_graph(
+    payload: GraphIn, principal: Annotated[Principal, Depends(require("settings", write=True))]
+) -> GraphOut:
+    tid = _tenant(principal)
+    try:
+        version, creada = await svc.publicar(tid, payload.links, created_by=principal.admin.id)
+    except ValidationError as exc:
+        primero = exc.errors()[0] if exc.errors() else {}
+        raise ApiError(
+            422,
+            svc.codigo_de_error(exc),
+            "Un permiso no es válido.",
+            fields={".".join(str(p) for p in primero.get("loc", ())) or "links": str(primero.get("msg", ""))[:200]},
+        ) from None
+    except svc.ErrorDelGrafo as exc:
+        raise ApiError(422, exc.codigo, str(exc)) from None
+    except DBAPIError as exc:
+        log.error("a2a_graph_db_error", error=type(exc.orig).__name__)
+        raise ApiError(500, "db_error", "No se pudo guardar. Inténtalo de nuevo.") from None
+    return GraphOut(
+        version=_version(version),
+        links=[_link(e) for e in version.enlaces],
+        warnings=svc.advertencias(version.enlaces),
+        created=creada,
+    )
+
+
+@router.get("/graph/versions", response_model=list[GraphVersion])
+async def list_graph_versions(
+    principal: Annotated[Principal, Depends(require("settings"))],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> list[GraphVersion]:
+    return [_version(v) for v in await svc.versiones(_tenant(principal), limite=limit)]
+
+
+@router.get("/calls", response_model=list[Call])
+async def list_calls(
+    connection_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    before: datetime | None = None,
+) -> list[Call]:
+    tid = _tenant(principal)
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                text(
+                    "WITH llamadas AS ("
+                    "  SELECT e.call_id, c.connection_id, c.conversation_id, "
+                    "    (array_agg(e.mode ORDER BY e.seq))[1] AS mode, "
+                    "    (array_agg(e.from_instance_id ORDER BY e.seq))[1] AS from_instance_id, "
+                    "    (array_agg(e.to_instance_id ORDER BY e.seq))[1] AS to_instance_id, "
+                    "    (array_agg(e.intent ORDER BY e.seq))[1] AS intent, "
+                    "    max(e.depth) AS depth, "
+                    "    (array_agg(e.type ORDER BY e.seq DESC))[1] AS status, "
+                    "    (array_agg(e.reason ORDER BY e.seq DESC))[1] AS reason, "
+                    "    sum(e.tokens_in + e.tokens_out) AS tokens, sum(e.cost_usd) AS cost_usd, "
+                    "    min(e.created_at) AS started_at, max(e.created_at) AS ended_at "
+                    "  FROM a2a_events e JOIN a2a_conversations c "
+                    "    ON c.tenant_id = e.tenant_id AND c.id = e.a2a_conversation_id "
+                    "  WHERE e.tenant_id = :t AND c.connection_id = :c "
+                    f"    AND {sql_no_es_prueba('c.conversation_id')} "
+                    "  GROUP BY e.call_id, c.connection_id, c.conversation_id"
+                    ") SELECT * FROM llamadas WHERE (cast(:antes AS timestamptz) IS NULL OR started_at < :antes) "
+                    "ORDER BY started_at DESC LIMIT :n"
+                ),
+                {"t": tid, "c": connection_id, "antes": before, "n": limit},
+            )
+        ).mappings()
+        return [Call(**{**f, "tokens": int(f["tokens"] or 0), "cost_usd": float(f["cost_usd"] or 0)}) for f in filas]
+
+
+@router.post("/route-preview", response_model=RoutePreview)
+async def route_preview(
+    payload: RoutePreviewIn, principal: Annotated[Principal, Depends(require("settings"))]
+) -> RoutePreview:
+    from core.kernel import probar_frase
+
+    tid = _tenant(principal)
+    try:
+        prueba = await probar_frase.probar(tid, payload.connection_id, payload.text)
+    except probar_frase.ConexionNoEncontrada:
+        raise ApiError.not_found("Conexión no encontrada.") from None
+    except probar_frase.SinReleaseActiva:
+        raise ApiError(
+            409, "sin_release_activa", "Esta conexión todavía no tiene una versión activa: publica una para probar."
+        ) from None
+    return RoutePreview(
+        mode=prueba.modo,
+        source=prueba.source,
+        agent_key=prueba.agent_key,
+        agent_id=prueba.agent_id,
+        procedure_id=prueba.procedure_id,
+        procedure_title=prueba.titulos.get(prueba.procedure_id) if prueba.procedure_id else None,
+        rule_id=prueba.rule_id,
+        confidence=prueba.confidence,
+        candidates=[
+            RouteCandidate(
+                procedure_id=str(c["procedure_id"]),
+                title=prueba.titulos.get(str(c["procedure_id"])),
+                owner=str(c.get("owner") or ""),
+                score=float(c["score"]),
+            )
+            for c in prueba.candidates
+        ],
+        not_evaluated_rules=list(prueba.no_evaluadas),
+    )
+

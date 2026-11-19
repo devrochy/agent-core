@@ -19,20 +19,89 @@ Python, no una petición de red (docs/MONOLITH-MODEL.md).
 
 from __future__ import annotations
 
+import asyncio
+import ipaddress
+import re
+import socket
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, create_model
+
+from core.shared.logger import get_logger
 
 if TYPE_CHECKING:
+    import httpx
+
     from core.mcp.host import MCPHost
+    from core.mcp.sandbox import SandboxPrueba
+    from core.primeros_pasos.contrato import ContenidoCargado
+    from core.qa.contrato_datos import (
+        ContextoDeNegocio,
+        EntradaDeEscenario,
+        FormaDeDatos,
+        RegistroDescrito,
+        RegistroSembrado,
+        ResumenDeEscenario,
+    )
+    from core.qa.contrato_importacion import (
+        ContextoDeImportacion,
+        PlantillaDeImportacion,
+        ResultadoDeImportacion,
+    )
+
+log = get_logger(__name__)
 
 # handler(arguments, context) -> resultado JSON-serializable
 ToolHandler = Callable[[dict[str, Any], "ToolContext"], Awaitable[dict[str, Any]]]
+# simulador(arguments, context) -> resultado ficticio para el canal `test` (HU-ARCH-14)
+SimuladorFn = Callable[[dict[str, Any], "ToolContext"], Awaitable[dict[str, Any]]]
 GuardrailFn = Callable[[str, list[dict[str, Any]]], Awaitable["GuardrailResult"]]
+AfirmacionesFn = Callable[[], Awaitable[list["Afirmacion"]]]
+# fuente(conversation_id, customer_id) -> referencias vigentes de la conversación (ADR-0130)
+ReferenciasFn = Callable[[uuid.UUID, uuid.UUID], Awaitable[list["Referencia"]]]
+# resolver de un dato de procedimiento (ADR-0113 §1, HU-AOS-05): (valor, contexto, datos) -> veredicto
+ValidarDatoFn = Callable[[Any, "ToolContext", dict[str, Any]], Awaitable["ResolverResult"]]
+# candidatos de un dato (`candidates.source: resolver:`): (contexto, datos) -> ids que el cliente elige
+CandidatosFn = Callable[["ToolContext", dict[str, Any]], Awaitable[list[str]]]
+# resumen de confirmación de una acción de un pack (HU-AOS-07, adenda HU-AOS-09 de ADR-0113):
+# (args firmados, contexto) -> datos que el cliente confirma, o None si no hay un resumen fiel
+ResumenFn = Callable[[dict[str, Any], "ToolContext"], Awaitable["list[DatoDeResumen] | None"]]
+
+
+@dataclass(frozen=True, slots=True)
+class VoicePlan:
+    """Lo que pide la política para ESTE turno (ADR-0197).
+
+    `include_text` viene de la configuración del negocio: si es True, el texto se
+    envía primero y la nota de voz después. `plugin_id` lo completa el host.
+    """
+
+    include_text: bool = True
+    plugin_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceSynthesis:
+    """Audio listo para enviar como nota de voz (pack-voice, ADR-0197).
+
+    `audio_url` es la URL firmada del archivo guardado con el controlador único
+    (ADR-0085); el adaptador del canal la usa para enviar la nota.
+    """
+
+    audio_key: str
+    audio_url: str
+    mimetype: str = "audio/ogg"
+    duration_s: float = 0.0
+
+
+# La política decide si ESTE turno va con voz; el sintetizador produce el audio.
+# Ambos se registran por plugin en `MCPHost` (ADR-0197).
+VoicePolicyFn = Callable[[uuid.UUID, str], Awaitable[VoicePlan | bool | None]]
+VoiceSynthesizerFn = Callable[[uuid.UUID, str], Awaitable[VoiceSynthesis | None]]
 
 
 @dataclass
@@ -51,58 +120,163 @@ class ToolContext:
     idempotency_key: str
     channel: str
     http: ScopedHttp | None = None
+    # `memory.writeNamespaces` del agente v3 que corre la tool (ADR-0114 §3, HU-AOS-36).
+    # None = runtime legacy: no se chequea (sin cambio de conducta con las banderas apagadas).
+    write_namespaces: frozenset[str] | None = None
+    # Identidad del agente v3 en foco y su bloque `knowledge` congelado (ADR-0145 §5, enmienda de
+    # ADR-0118): el core los inyecta desde la release del turno; el LLM nunca los elige. None en el
+    # runtime legacy o sin release. Un pack los lee para acotar lo suyo al agente que responde.
+    agent_id: uuid.UUID | None = None
+    agent_version_id: uuid.UUID | None = None
+    knowledge: Mapping[str, Any] | None = None
+    # Estado efímero de la prueba del panel (HU-ARCH-14): solo se inyecta con `channel == "test"`.
+    # Los simuladores guardan/leen aquí cotizaciones, pedidos, citas, etc. sin tocar la base.
+    sandbox: SandboxPrueba | None = None
 
 
-def _is_private_host(host: str) -> bool:
-    """True si el host es una IP interna/loopback/link-local o metadata de cloud.
+# Sufijos que nunca son un destino público (DNS interno, mDNS, metadata de cloud).
+_INTERNAL_SUFFIXES = ("localhost", "internal", "local", "localdomain", "home.arpa", "lan")
+_LABEL_RE = re.compile(r"^(?!-)[a-z0-9_-]{1,63}(?<!-)$")
+# Última etiqueta numérica (decimal, octal o hex): glibc la resuelve como IPv4
+# (`127.1`, `0x7f.1`, `0177.0.0.1`), igual que el "ends in a number" del WHATWG URL.
+_NUMERIC_LABEL_RE = re.compile(r"^(0x[0-9a-f]*|[0-9]+)$")
+# TLD de verdad: letras o IDN en punycode (ni `_` ni dígitos: `db.red_default`, `127.1`).
+_TLD_RE = re.compile(r"^([a-z]{2,63}|xn--[a-z0-9-]{1,59})$")
+_CGNAT = ipaddress.ip_network("100.64.0.0/10")
+# Direcciones a probar si la conexión a la primera falla (p. ej. IPv6 sin ruta), y
+# tope del connect de cada intento para no gastar todo el timeout en una sola IP.
+_MAX_ADDRS = 2
+_CONNECT_TIMEOUT = 5.0
 
-    Bloquea el vector SSRF aunque la allowlist del tenant la incluya (ADR-0052).
-    Los nombres que resuelven a IP privada quedan fuera de este chequeo (no se
-    resuelve DNS); se documenta como limitación.
-    """
-    import ipaddress
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
-    if host in ("localhost", "metadata.google.internal"):
-        return True
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        return False
+
+def _blocked_ip(ip: IPAddress) -> bool:
+    """True si la IP no es un destino público: privada, loopback, link-local,
+    reservada, multicast, sin especificar, CGNAT o una IPv4 embebida en IPv6
+    (mapeada, Teredo, 6to4 hacia una IPv4 no pública; NAT64 cae en `is_reserved`)."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None or ip.teredo is not None or ip.is_site_local:
+            return True
+        if ip.sixtofour is not None and _blocked_ip(ip.sixtofour):
+            return True
     return (
-        ip.is_private
+        not ip.is_global
+        or ip.is_private
         or ip.is_loopback
         or ip.is_link_local
         or ip.is_reserved
         or ip.is_multicast
         or ip.is_unspecified
+        or ip in _CGNAT
     )
+
+
+def _ip_literal(host: str) -> IPAddress | None:
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _public_hostname(host: str) -> bool:
+    """True si `host` (minúsculas, ASCII) es un nombre DNS con forma de dominio
+    público: con punto, etiquetas LDH, sin TLD numérico ni sufijo interno."""
+    if not host.isascii() or len(host) > 253:
+        return False
+    labels = host.split(".")
+    if len(labels) < 2 or not all(_LABEL_RE.match(label) for label in labels):
+        return False
+    if _NUMERIC_LABEL_RE.match(labels[-1]) or not _TLD_RE.match(labels[-1]):
+        return False
+    return not any(host == s or host.endswith("." + s) for s in _INTERNAL_SUFFIXES)
+
+
+def is_public_host(host: str) -> bool:
+    """Chequeo sin DNS de un host de URL (ADR-0052): una IP pública canónica o un
+    nombre con forma de dominio público. Rechaza hosts de una etiqueta (`redis`,
+    `postgres`), formas numéricas no canónicas (`2130706433`, `127.1`, `0x7f.1`) y
+    sufijos internos (`localhost`, `metadata.google.internal`). Que el nombre
+    resuelva a una IP pública lo comprueba `ScopedHttp.request` al conectar."""
+    host = host.lower().removesuffix(".")
+    ip = _ip_literal(host)
+    if ip is not None:
+        return not _blocked_ip(ip)
+    return _public_hostname(host)
+
+
+def public_fqdn(domain: str) -> str | None:
+    """`domain` normalizado si es un FQDN público (sin IPs literales), si no None.
+
+    Lo usan las tools declarativas para validar su `allowed_domains` al guardar."""
+    host = str(domain).strip().lower().removesuffix(".")
+    if _ip_literal(host) is not None or not _public_hostname(host):
+        return None
+    return host
+
+
+async def _resolve_host(host: str, port: int, timeout: float) -> list[IPAddress]:
+    """IPs (sin repetir, en el orden del resolver) a las que resuelve `host`."""
+    loop = asyncio.get_running_loop()
+    infos = await asyncio.wait_for(
+        loop.getaddrinfo(host, port, type=socket.SOCK_STREAM, flags=socket.AI_ADDRCONFIG),
+        timeout,
+    )
+    ips: list[IPAddress] = []
+    for *_, sockaddr in infos:
+        ip = ipaddress.ip_address(str(sockaddr[0]))
+        if ip not in ips:
+            ips.append(ip)
+    return ips
+
+
+# Métodos que puede usar un pack con su allowlist del manifest (APIs REST como
+# Google Calendar necesitan editar y borrar). Las tools declarativas del tenant
+# siguen limitadas a GET/POST (default de `ScopedHttp`).
+PLUGIN_HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
 
 
 class ScopedHttp:
     """Cliente HTTP acotado a una allowlist de dominios (ADR-0052).
 
-    Solo permite `POST`/`GET` a hosts de la allowlist. Sin allowlist, toda salida
-    se rechaza (fail-closed). Nunca expone `httpx` crudo ni el entorno.
+    Por defecto solo permite `POST`/`GET` a hosts de la allowlist; `methods`
+    amplía el set (packs, ver `plugin_http`). Sin allowlist, toda salida se
+    rechaza (fail-closed). Nunca expone `httpx` crudo ni el entorno.
+
+    Anti-SSRF: el host debe pasar `is_public_host`, se resuelve por DNS y se
+    rechaza si ALGUNA IP no es pública; luego se conecta a la IP ya validada
+    (sin segunda resolución: evita DNS rebinding) con `Host` y SNI del nombre
+    original, así el certificado se verifica contra el dominio. Sin redirects
+    ni proxies del entorno.
     """
 
-    def __init__(self, allowed_domains: list[str] | None, timeout: float = 15.0) -> None:
-        self._allowed = {d.strip().lower() for d in (allowed_domains or []) if d.strip()}
+    def __init__(
+        self,
+        allowed_domains: list[str] | None,
+        timeout: float = 15.0,
+        methods: tuple[str, ...] = ("GET", "POST"),
+    ) -> None:
+        self._allowed = {
+            d.strip().lower().removesuffix(".") for d in (allowed_domains or []) if d.strip()
+        }
         self._timeout = timeout
+        self._methods = {m.upper() for m in methods}
 
-    def _allowed_host(self, url: str) -> bool:
-        from urllib.parse import urlparse
-
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return False
-        host = (parsed.hostname or "").lower()
-        if not host:
-            return False
-        # Nunca permitir direcciones internas/link-local/loopback ni metadata de
-        # cloud (SSRF), aunque estuvieran en la allowlist (ADR-0052).
-        if _is_private_host(host):
-            return False
-        return any(host == d or host.endswith("." + d) for d in self._allowed)
+    def _allowed_host(self, url: httpx.URL) -> str | None:
+        """Host normalizado si la URL apunta a la allowlist y a un host público."""
+        if url.scheme not in ("http", "https"):
+            return None
+        try:
+            host = url.raw_host.decode("ascii").lower().removesuffix(".")
+        except UnicodeDecodeError:
+            return None
+        # Nunca direcciones internas/link-local/loopback ni metadata de cloud
+        # (SSRF), aunque estuvieran en la allowlist (ADR-0052).
+        if not host or not is_public_host(host):
+            return None
+        if any(host == d or host.endswith("." + d) for d in self._allowed):
+            return host
+        return None
 
     async def request(
         self,
@@ -111,26 +285,99 @@ class ScopedHttp:
         *,
         params: dict[str, Any] | None = None,
         json_body: dict[str, Any] | None = None,
+        data: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        if method.upper() not in ("GET", "POST"):
-            return {"error": f"Método no permitido: {method}"}
-        if not self._allowed_host(url):
-            return {"error": f"Dominio no autorizado: {url}"}
+        """`data` va form-encoded (p. ej. el token endpoint de OAuth2); `timeout`
+        pisa el del cliente para esta llamada."""
         import httpx
 
+        if method.upper() not in self._methods:
+            return {"error": f"Método no permitido: {method}"}
+        denied = {"error": f"Dominio no autorizado: {url}"}
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                resp = await client.request(
-                    method.upper(), url, params=params, json=json_body, headers=headers or {}
-                )
+            target = httpx.URL(url)
+        except Exception:
+            return denied
+        # Se valida y se conecta con el MISMO parseo (sin diferencias de parser).
+        host = self._allowed_host(target)
+        if host is None:
+            return denied
+        effective_timeout = timeout or self._timeout
+        port = target.port or (443 if target.scheme == "https" else 80)
+        try:
+            ips = await _resolve_host(host, port, effective_timeout)
+        except Exception as exc:
+            # Mismo error que una IP interna: distinguirlos permitiría enumerar
+            # nombres internos (Docker/Coolify) desde una tool del tenant.
+            log.warning("scoped_http_dns_fallo", host=host, error=type(exc).__name__)
+            return denied
+        if not ips or any(_blocked_ip(ip) for ip in ips):
+            log.warning("scoped_http_ip_no_publica", host=host, ips=[str(ip) for ip in ips])
+            return denied
+
+        send_headers = {k: v for k, v in (headers or {}).items() if k.lower() != "host"}
+        send_headers["Host"] = target.netloc.decode("ascii")
+        extensions = {"sni_hostname": host} if target.scheme == "https" else {}
+        per_try = httpx.Timeout(effective_timeout, connect=min(effective_timeout, _CONNECT_TIMEOUT))
+        last_exc: Exception | None = None
+        try:
+            async with httpx.AsyncClient(
+                timeout=effective_timeout, follow_redirects=False, trust_env=False
+            ) as client:
+                # IPv4 primero: sin happy-eyeballs, una IPv6 sin salida no debe
+                # costar la llamada.
+                for ip in sorted(ips, key=lambda ip: ip.version)[:_MAX_ADDRS]:
+                    try:
+                        resp = await client.request(
+                            method.upper(),
+                            target.copy_with(host=str(ip)),
+                            params=params,
+                            json=json_body,
+                            data=data,
+                            headers=send_headers,
+                            extensions=extensions,
+                            timeout=per_try,
+                        )
+                        break
+                    except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                        last_exc = exc
+                else:
+                    raise last_exc or httpx.ConnectError("sin direcciones")
         except Exception as exc:
             return {"error": f"Fallo de red: {type(exc).__name__}"}
         try:
-            data = resp.json()
+            body = resp.json()
         except Exception:
-            data = resp.text[:2000]
-        return {"status": resp.status_code, "data": data}
+            body = resp.text[:2000]
+        return {"status": resp.status_code, "data": body}
+
+
+def plugin_http(allowed_domains: Iterable[str] | None) -> ScopedHttp:
+    """`ScopedHttp` de un pack: su allowlist del manifest y los métodos REST."""
+    return ScopedHttp(list(allowed_domains or ()), methods=PLUGIN_HTTP_METHODS)
+
+
+@dataclass(frozen=True)
+class RegistroCreado:
+    """Lo que una tool crea en el negocio (HU-AOS-47, ADR-0140): el core guarda su procedencia
+    (qué agente, conexión y turno lo crearon) en `agent_record_origins` sin conocer las tablas
+    ni el vocabulario del pack.
+
+    - `kind`: tipo de registro (`pedido`, `lead`, `cita`, `promesa`…), texto corto del pack.
+    - `id_key`: clave del resultado con el id del registro.
+    - `label_key`: clave opcional con una referencia PÚBLICA (número de pedido); nunca datos
+      personales del cliente.
+    - `es_nuevo`: el pack decide si el resultado es un registro recién creado (y no uno que ya
+      existía o un duplicado por reintento). El core solo descarta antes lo que trae `error` u
+      `ok: false`.
+    """
+
+    kind: str
+    id_key: str
+    es_nuevo: Callable[[dict[str, Any]], bool]
+    label_key: str | None = None
 
 
 @dataclass
@@ -144,6 +391,46 @@ class MCPTool:
     # Tipos de conexión activos que la tool necesita para ofrecerse/ejecutarse
     # (ADR-0072; ej. ["google_calendar"]). Ortogonal a packs/salud/scopes.
     requires_connection_types: list[str] = field(default_factory=list)
+    # Gating condicional (ADR-0084): si se define, decide POR REQUEST si la tool
+    # puede ofrecerse, recibiendo los tipos de conexión activos del tenant. Se usa
+    # cuando el requisito depende de la config del pack (p. ej. pack-calendar en
+    # modo `interno` no necesita Google; en modo `google` sí). Tiene prioridad
+    # sobre `requires_connection_types`.
+    connection_predicate: Callable[[set[str]], Awaitable[bool]] | None = None
+    # Tools del core que se ofrecen aunque ninguna sección del flujo las nombre
+    # (memoria, perfil, escalamiento, correo, suscripciones; HU-FWK-01, ADR-0109).
+    # Siguen sujetas a `requires_connection_types`/`connection_predicate`.
+    always_available: bool = False
+    # HU-AOS-47 (ADR-0140): si la tool crea un registro del negocio, cómo reconocerlo para
+    # guardar su procedencia. No entra al manifiesto de la release (`core/releases/packs.py`).
+    crea_registro: RegistroCreado | None = None
+    # Qué se guarda del resultado en `audit_log` (ADR-0145 §4): por defecto, el resultado
+    # completo. Una tool que devuelve contenido que se puede borrar (fragmentos de documentos)
+    # guarda solo ids y puntajes. El LLM sigue recibiendo el resultado completo.
+    resumen_de_auditoria: Callable[[dict[str, Any]], dict[str, Any]] | None = None
+    # HU-AOS-19 (adenda de ADR-0116 §5): la tool solo lee (no escribe registros, memoria ni
+    # efectos externos). Solo una tool marcada puede responder una consulta entre agentes
+    # (fail-closed: sin la marca, no se ofrece). La declara quien la escribe.
+    solo_lectura: bool = False
+    # HU-ARCH-14 (D-SPEC-02-3): la tool escribe en tablas del negocio o en un sistema externo.
+    # En el canal `test` el host NO ejecuta el handler: usa `simular` o falla cerrado.
+    side_effects: bool = False
+    # Implementación ficticia para el canal `test`. Devuelve el mismo contrato que el handler,
+    # marcado `simulado=True` por el host. Puede usar `context.sandbox` para multi-turno.
+    simular: SimuladorFn | None = None
+    # Única excepción deliberada: escribe, pero solo sobre el cliente sintético de la prueba
+    # (`channel == "test"`), que no cuenta y se purga al cerrar. Memoria/perfil del cliente.
+    permite_en_prueba: bool = False
+    # SPEC-40 (ADR-0172 §5): la tool puede ser la acción de una opción directa (un toque del
+    # cliente la ejecuta sin LLM). Fail-closed: lo declara SOLO quien escribe la tool, y solo si
+    # es de lectura o de escritura reversible; nada financiero ni destructivo en v1 (D-SPEC-40-3).
+    # Es necesario pero no suficiente: además hace falta binding explícito y habilitado, pack
+    # activo y que ningún procedimiento habilitado la gobierne.
+    apta_para_opcion: bool = False
+    # SPEC-40 y HU-ARCH-36: acción con efecto que el cliente debe confirmar antes de ejecutarse,
+    # aunque la definición de la opción o el binding no lo pidan. En el bucle solo aplica a las
+    # tools registradas: las declarativas POST nacen `sensible` (para opciones) y quedan fuera.
+    sensible: bool = False
 
 
 @dataclass
@@ -170,6 +457,101 @@ class Guardrail:
     fn: GuardrailFn
     priority: int = 10  # menor = se evalúa primero
     plugin_id: str = ""
+    # Texto para personas en Configuración (SPEC-37): nombre legible y qué evita. No es prompt.
+    etiqueta: str = ""
+    explicacion: str = ""
+
+
+@dataclass(frozen=True)
+class Afirmacion:
+    """Afirmación de cierre que declara un pack para el verificador del core
+    (ADR-0119, HU-ARCH-29): frases que dan por hecha una acción y las tools que
+    la respaldan.
+
+    - `patron`: lo compila el pack. Las frases que configura un negocio
+      (`completion_claims_custom`, ADR-0025) llegan siempre escapadas, nunca
+      como regex crudo.
+    - `tools`: alguna tiene que haber terminado bien en el turno actual.
+    - `basta_url`: también la respalda cualquier tool del turno que haya
+      devuelto una URL (un link de pago lo puede dar el pedido, la suscripción
+      o pagos en línea; así el pack no lista tools de otros packs).
+    - `datos`: con el motor de procedimientos activo, también la respalda que el
+      motor haya fijado en este turno alguno de esos datos de la tarea en foco
+      (`actualizar_tarea` aceptado: validado y, si es personal, dicho por el
+      cliente). "Anoté tu dirección" es verdad aunque no corra `crear_lead`.
+
+    El verificador descarta solo las preguntas, las negaciones y los
+    condicionales ("para generar el link…"): eso es español genérico y vive en
+    el core, no en cada pack.
+    """
+
+    label: str
+    patron: re.Pattern[str]
+    tools: frozenset[str] = frozenset()
+    basta_url: bool = False
+    datos: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class Referencia:
+    """Referencia vigente de la conversación que un pack aporta al prompt (ADR-0130):
+    el id real de lo que el cliente está negociando, leído del estado actual de las
+    tablas del pack (p. ej. la cotización en curso y su total).
+
+    - `tipo` y las claves de `datos`: minúsculas y `_`.
+    - Valores: UUID, número o un texto corto de letras, dígitos, `_`, `-` y `.` (un
+      estado, un número público). Nada de texto libre del cliente ni del negocio (invariante 7).
+
+    El core sanea y arma la línea del prompt (`core/orchestrator/referencias.py`); lo
+    que no cumple se descarta. Cómo usarla lo dice el playbook del pack.
+    """
+
+    tipo: str
+    datos: tuple[tuple[str, Any], ...] = ()
+
+
+@dataclass(frozen=True)
+class ResolverResult:
+    """Veredicto de un *resolver* de datos (ADR-0113 §1, HU-AOS-05).
+
+    - `ok=True`: el dato es válido; `value` es el valor normalizado que se guarda (p. ej. el
+      id de la variante para "el premium"). `None` = se guarda el valor tal como llegó.
+    - `ok=False`: `error` es un mensaje en lenguaje claro para el modelo (el dato no se guarda).
+      Lo escribe la habilidad, nunca el cliente.
+    """
+
+    ok: bool
+    value: Any = None
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class DatoDeResumen:
+    """Una línea del resumen que el cliente confirma (HU-AOS-07). Lo arma el pack desde SU
+    estado (p. ej. la cotización vigente), nunca desde el texto del modelo. El core muestra
+    `nombre` como rótulo y sanea `valor` (`core/kernel/confirmacion.py`); `es_monto` va con el
+    formato de dinero y nunca se recorta.
+
+    `documento_aceptado` (adenda 2026-10-13 de ADR-0113 y de ADR-0125): `valor` es el enlace https
+    de un documento que el cliente ACEPTA al confirmar (términos, privacidad, DPA). El kernel lo
+    muestra bajo "Al confirmar aceptas:", sin recortar el enlace; si no es un enlace https ASCII,
+    el resumen no sale (`sin_resumen`). Úsalo solo para eso: el rótulo dice que se acepta."""
+
+    nombre: str
+    valor: Any
+    es_monto: bool = False
+    documento_aceptado: bool = False
+
+
+@dataclass(frozen=True)
+class Resolver:
+    """Funciones del servidor de una habilidad que validan o proponen un dato de un
+    procedimiento. Reciben solo `ToolContext` (invariante 6) y no tienen efectos."""
+
+    name: str
+    validar: ValidarDatoFn | None = None
+    candidatos: CandidatosFn | None = None
+    plugin_id: str = ""
 
 
 class BaseSkill(ABC):
@@ -193,6 +575,44 @@ class BasePluginConfig(BaseModel):
     """
 
 
+def config_de_agente(
+    base: type[BasePluginConfig], campos: tuple[str, ...], nombre: str
+) -> type[BasePluginConfig]:
+    """Esquema de la config de CADA agente (ADR-0190 §3): los `campos` de `base`, con sus tipos, valores por
+    defecto y descripciones. Los nombres son los mismos para que `load_config(..., agent_id)` pise los del negocio
+    y el resultado siga validando contra `base`."""
+    faltan = [c for c in campos if c not in base.model_fields]
+    if faltan:
+        raise ValueError(f"{nombre}: campos que no existen en {base.__name__}: {', '.join(faltan)}")
+    definiciones: dict[str, Any] = {c: (base.model_fields[c].annotation, base.model_fields[c]) for c in campos}
+    return create_model(nombre, __base__=BasePluginConfig, **definiciones)
+
+
+class PackProfileEdit(BaseModel):
+    """Cómo se edita un perfil: `kind` es una cadena abierta que el cliente reconoce o ignora."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str
+    ref_id: str
+
+
+class PackProfile(BaseModel):
+    """Perfil que un pack tiene de un colaborador (ADR-0176), para mostrarlo en Equipo.
+
+    `resumen` es un objeto pequeño y plano que el cliente pinta sin interpretar; lo define el pack. El core
+    lo descarta (y `edit`) para quien no tiene acceso a ninguna sección del pack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pack: str
+    role_id: str
+    ref_id: str
+    etiqueta: str
+    resumen: dict[str, Any] | None = None
+    edit: PackProfileEdit | None = None
+
+
 class BaseModule(ABC):
     """Contrato del plugin. Ciclo de vida: Install -> Detect -> Configure -> Activate -> Run."""
 
@@ -203,6 +623,44 @@ class BaseModule(ABC):
     requires_config: bool = True  # False = se activa sin formulario (ej. plugins internos)
     config_schema: type[BasePluginConfig] | None = None
 
+    # --- Habilidades por agente (ADR-0190 §1 y §3) ---
+    # `especialidad`: el pack define un tipo de agente (Ventas, Agenda, Cobranza, Suscripciones).
+    # `transversal`: se instala en uno o varios agentes (Pagos en línea, Conocimiento).
+    # Vacío: plomería que no se instala en agentes.
+    tipo: ClassVar[Literal["especialidad", "transversal", ""]] = ""
+    # Esquema de la configuración que es de CADA agente (comportamiento en la conversación). Vive en
+    # `pack_installations.config_encrypted` del agente; `config_schema` queda para lo que es del negocio.
+    config_agente: ClassVar[type[BasePluginConfig] | None] = None
+    # Grupo de cada acción del pack, por lo que hace (ADR-0190 §8): `{nombre_de_la_tool: clave}`. Solo la clave; la
+    # etiqueta la pone el panel. Una acción sin grupo cae en `otras`.
+    grupos_de_acciones: ClassVar[dict[str, str]] = {}
+    # Dominio de cada procedimiento del pack (SPEC-48, HU-AOS-83): `{id del procedimiento: clave}`.
+    # La etiqueta sale de `etiquetas_de_grupos_de_procedimientos` o, si falta, del `display_name` del pack.
+    grupos_de_procedimientos: ClassVar[dict[str, str]] = {}
+    etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {}
+
+    # --- Catálogo de habilidades (HU-FWK-04, SPEC-16) ---
+    # Nombre visible al cliente (glosario: "habilidad", no "plugin"/"pack"). Si
+    # falta, el catálogo cae a `name`.
+    display_name: str = ""
+    # Categoría del catálogo (p. ej. "Ventas", "Cobranza", "Agenda").
+    category: str = ""
+    # Conexiones/tipos que la habilidad necesita para funcionar (ADR-0072), ej.
+    # ["whatsapp_meta", "google_calendar"]. Se muestran como requisitos.
+    required_connections: ClassVar[list[str]] = []
+    # Allowlist de dominios a los que el pack puede salir (ADR-0019/0052). Es la
+    # verdad en runtime; debe coincidir con `network` de `[tool.agent_core.plugin]`.
+    # El core arma con ella el `context.http` de sus tools (`plugin_manager.scoped_http`).
+    network_allowlist: ClassVar[tuple[str, ...]] = ()
+    # Plan mínimo en el que está disponible (código de `core/billing/plans.py`),
+    # ej. "free" | "basic" | "premium" | "empresarial".
+    min_plan: str = "free"
+    # Resumen de lo que hace, en una frase por acción (para la tarjeta del catálogo).
+    action_summary: ClassVar[list[str]] = []
+    # Guía de configuración breve (markdown corto). La guía extensa vive en
+    # `TENANTS_ROOT`/playbooks (HU-UX-05).
+    setup_guide: str = ""
+
     # Rutas del panel admin que el plugin aporta (aparecen en el menú lateral al
     # activarse). Claves opcionales (ADR-0061):
     #   - `section` (str): etiqueta de agrupación dentro del grupo del pack
@@ -210,6 +668,11 @@ class BaseModule(ABC):
     #   - `master_only` (bool): el item solo lo ve un admin `master`.
     admin_menu: list[dict[str, Any]] = []
     # [{"label": "Leads", "path": "/crm/leads", "section": "General"}]
+
+    # Sub-secciones de permiso que el pack aporta SIN item de menú (p. ej.
+    # `pack_calendar:notificaciones`): se pueden otorgar a colaboradores como
+    # cualquier sección pero no renderizan una pantalla. Formato: ["<key>", ...].
+    section_keys: ClassVar[list[str]] = []
 
     # Roles de colaborador que el pack aporta al alta de cuentas del panel
     # (ADR-0066). Se ofrecen en `/admin/colaboradores` solo si el pack está
@@ -223,6 +686,120 @@ class BaseModule(ABC):
         como su usuario (ej. perfil `Gestor`). Default: no-op.
         """
         return None
+
+    async def on_collaborator_removed(self, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> None:
+        """Hook opcional (ADR-0198): la cuenta `admin_id` se dio de baja en `tenant_id`.
+
+        El pack da de baja lógica su perfil (p. ej. el `Gestor` de Cobranza) para que no siga
+        apareciendo como asignable, SIN borrar sus registros, carteras ni historial. La cuenta
+        puede reactivarse después con `on_collaborator_restored`. Default: no-op.
+        """
+        return None
+
+    async def on_collaborator_restored(self, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> None:
+        """Hook opcional (ADR-0198): la cuenta `admin_id` volvió a estar activa en `tenant_id`.
+
+        El pack revive el perfil que dio de baja en `on_collaborator_removed`, conservando su
+        historial y sus asignaciones. Default: no-op.
+        """
+        return None
+
+    async def collaborator_profiles(
+        self, tenant_id: uuid.UUID, admin_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, list[PackProfile]]:
+        """Hook opcional (ADR-0176): los perfiles que este pack tiene de los colaboradores `admin_ids`
+        del negocio `tenant_id`, para mostrarlos en Equipo. Es POR LOTE (una consulta por pack y por
+        página, nunca una por colaborador), de solo lectura y bajo el `tenant_scope` del negocio; el core
+        lo llama con un tope de 1 s y, si falla o se pasa, el listado sale sin los perfiles de este pack.
+        Default: `{}` (el pack no aporta perfiles)."""
+        return {}
+
+    async def rol_de_acceso(self, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> str | None:
+        """Hook opcional (ADR-0174): el rol de ACCESO con el que esta cuenta cae bajo la política de
+        equipos del negocio cuando el pack la trata distinto de un colaborador cualquiera (p. ej.
+        `"gestor"`, el perfil de campo de cobranza). El core lo llama bajo el `tenant_scope` del
+        negocio con un timeout corto; el pack filtra por `tenant_id` y no escribe nada.
+        Default: None (sin rol propio: la cuenta es `colaborador`).
+        """
+        return None
+
+    async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+        """Hook opcional de seed (ADR-0083, issue #154): importa `data` a la BD
+        del tenant de forma idempotente. El CLI/onboarding lo invoca para CADA
+        pack habilitado que tenga un archivo `TENANTS_ROOT/<slug>/<plugin_id>.json`.
+        Default: no-op.
+        """
+        return []
+
+    async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado | None:
+        """Hook opcional (HU-SH-06, ADR-0124): cuánto contenido propio cargó el negocio en
+        esta habilidad (catálogo, servicios, cartera), para el paso «catálogo o servicios» de
+        los primeros pasos. El core lo llama solo si la habilidad está habilitada, bajo el
+        `tenant_scope` del negocio; el pack filtra igual por `tenant_id` y no escribe nada.
+        Default: None (la habilidad no aporta contenido a ese paso).
+        """
+        return None
+
+    def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
+        """Hook opcional (HU-QA-10, ADR-0146): los juegos de datos de prueba que este pack sabe
+        sembrar para un agente (esquema para validar lo que genera el LLM y datos de respaldo).
+        Default: ninguno (el botón del agente queda deshabilitado)."""
+        return []
+
+    async def sembrar_datos_de_prueba(
+        self, tenant_id: uuid.UUID, modo: str, datos: BaseModel, contexto: ContextoDeNegocio
+    ) -> list[RegistroSembrado]:
+        """Siembra `datos` (ya validados con el esquema de la forma `modo`) y devuelve los
+        registros que creó. Lo que ya existía y se reutilizó no se devuelve: no es de la prueba."""
+        raise NotImplementedError
+
+    async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
+        """Retira lo sembrado (borrado lógico o desactivación, nunca físico). Devuelve cuántos."""
+        raise NotImplementedError
+
+    async def describir_registros(
+        self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]
+    ) -> list[RegistroDescrito]:
+        """Hook opcional (HU-QA-16, ADR-0196): pone en palabras lo que este pack sembró o importó
+        (`registros`, de `test_data_records`) para la lista «Lo cargado» del asistente de agentes.
+
+        Es POR LOTE (una consulta por `kind`, nunca una por registro), de solo lectura, bajo el
+        `tenant_scope` del negocio y filtrando además por `tenant_id`. El pack elige qué `kind` describe
+        (el producto sí; la variante, la cuota o el pago no) y omite lo retirado o lo que no reconoce.
+        Default: `[]` (lo de este pack sale solo en el conteo `sin_detalle`)."""
+        return []
+
+    def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
+        """Hook opcional (HU-QA-12, ADR-0180): las plantillas CSV con las que el dueño importa sus
+        datos existentes para probar el agente. Default: ninguna (el agente no importa)."""
+        return []
+
+    async def importar_filas(
+        self,
+        tenant_id: uuid.UUID,
+        plantilla_id: str,
+        filas: list[BaseModel],
+        contexto: ContextoDeImportacion,
+        *,
+        simular: bool,
+    ) -> ResultadoDeImportacion:
+        """Crea las `filas` (ya validadas con el esquema de la plantilla) y devuelve lo que creó.
+
+        Idempotente: una fila cuya clave ya existe (viva) no se toca y va en `existentes`. Con
+        `simular` no escribe nada y devuelve lo mismo que haría. Cada fila se mira acotada al
+        `tenant_id`, bajo su `tenant_scope`. Nunca guarda teléfono ni correo."""
+        raise NotImplementedError
+
+    async def sembrar_escenario(
+        self, tenant_id: uuid.UUID, escenario: str, entrada: EntradaDeEscenario
+    ) -> ResumenDeEscenario:
+        """Hook opcional (HU-QA-13, adenda de ADR-0135): crea la actividad de un escenario de datos de
+        prueba en las tablas del pack (pedidos, suscripciones, cobranza), en el negocio de prueba del
+        tester y bajo su `tenant_scope`. Determinista, sin LLM y aditivo: repetirlo crea otro caso.
+        Nunca envía mensajes ni cobra. Default: el pack no lo sabe hacer."""
+        from core.qa.contrato_datos import EscenarioNoDisponible
+
+        raise EscenarioNoDisponible(f"La habilidad {self.manifest.id} no tiene el escenario {escenario}.")
 
     def public_routes(self) -> list[Any]:
         """Routers PÚBLICOS del pack (sin sesión de admin), ej. la app de campo.

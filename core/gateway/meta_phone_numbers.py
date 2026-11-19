@@ -10,6 +10,7 @@ probar contra un número de staging antes de confiar ciegamente en ellas.
 
 from __future__ import annotations
 
+import secrets
 import uuid
 from typing import Any
 
@@ -22,16 +23,34 @@ from core.shared.logger import get_logger
 
 log = get_logger(__name__)
 
+# PIN de verificación en dos pasos del número (registro en la Cloud API). Viven aquí, con
+# `register_phone_number`, para que el wizard (gateway) y "Números" (admin) los compartan sin
+# importarse entre sí (arquitecto, HU-SH-05).
+PIN_KIND = "phone_register_pin"
+PIN_MISMATCH_CODE = 133005
+TOO_MANY_GUESSES_CODE = 133008
+
+
+def generate_pin() -> str:
+    """PIN de 6 dígitos con `secrets` (no `random`): es un secreto real de two-step
+    verification, no un identificador de UI."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
 _PHONE_FIELDS = (
     "id,display_phone_number,verified_name,quality_rating,code_verification_status,"
-    "name_status,platform_type,messaging_limit_tier,throughput,account_mode"
+    "name_status,platform_type,messaging_limit_tier,throughput,account_mode,status"
 )
+# Tope de WABAs que se recorren al listar los números de un portafolio (cada una es una
+# llamada a Graph): un portafolio normal tiene pocas.
+_MAX_OWNED_WABAS = 50
 
 
 async def list_phone_numbers(
-    waba_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID
+    waba_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID | None
 ) -> list[dict[str, Any]]:
-    """Pagina siguiendo `paging.cursors.after` hasta agotar páginas."""
+    """Pagina siguiendo `paging.cursors.after` hasta agotar páginas.
+
+    `connection_id=None`: la conexión aún no existe (verificación previa a un alta)."""
     items: list[dict[str, Any]] = []
     after: str | None = None
     while True:
@@ -50,6 +69,43 @@ async def list_phone_numbers(
     return items
 
 
+async def waba_owner_business(
+    waba_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID | None
+) -> dict[str, Any] | None:
+    """Portafolio de Meta Business dueño de la WABA (`owner_business_info`): `{id, name}`
+    o `None` si Meta no lo devuelve. Solo lectura."""
+    data = await graph_fetch(
+        f"/{waba_id}", token=token, app_secret=app_secret,
+        query={"fields": "owner_business_info"}, version=version, connection_id=connection_id,
+    )
+    info = (data or {}).get("owner_business_info") or None
+    return info if isinstance(info, dict) and info.get("id") else None
+
+
+async def list_owned_wabas(
+    business_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID | None
+) -> list[dict[str, Any]]:
+    """WABAs PROPIAS del portafolio (`owned_whatsapp_business_accounts`), hasta
+    `_MAX_OWNED_WABAS`. Las de clientes (`client_whatsapp_business_accounts`) no: son de
+    otros negocios y no cuentan para el límite de números del portafolio. Solo lectura;
+    requiere `business_management` en el token (si no, Meta responde un error)."""
+    items: list[dict[str, Any]] = []
+    after: str | None = None
+    while len(items) < _MAX_OWNED_WABAS:
+        query = {"fields": "id,name", "limit": "100"}
+        if after:
+            query["after"] = after
+        data = await graph_fetch(
+            f"/{business_id}/owned_whatsapp_business_accounts", token=token, app_secret=app_secret,
+            query=query, version=version, connection_id=connection_id,
+        )
+        items.extend((data or {}).get("data", []))
+        after = ((data or {}).get("paging", {}).get("cursors", {}) or {}).get("after")
+        if not after or not (data or {}).get("paging", {}).get("next"):
+            break
+    return items[:_MAX_OWNED_WABAS]
+
+
 async def sync_phone_numbers(
     waba_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID, tenant_id: uuid.UUID
 ) -> list[dict[str, Any]]:
@@ -60,7 +116,14 @@ async def sync_phone_numbers(
 
     async with get_session() as session:
         waba_row = (
-            await session.execute(select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == connection_id))
+            await session.execute(
+                select(WabaAccount).where(
+                    WabaAccount.tenant_id == tenant_id,
+                    WabaAccount.waba_id == waba_id,
+                    WabaAccount.connection_id == connection_id,
+                    WabaAccount.deleted_at.is_(None),
+                )
+            )
         ).scalar_one_or_none()
         waba_account_id = waba_row.id if waba_row else None
 
@@ -77,17 +140,46 @@ async def sync_phone_numbers(
                 )
             ).scalar_one_or_none()
             if existing is None:
-                session.add(
-                    PhoneNumber(
-                        tenant_id=tenant_id, connection_id=connection_id, waba_account_id=waba_account_id,
-                        phone_number_id=phone_number_id, display_phone_number=item.get("display_phone_number"),
-                        verified_name=item.get("verified_name"), quality_rating=item.get("quality_rating"),
-                        code_verification_status=item.get("code_verification_status"),
-                        name_status=item.get("name_status"), platform_type=item.get("platform_type"),
-                        messaging_limit_tier=item.get("messaging_limit_tier"), raw=item,
-                    )
+                from sqlalchemy import text
+
+                from core.gateway.meta_asset_claims import claimed_elsewhere, numero_para_conexion
+
+                # El mismo candado por número que `claim_assets` y el backfill: un alta
+                # concurrente del mismo número espera.
+                await session.execute(
+                    text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"meta_asset:phone:{phone_number_id}"}
                 )
+                # Otro negocio ya lo tiene (fila heredada): no se guarda, o el número
+                # quedaría con dos dueños (ADR-0095). Los demás números siguen.
+                if await claimed_elsewhere(
+                    session, tenant_id, phone_number_id=phone_number_id, source="sync_phone_numbers"
+                ):
+                    continue
+                # Alta como las demás (ADR-0115 §6): la fila del número, su conexión canónica y
+                # sus instancias si el negocio ya tiene agentes, en esta misma transacción.
+                nuevo, _ = await numero_para_conexion(
+                    session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_account_id
+                )
+                nuevo.display_phone_number = item.get("display_phone_number")
+                nuevo.verified_name = item.get("verified_name")
+                nuevo.quality_rating = item.get("quality_rating")
+                nuevo.code_verification_status = item.get("code_verification_status")
+                nuevo.name_status = item.get("name_status")
+                nuevo.platform_type = item.get("platform_type")
+                nuevo.messaging_limit_tier = item.get("messaging_limit_tier")
+                nuevo.raw = item
             else:
+                if existing.deleted_at is not None:
+                    # El negocio lo tuvo en una conexión eliminada: vuelve con esta (ADR-0122),
+                    # salvo que otro negocio lo haya tomado mientras tanto.
+                    from core.gateway.meta_asset_claims import MetaAssetError, numero_para_conexion
+
+                    try:
+                        await numero_para_conexion(
+                            session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_account_id
+                        )
+                    except MetaAssetError:
+                        continue
                 existing.display_phone_number = item.get("display_phone_number")
                 existing.verified_name = item.get("verified_name")
                 existing.quality_rating = item.get("quality_rating")
@@ -126,13 +218,30 @@ async def add_phone_number(
 
     async with get_session() as session:
         waba_row = (
-            await session.execute(select(WabaAccount).where(WabaAccount.waba_id == waba_id, WabaAccount.connection_id == connection_id))
+            await session.execute(
+                select(WabaAccount).where(
+                    WabaAccount.tenant_id == tenant_id,
+                    WabaAccount.waba_id == waba_id,
+                    WabaAccount.connection_id == connection_id,
+                )
+            )
         ).scalar_one_or_none()
-        row = PhoneNumber(
-            tenant_id=tenant_id, connection_id=connection_id, waba_account_id=waba_row.id if waba_row else None,
-            phone_number_id=phone_number_id, display_phone_number=f"+{cc}{phone_number}", verified_name=verified_name,
+        from core.gateway.meta_asset_claims import (
+            CLAIMED_MESSAGE,
+            MetaAssetError,
+            claimed_elsewhere,
         )
-        session.add(row)
+
+        if await claimed_elsewhere(session, tenant_id, phone_number_id=phone_number_id, source="add_phone_number"):
+            raise MetaAssetError(CLAIMED_MESSAGE, code="asset_claimed")
+        from core.gateway.meta_asset_claims import numero_para_conexion
+
+        # Revive la fila si el negocio ya tuvo este número (ADR-0122).
+        row, _anterior = await numero_para_conexion(
+            session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_row.id if waba_row else None
+        )
+        row.display_phone_number = f"+{cc}{phone_number}"
+        row.verified_name = verified_name
         await session.flush()
         return row
 
@@ -176,3 +285,16 @@ async def verify_code(
             if row is not None:
                 row.code_verification_status = "VERIFIED"
     return success
+
+
+async def register_phone_number(
+    phone_number_id: str, token: str, app_secret: str, version: str, connection_id: uuid.UUID, *, pin: str
+) -> None:
+    """`POST /{phone_number_id}/register`: deja el número listo para mandar y recibir por la
+    Cloud API, con `pin` como PIN de verificación en dos pasos (6 dígitos). Misma llamada que
+    el paso `register_number` del wizard de Embedded Signup (`meta_onboarding`). El PIN nunca
+    se loguea: viaja solo en el cuerpo."""
+    await graph_fetch(
+        f"/{phone_number_id}/register", method="POST", token=token, app_secret=app_secret,
+        body={"messaging_product": "whatsapp", "pin": pin}, version=version, connection_id=connection_id,
+    )

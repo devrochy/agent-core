@@ -42,6 +42,7 @@ async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) 
 
 
 async def _setup_connected_tenant():
+    from core.alta_negocio import onboard_tenant
     from core.db.models import (
         ChannelConnection,
         Conversation,
@@ -53,7 +54,6 @@ async def _setup_connected_tenant():
     from core.db.session import get_session
     from core.gateway import meta_token_store
     from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.onboarding import onboard_tenant
     from core.shared.crypto import get_secret_box
     from core.shared.tenant import tenant_scope
 
@@ -68,7 +68,7 @@ async def _setup_connected_tenant():
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", meta_app_id="app-embedded-signup",
+                tenant_id=tid, channel="whatsapp", origin="embedded_signup", meta_app_id="app-embedded-signup",
                 status="connected", business_id="biz-costos",
             )
             session.add(connection)
@@ -143,6 +143,7 @@ async def test_webhook_pricing_y_sync_de_pricing_analytics(app_client, monkeypat
                 "pricing": {"billable": True, "pricing_model": "CBP", "category": "utility"},
                 "conversation": {"id": "conv-meta-1", "origin": {"type": "business_initiated"}},
             },
+            expected_tenant_id=tid,
             phone_number_id=phone_number_id,
         )
 
@@ -208,7 +209,8 @@ async def test_recategorizacion_de_plantilla_se_refleja_sin_corregir_retroactivo
             template_id = template.id
 
         await handle_template_category_update(
-            {"message_template_id": template.meta_template_id, "new_category": "UTILITY"}
+            {"message_template_id": template.meta_template_id, "new_category": "UTILITY"},
+            expected_tenant_id=tid,
         )
 
         async with get_session() as session:

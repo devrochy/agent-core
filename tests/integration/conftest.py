@@ -20,6 +20,12 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(ROOT / ".env", override=True)
 
+# Bajo pytest-xdist (`-n N`): cada worker usa su propia base (clonada de la migrada), su Redis y su
+# TENANTS_ROOT. Va DESPUÉS de cargar el .env (que pisa el entorno) y ANTES de importar `core.config`.
+from _aislamiento_xdist import aislar_worker  # noqa: E402
+
+aislar_worker()
+
 from core.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()
@@ -88,6 +94,103 @@ class FakeOutbound:
 
     async def send_image(self, credentials: dict[str, Any], to: str, url: str, text: str) -> None:
         return None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _conversacion_con_su_conexion():
+    """Todo turno corre sobre la release de su conexión (ADR-0191): una conversación que un test crea
+    a mano sin `connection_id` toma la conexión conversacional del negocio con release activa del mismo
+    canal (la principal primero). Un test que necesita una sin conexión la anula después."""
+    from sqlalchemy import event, text
+
+    from core.db.models import Conversation
+
+    def _antes_de_insertar(_mapper, conexion, conversacion) -> None:  # type: ignore[no-untyped-def]
+        if conversacion.connection_id is not None or conversacion.tenant_id is None:
+            return
+        fila = conexion.execute(
+            text(
+                "select c.id from channel_connections c join connection_types t on t.id = c.type_id "
+                "where c.tenant_id = :t and c.deleted_at is null and c.active_release_id is not null "
+                "and t.produces_conversations and c.channel = :canal "
+                "order by c.is_primary desc, c.created_at limit 1"
+            ),
+            {"t": conversacion.tenant_id, "canal": conversacion.channel or ""},
+        ).first()
+        if fila is not None:
+            conversacion.connection_id = fila[0]
+
+    event.listen(Conversation, "before_insert", _antes_de_insertar)
+    yield
+    event.remove(Conversation, "before_insert", _antes_de_insertar)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _entrada_sin_conexion_va_a_la_de_pruebas():
+    """Una entrada que no trae una conexión conocida del negocio (p. ej. el número de la plataforma en
+    los tests) se atiende por la conexión con release de ese canal (ADR-0191): así la conversación nace
+    y se vuelve a encontrar por la misma conexión, como en producción, donde toda entrada trae la suya."""
+    from sqlalchemy import select, text
+
+    from core.db.models import ChannelConnection
+    from core.orchestrator import consumer
+
+    real = consumer._conexion_validada
+
+    async def _con_respaldo(session, tenant_id, fields):  # type: ignore[no-untyped-def]
+        conexion = await real(session, tenant_id, fields)
+        if conexion is not None or fields.get("provider") == "twilio":
+            return conexion
+        externo = fields.get("connection_external_id")
+        if externo:
+            propia = (
+                await session.execute(
+                    select(ChannelConnection.id).where(
+                        ChannelConnection.tenant_id == tenant_id,
+                        ChannelConnection.external_id == externo,
+                        ChannelConnection.deleted_at.is_(None),
+                    )
+                )
+            ).first()
+            if propia is not None:
+                return None  # la resuelve el camino de siempre del consumer
+        canal = fields.get("channel") or "whatsapp"
+        fila = (
+            await session.execute(
+                text(
+                    "select id from channel_connections where tenant_id = :t and channel = :c "
+                    "and active_release_id is not null and deleted_at is null "
+                    "order by (provider = :p) desc, is_primary desc, created_at limit 1"
+                ),
+                {"t": tenant_id, "c": canal, "p": fields.get("provider") or ""},
+            )
+        ).first()
+        return await session.get(ChannelConnection, fila[0]) if fila is not None else None
+
+    consumer._conexion_validada = _con_respaldo  # type: ignore[assignment]
+    yield
+    consumer._conexion_validada = real  # type: ignore[assignment]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _alta_sin_agent_os():
+    """El alta de hoy crea el Coordinador y el negocio nace en v3 (migración 0126, ADR-0191/0192); aquí
+    se apaga para que cada test monte su conexión con release (`release_de_prueba`). Solo
+    `test_alta_agentes_base` y los que activan `_alta_agent_os.ACTIVO` ven el alta real."""
+    import _alta_agent_os
+
+    import core.alta_negocio as alta
+
+    real = alta._agentes_base_al_alta
+
+    async def _agentes(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
+        if _alta_agent_os.ACTIVO:
+            return await real(tenant_id, nuevo=nuevo)
+        return []
+
+    alta._agentes_base_al_alta = _agentes  # type: ignore[assignment]
+    yield
+    alta._agentes_base_al_alta = real  # type: ignore[assignment]
 
 
 @pytest.fixture(scope="module")
@@ -242,7 +345,6 @@ async def tenant_setup():
             session.add(t2)
             await session.flush()
         t1_id, t2_id = t1.id, t2.id
-
     for tid in (t1_id, t2_id):
         async with tenant_scope(tid):
             async with get_session() as session:
@@ -261,9 +363,39 @@ async def tenant_setup():
                             provider="meta",
                             label="it",
                             external_id=PHONE if tid == t1_id else "999",
+                            type_id="whatsapp_meta",  # conversacional: lleva Coordinador y release
                         )
                     )
+    # Todo turno corre sobre una release (ADR-0191): Coordinador + especialista nativos y release 1
+    # en la conexión de cada negocio (sin General, ADR-0192).
+    for tid in (t1_id, t2_id):
+        await _con_release(tid, PHONE if tid == t1_id else "999")
     return t1_id, t2_id
+
+
+async def _con_release(tid: uuid.UUID, external_id: str) -> None:
+    from release_de_prueba import _journeys
+    from sqlalchemy import select
+
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+    from core.plugin_manager import plugin_manager
+    from core.releases.release_uno import backfill_releases
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cid = (
+                await session.execute(
+                    select(ChannelConnection.id).where(
+                        ChannelConnection.tenant_id == tid, ChannelConnection.external_id == external_id
+                    )
+                )
+            ).scalar_one()
+    modulos = plugin_manager.list_modules() or plugin_manager.scan()
+    await _journeys().agentes_nativos(tid, cid, modulos)
+    reporte = await backfill_releases(dry_run=False, tenant_id=tid, modules=modulos)
+    assert not reporte.fallo, reporte.errores
 
 
 @pytest.fixture(scope="module")
@@ -290,7 +422,7 @@ async def moto_setup():
     # pero sin AppSettings, de antes de que `escalation_config` existiera).
     # `seed_catalog` también es idempotente (docstring propio).
     from cli.commands.tenant import seed_catalog
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     moto_id, _ = await onboard_tenant(
         name="Tenant de ejemplo (moto)",
@@ -394,3 +526,24 @@ def _meta_request(payload: dict[str, Any]) -> tuple[bytes, dict[str, str]]:
     if secret:
         headers.update(_sign_meta(body, secret))
     return body, headers
+
+@pytest.fixture(autouse=True)
+def _crons_de_negocio_a_cualquier_hora(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Los crons de negocio solo corren a su hora local (ADR-0201): el beat los dispara cada hora
+    y la política salta las demás. Las pruebas llaman los jobs directo a cualquier hora, así que
+    aquí «fuera de hora» no cuenta, ni con el reloj real ni con el `now` que el test le pasa al job
+    (los jobs se lo pasan a la política como `ahora`). Apagado y ventana siguen contando; la regla
+    de la hora se prueba en `tests/test_crons_negocio.py`."""
+    import dataclasses
+
+    from core.admin import crons_negocio_service as svc
+
+    real = svc.politica
+
+    async def politica(tenant_id: uuid.UUID, cron_name: str, *, ahora: Any = None) -> Any:
+        resultado = await real(tenant_id, cron_name, ahora=ahora)
+        if resultado.motivo == svc.OMITIDA_FUERA_DE_HORA:
+            return dataclasses.replace(resultado, motivo=None)
+        return resultado
+
+    monkeypatch.setattr(svc, "politica", politica)

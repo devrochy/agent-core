@@ -1,0 +1,26 @@
+# Dependencias de Python: solo seguridad, sin PR por cada versión nueva.
+#
+# `open-pull-requests-limit: 0` apaga los PR de versiones normales. Las alertas y
+# los PR de seguridad no dependen de este archivo sino de la configuración del
+# repo (Settings → Code security: "Dependabot alerts" y "Dependabot security
+# updates"), activadas el 2026-10-02. El ecosistema es `uv` para que los PR de
+# seguridad actualicen también `uv.lock`.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+
+  # Excepción: las GitHub Actions sí reciben PR de versión, todos en un solo PR
+  # por mes. Son pocas, y quedarse atrás significa correr sobre un runtime que
+  # GitHub retira (hoy `actions/checkout@v4` apunta a Node 20 y GitHub lo fuerza
+  # a Node 24). `directory: "/"` revisa `.github/workflows`.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]

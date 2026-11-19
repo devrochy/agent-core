@@ -20,7 +20,6 @@ el login no traía identificador de tenant.
 from __future__ import annotations
 
 import base64
-import secrets
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -30,12 +29,23 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import select
 
-from core.admin.auth import hash_password, verify_password
-from core.db.models import Admin, Tenant, TenantUser
+from core.access.devices import AccesoError, evaluar
+from core.admin.auth import verify_password
+from core.admin.roles import cuenta_habilitada
+from core.db.models import AccountDevice, Admin, Tenant, TenantUser
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
-from pack_cobranza.auth import issue_token, pack_secret, token_tenant, verify_token
+from pack_cobranza import acceso
+from pack_cobranza.auth import (
+    acceso_de_campo,
+    actor_del_token,
+    issue_token,
+    pack_secret,
+    token_tenant,
+    verify_token,
+)
+from pack_cobranza.enlazar import enlazar_cliente, telefono_para_guardar
 from pack_cobranza.estadisticas import conteos_cartera
 from pack_cobranza.evidencias import EvidenciaError, guardar_archivo, guardar_evidencia
 from pack_cobranza.models import (
@@ -52,17 +62,16 @@ from pack_cobranza.models import (
     Cliente,
     ClienteEvidencia,
     Cuota,
-    Device,
     Gasto,
     GastoEvidencia,
     Gestor,
     GestorPermiso,
-    IntentoAcceso,
     Liquidacion,
     Pago,
     PosicionGestor,
     Prestamo,
     Promesa,
+    Suscripcion,
     SyncEvento,
     Visita,
 )
@@ -77,10 +86,20 @@ _ACCESS_TTL_H = 12
 _REFRESH_TTL_H = 720  # 30 días
 
 
-def _par_tokens(secret: str, tenant_id: uuid.UUID, admin_id: uuid.UUID, *, rol: str, gestor_id: uuid.UUID | None = None) -> dict[str, str]:
+def _par_tokens(
+    secret: str,
+    tenant_id: uuid.UUID,
+    admin_id: uuid.UUID,
+    *,
+    rol: str,
+    gestor_id: uuid.UUID | None = None,
+    did: uuid.UUID | None = None,
+) -> dict[str, str]:
     base = {"tenant_id": str(tenant_id), "admin_id": str(admin_id), "rol": rol}
     if gestor_id is not None:
         base["gestor_id"] = str(gestor_id)
+    if did is not None:  # equipo con el que entró (fila de account_devices): se revalida en cada petición
+        base["did"] = str(did)
     return {
         "accessToken": issue_token({**base, "typ": "access"}, secret, ttl_hours=_ACCESS_TTL_H),
         "refreshToken": issue_token({**base, "typ": "refresh"}, secret, ttl_hours=_REFRESH_TTL_H),
@@ -91,10 +110,21 @@ def _usuario_de(admin: Admin) -> str:
     return admin.username or admin.email
 
 
-async def _auth(authorization: str | None) -> tuple[uuid.UUID, dict[str, Any]] | None:
-    if not authorization or not authorization.lower().startswith("bearer "):
+async def _auth(
+    authorization: str | None, *, sin_equipo_ok: bool = False
+) -> tuple[uuid.UUID, dict[str, Any]] | None:
+    """Token de acceso de campo válido, de una cuenta habilitada, vinculada y de un negocio
+    activo: lo decide `acceso_de_campo` (ADR-0134, ADR-0136), el mismo validador de `api.py`.
+
+    Un token de dispositivo (sin `admin_id`, ADR-0057) no trae `rol`: aquí cuenta como
+    `gestor` (solo sus carteras y sus permisos), nunca como acceso total."""
+    auth = await acceso_de_campo(authorization, sin_equipo_ok=sin_equipo_ok)
+    if auth is None:
         return None
-    return await token_tenant(authorization.split(" ", 1)[1].strip())
+    tenant_id, payload = auth
+    if not payload.get("admin_id"):
+        payload = {**payload, "rol": "gestor"}
+    return tenant_id, payload
 
 
 def _membresia_token(admin_id: uuid.UUID) -> str:
@@ -121,18 +151,30 @@ def _admin_de_membresia(token: str) -> uuid.UUID | None:
 
 
 async def _admin_de_token(authorization: str | None) -> uuid.UUID | None:
-    """Identidad del admin desde un token de campo (pack) o de membresía."""
+    """Identidad del admin desde un token de ACCESO de campo (pack) o de membresía.
+
+    El refresh no sirve aquí, y la cuenta debe seguir habilitada (ADR-0136): una cuenta
+    desactivada no lista ni acepta invitaciones con un token que le quedó en el teléfono."""
     if not authorization or not authorization.lower().startswith("bearer "):
         return None
     token = authorization.split(" ", 1)[1].strip()
     auth = await token_tenant(token)
+    admin_uuid: uuid.UUID | None
     if auth is not None:
+        if auth[1].get("typ") == "refresh":
+            return None
         admin_id = auth[1].get("admin_id")
         try:
-            return uuid.UUID(str(admin_id)) if admin_id else None
+            admin_uuid = uuid.UUID(str(admin_id)) if admin_id else None
         except (TypeError, ValueError):
             return None
-    return _admin_de_membresia(token)
+    else:
+        admin_uuid = _admin_de_membresia(token)
+    if admin_uuid is None:
+        return None
+    async with get_session() as session:
+        admin = await session.get(Admin, admin_uuid)
+    return admin_uuid if cuenta_habilitada(admin) else None
 
 
 async def _admin_por_credenciales(session, usuario: str, password: str) -> Admin | None:
@@ -142,6 +184,9 @@ async def _admin_por_credenciales(session, usuario: str, password: str) -> Admin
         )
     ).scalar_one_or_none()
     if admin is None or not verify_password(password, admin.password_hash):
+        return None
+    # Tester con el rol apagado (producción, ADR-0134): tampoco entra a la app de campo.
+    if not cuenta_habilitada(admin):
         return None
     return admin
 
@@ -240,41 +285,94 @@ async def _membresias_de_campo(admin: Admin, *, solo: uuid.UUID | None = None) -
     return out
 
 
+async def _otro_equipo_activo(session, tenant_id: uuid.UUID, admin_id: uuid.UUID, device_id: str | None) -> bool:
+    """¿La cuenta ya tiene un equipo ACTIVO con id distinto de este? (contrato anterior: ese gestor ya
+    estaba vinculado a otro teléfono, así que un equipo nuevo se rechaza en vez de pedir vinculación)."""
+    consulta = select(AccountDevice.id).where(
+        AccountDevice.tenant_id == tenant_id,
+        AccountDevice.admin_id == admin_id,
+        AccountDevice.estado == "activo",
+        AccountDevice.device_id.is_not(None),
+        AccountDevice.deleted_at.is_(None),
+    )
+    if device_id:
+        consulta = consulta.where(AccountDevice.device_id != device_id)
+    return (await session.execute(consulta.limit(1))).first() is not None
+
+
 async def _enforcement_dispositivo(
     request: Request, session, tenant_id: uuid.UUID, gestor: Gestor, imei: str, whatsapp: str
-) -> tuple[bool, str] | JSONResponse:
-    """Vinculación de dispositivo (ADR-0068): (vinculado, estado) o 403."""
-    dispositivos = (
-        await session.execute(
-            select(Device).where(
-                Device.tenant_id == tenant_id,
-                Device.gestor_id == gestor.id,
-                Device.deleted_at.is_(None),
-            )
+) -> tuple[bool, str, uuid.UUID | None] | JSONResponse:
+    """Vinculación de dispositivo (ADR-0068, ADR-0174): `(vinculado, estado, did)` o 403.
+
+    La decisión la toma el core (`evaluar`, por cuenta y con la política del negocio). Aquí solo se
+    traduce a lo que entiende cada versión de la app: con `X-Device-Id` (app nueva) el 403 lleva `code`;
+    sin él (app vieja, solo `imei` en el cuerpo) se conserva el contrato anterior: un equipo por
+    vincular recibe los tokens con `requiereVinculacion` en vez de un 403."""
+    device_id, via_header = acceso.equipo_de(request, imei)
+    if gestor.admin_id is None:  # no ocurre en una membresía de gestor; sin cuenta no hay a quién atar el equipo
+        return True, "activo", None
+    await acceso.adoptar_legado(session, tenant_id, gestor)
+    if not via_header:
+        log.info("access_legacy_param", tenant_id=str(tenant_id), tiene_imei=bool(device_id))
+    try:
+        decision = await evaluar(
+            session,
+            tenant_id=tenant_id,
+            admin_id=gestor.admin_id,
+            rol="gestor",
+            device_id=device_id,
+            canal="campo" if via_header else "campo_v1",
+            ip=request.client.host if request.client else None,
+            detalle_alta={"contacto": whatsapp[: acceso.MAX_CONTACTO]} if whatsapp else None,
         )
-    ).scalars().all()
-    activos_imei = [d for d in dispositivos if d.estado == "activo" and d.imei]
-    legacy_activo = any(d.estado == "activo" and not d.imei for d in dispositivos)
-    if activos_imei:
-        if imei and any(d.imei == imei for d in activos_imei):
-            return True, "activo"
-        session.add(
-            IntentoAcceso(
-                tenant_id=tenant_id,
-                gestor_id=gestor.id,
-                imei=imei or None,
-                whatsapp_number=whatsapp or None,
-                resultado="denegado",
-                motivo="dispositivo no autorizado",
-                ip=request.client.host if request.client else None,
-            )
+    except AccesoError as exc:
+        return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+    if decision.permitido:
+        return True, "activo", decision.device_row_id
+
+    def _denegar(code: str) -> JSONResponse:
+        return acceso.respuesta_403(code, decision.estado)
+
+    code = decision.code or "dispositivo_no_autorizado"
+    # Sin equipo identificable (ni header ni imei) en política restringida no hay contrato anterior que
+    # conservar: ninguna versión de la app entra así.
+    if via_header or code in ("dispositivo_bloqueado", "dispositivo_requerido"):
+        return _denegar(code)
+    # Contrato anterior (sin header). Un gestor que ya tiene un equipo activo con id no entra por
+    # «por vincular»: ni con otro equipo ni sin identificar el suyo (los tokens abren toda la API).
+    if await _otro_equipo_activo(session, tenant_id, gestor.admin_id, device_id):
+        return _denegar("dispositivo_no_autorizado")
+    if code == "dispositivo_pendiente":
+        return False, "pendiente", None
+    return False, "none", None
+
+
+async def _enforcement_cuenta(
+    request: Request, session, tenant_id: uuid.UUID, admin: Admin, rol: str, imei: str
+) -> uuid.UUID | JSONResponse | None:
+    """Equipo del propietario (política `owner`) o del master (solo el rastro `acceso_master`), ADR-0174.
+
+    Devuelve el `did` del token, `None` si no hay equipo que atar o el 403 con `code`."""
+    device_id, via_header = acceso.equipo_de(request, imei)
+    if not via_header:
+        log.info("access_legacy_param", tenant_id=str(tenant_id), tiene_imei=bool(device_id))
+    try:
+        decision = await evaluar(
+            session,
+            tenant_id=tenant_id,
+            admin_id=admin.id,
+            rol="owner",
+            device_id=device_id,
+            canal="campo" if via_header else "campo_v1",
+            ip=request.client.host if request.client else None,
+            es_master_plataforma=rol == "master",
         )
-        return JSONResponse({"error": "dispositivo no autorizado"}, status_code=403)
-    if legacy_activo:
-        return True, "activo"
-    if any(d.estado == "pendiente" for d in dispositivos):
-        return False, "pendiente"
-    return False, "none"
+    except AccesoError as exc:
+        return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+    if decision.permitido:
+        return decision.device_row_id
+    return acceso.respuesta_403(decision.code or "dispositivo_no_autorizado", decision.estado)
 
 
 async def _sesion_de_membresia(
@@ -288,7 +386,7 @@ async def _sesion_de_membresia(
         secret = await pack_secret()
         if not secret:
             return JSONResponse({"error": "pack sin secreto de firma"}, status_code=503)
-        vinculado, estado_dispositivo, telefono = False, "none", ""
+        vinculado, estado_dispositivo, telefono, did = False, "none", "", None
         async with get_session() as session:
             if rol == "gestor" and gestor_id is not None:
                 gestor = await get_owned(session, Gestor, gestor_id)
@@ -297,7 +395,7 @@ async def _sesion_de_membresia(
                 res = await _enforcement_dispositivo(request, session, tenant_id, gestor, imei, whatsapp)
                 if isinstance(res, JSONResponse):
                     return res
-                vinculado, estado_dispositivo = res
+                vinculado, estado_dispositivo, did = res
                 telefono = gestor.telefono or ""
                 perfil = {
                     "id": str(gestor.id),
@@ -307,11 +405,19 @@ async def _sesion_de_membresia(
                 }
             else:
                 perfil = _perfil_admin(admin)
-            tokens = _par_tokens(secret, tenant_id, admin.id, rol=rol, gestor_id=gestor_id)
+                res = await _enforcement_cuenta(request, session, tenant_id, admin, rol, imei)
+                if isinstance(res, JSONResponse):
+                    return res
+                did = res
+            tokens = _par_tokens(secret, tenant_id, admin.id, rol=rol, gestor_id=gestor_id, did=did)
+            permisos = await _permisos_de(
+                session, tenant_id, {"rol": rol, "gestor_id": str(gestor_id) if gestor_id else None}
+            )
     return JSONResponse(
         {
             **tokens,
             "rol": rol,
+            "permisos": permisos,
             "perfil": perfil,
             "tenantId": str(tenant_id),
             "tenantSlug": membresia.get("slug"),
@@ -342,10 +448,30 @@ async def login(request: Request) -> JSONResponse:
     if not (usuario and password):
         return JSONResponse({"error": "faltan datos"}, status_code=400)
 
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    # Mismo bloqueo progresivo que el login por negocio (HU-ARCH-04): este login unificado no lo tenía.
+    ip = client_ip(request)
+    identificador = usuario.lower()
+    if await is_blocked("campo", identificador, ip):
+        return JSONResponse({"error": "demasiados intentos, espera unos minutos"}, status_code=429)
     async with get_session() as session:
         admin = await _admin_por_credenciales(session, usuario, password)
     if admin is None:
+        bloqueado = await register_failure("campo", identificador, ip)
+        from core.access.events import registrar_fallo_de_login
+
+        # Con `tenant` el intento apuntaba a ese negocio: el rastro no avisa a los demás.
+        await registrar_fallo_de_login(
+            usuario, ip, canal="campo", bloqueado=bloqueado, tenant_id=await _tenant_id_por_ref(ref) if ref else None
+        )
         return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
+    await register_success("campo", identificador, ip)
 
     solo = await _tenant_id_por_ref(ref) if ref else None
     if ref and solo is None:
@@ -421,16 +547,46 @@ async def _login_con_tenant(request: Request, rol_esperado: str) -> JSONResponse
     if not (slug and usuario and password):
         return JSONResponse({"error": "faltan datos"}, status_code=400)
 
+    from core.security.login_lockout import (
+        client_ip,
+        is_blocked,
+        register_failure,
+        register_success,
+    )
+
+    scope = f"gestor:{slug}"
+    identificador = usuario.lower()
+    ip = client_ip(request)
+    if await is_blocked(scope, identificador, ip):
+        return JSONResponse({"error": "demasiados intentos, espera unos minutos"}, status_code=429)
+
     from core.tenants import resolve_tenant_by_slug
 
     tenant_id = await resolve_tenant_by_slug(slug)
     if tenant_id is None:
+        await register_failure(scope, None, ip)
         return JSONResponse({"error": "tenant desconocido"}, status_code=401)
 
     async with get_session() as session:
         admin = await _admin_por_credenciales(session, usuario, password)
     if admin is None:
+        bloqueado = await register_failure(scope, identificador, ip)
+        from core.access.events import registrar_fallo_de_login
+
+        await registrar_fallo_de_login(usuario, ip, canal="campo", bloqueado=bloqueado, tenant_id=tenant_id)
+        if bloqueado:
+            from core.shared.audit import record_audit
+            from core.shared.tenant import tenant_scope
+
+            async with tenant_scope(tenant_id):
+                await record_audit(
+                    actor="core:auth",
+                    action="login_bloqueado",
+                    input_data={"usuario": usuario, "ip": ip},
+                )
         return JSONResponse({"error": "credenciales inválidas"}, status_code=401)
+
+    await register_success(scope, identificador, ip)
 
     membresias = await _membresias_de_campo(admin, solo=tenant_id)
     if not membresias:
@@ -510,10 +666,32 @@ async def refresh(request: Request) -> JSONResponse:
             return JSONResponse({"error": "pack sin secreto de firma"}, status_code=503)
         async with get_session() as session:
             admin = (await session.execute(select(Admin).where(Admin.id == uuid.UUID(str(admin_id)), Admin.active.is_(True)))).scalar_one_or_none()
-            if admin is None:
+            if admin is None or not cuenta_habilitada(admin):
                 return JSONResponse({"error": "admin inactivo"}, status_code=401)
-            gestor_id = uuid.UUID(str(payload["gestor_id"])) if payload.get("gestor_id") else None
-            tokens = _par_tokens(secret, tenant_id, admin.id, rol=str(payload.get("rol") or "gestor"), gestor_id=gestor_id)
+    # El rol y el gestor se RECALCULAN (ADR-0136), no se copian del token viejo: un negocio
+    # suspendido, una cuenta desvinculada o un owner bajado a colaborador no renuevan con
+    # el acceso que tenían.
+    membresias = await _membresias_de_campo(admin, solo=tenant_id)
+    if not membresias:
+        return JSONResponse({"error": "sin acceso a ese negocio"}, status_code=401)
+    membresia = membresias[0]
+    gestor_id = uuid.UUID(str(membresia["gestorId"])) if membresia.get("gestorId") else None
+    did: uuid.UUID | None = None
+    rol_politica = {"gestor": "gestor", "propietario": "owner"}.get(str(membresia["rol"]))
+    if rol_politica:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                if rol_politica == "gestor":
+                    gestor = await get_owned(session, Gestor, gestor_id) if gestor_id else None
+                    if gestor is None or gestor.estatus != "activo":
+                        return JSONResponse({"error": "no es gestor de esta cartera"}, status_code=403)
+                res = await acceso.equipo_del_refresh(
+                    request, session, tenant_id, admin.id, rol_politica, payload.get("did")
+                )
+                if isinstance(res, JSONResponse):
+                    return res
+                did = res
+    tokens = _par_tokens(secret, tenant_id, admin.id, rol=str(membresia["rol"]), gestor_id=gestor_id, did=did)
     return JSONResponse(tokens)
 
 
@@ -552,8 +730,9 @@ async def actualizar_perfil(request: Request, authorization: str | None = Header
 # --------------------------------------------------------------- dispositivo (HU-39/43)
 @router.post("/gestor/dispositivo")
 async def vincular_dispositivo(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
-    """Vincula este equipo al gestor del token; queda **pendiente** de aprobación."""
-    auth = await _auth(authorization)
+    """Pide vincular este equipo a la cuenta del gestor; según la política del negocio queda
+    **pendiente** de aprobación (o activo si es abierta). Idempotente por (cuenta, equipo)."""
+    auth = await _auth(authorization, sin_equipo_ok=True)
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
     tenant_id, payload = auth
@@ -561,45 +740,84 @@ async def vincular_dispositivo(request: Request, authorization: str | None = Hea
     if not gestor_id:
         return JSONResponse({"error": "token sin gestor"}, status_code=403)
     body = await request.json()
-    imei = str(body.get("imei") or "").strip()
+    device_id, via_header = acceso.equipo_de(request, str(body.get("imei") or ""))
     whatsapp = str(body.get("whatsapp") or "").strip()
-    public_key = str(body.get("publicKey") or "").strip() or None
-    if not imei or not whatsapp:
+    # La app vieja exige el contacto; la nueva identifica el equipo por header y el contacto es opcional.
+    if not device_id or (not via_header and not whatsapp):
         return JSONResponse({"error": "imei y whatsapp son obligatorios"}, status_code=400)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             gestor = await get_owned(session, Gestor, uuid.UUID(str(gestor_id)))
-            if gestor is None:
+            if gestor is None or gestor.admin_id is None:
                 return JSONResponse({"error": "gestor no encontrado"}, status_code=404)
-            existente = (await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.gestor_id == gestor.id, Device.imei == imei, Device.deleted_at.is_(None)))).scalar_one_or_none()
-            if existente is not None:
-                if public_key and not existente.public_key:
-                    existente.public_key = public_key
-                return JSONResponse({"estado": existente.estado, "imei": existente.imei, "whatsapp": existente.whatsapp_number})
-            device = Device(tenant_id=tenant_id, codigo=str(uuid.uuid4()), api_key_hash=hash_password(secrets.token_urlsafe(24)), gestor_id=gestor.id, imei=imei, whatsapp_number=whatsapp, public_key=public_key, estado="pendiente")
-            session.add(device)
-            await session.flush()
-            session.add(IntentoAcceso(tenant_id=tenant_id, gestor_id=gestor.id, device_id=device.id, imei=imei, whatsapp_number=whatsapp, resultado="ok", motivo="solicitud de vinculación", ip=request.client.host if request.client else None))
-    return JSONResponse({"estado": "pendiente", "imei": imei, "whatsapp": whatsapp}, status_code=201)
+            await acceso.adoptar_legado(session, tenant_id, gestor)
+            existia = (
+                await session.execute(
+                    select(AccountDevice.id).where(
+                        AccountDevice.tenant_id == tenant_id,
+                        AccountDevice.admin_id == gestor.admin_id,
+                        AccountDevice.device_id == device_id,
+                        AccountDevice.deleted_at.is_(None),
+                    )
+                )
+            ).first() is not None
+            try:
+                decision = await evaluar(
+                    session,
+                    tenant_id=tenant_id,
+                    admin_id=gestor.admin_id,
+                    rol="gestor",
+                    device_id=device_id,
+                    canal="campo" if via_header else "campo_v1",
+                    ip=request.client.host if request.client else None,
+                    detalle_alta={"contacto": whatsapp[: acceso.MAX_CONTACTO]} if whatsapp else None,
+                )
+            except AccesoError as exc:
+                return JSONResponse({"error": exc.message, "code": exc.code}, status_code=exc.status)
+    return JSONResponse(
+        {"estado": decision.estado, "imei": device_id, "whatsapp": whatsapp or None},
+        status_code=200 if existia else 201,
+    )
 
 
 @router.get("/gestor/dispositivo")
-async def estado_dispositivo(authorization: str | None = Header(default=None)) -> JSONResponse:
-    """Estado de vinculación del equipo del gestor (la app espera la aprobación)."""
-    auth = await _auth(authorization)
+async def estado_dispositivo(request: Request, authorization: str | None = Header(default=None)) -> JSONResponse:
+    """Estado de vinculación del equipo del gestor (la app espera la aprobación). Con `X-Device-Id`, el de
+    ESE equipo; sin él, el mejor estado entre los de la cuenta (contrato anterior)."""
+    auth = await _auth(authorization, sin_equipo_ok=True)
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
     tenant_id, payload = auth
     gestor_id = payload.get("gestor_id")
     if not gestor_id:
         return JSONResponse({"error": "token sin gestor"}, status_code=403)
+    device_id, _ = acceso.equipo_de(request)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            devices = (await session.execute(select(Device).where(Device.tenant_id == tenant_id, Device.gestor_id == uuid.UUID(str(gestor_id)), Device.deleted_at.is_(None)).order_by(Device.created_at.desc()))).scalars().all()
+            gestor = await get_owned(session, Gestor, uuid.UUID(str(gestor_id)))
+            if gestor is None or gestor.admin_id is None:
+                return JSONResponse({"error": "gestor no encontrado"}, status_code=404)
+            await acceso.adoptar_legado(session, tenant_id, gestor)
+            consulta = select(AccountDevice).where(
+                AccountDevice.tenant_id == tenant_id,
+                AccountDevice.admin_id == gestor.admin_id,
+                AccountDevice.deleted_at.is_(None),
+            )
+            if device_id:
+                consulta = consulta.where(AccountDevice.device_id == device_id)
+            devices = (await session.execute(consulta.order_by(AccountDevice.created_at.desc()))).scalars().all()
     activo = next((d for d in devices if d.estado == "activo"), None)
     pendiente = next((d for d in devices if d.estado == "pendiente"), None)
-    dev = activo or pendiente
-    return JSONResponse({"vinculado": activo is not None, "estado": dev.estado if dev else "none", "imei": dev.imei if dev else None, "whatsapp": dev.whatsapp_number if dev else None})
+    bloqueado = next((d for d in devices if d.estado == "bloqueado"), None) if device_id else None
+    dev = activo or pendiente or bloqueado
+    return JSONResponse(
+        {
+            "vinculado": activo is not None,
+            "estado": dev.estado if dev else "none",
+            "imei": dev.device_id if dev else None,
+            "whatsapp": None,
+        }
+    )
 
 
 # --------------------------------------------------------------- lecturas (F2)
@@ -615,13 +833,17 @@ def _hoy() -> date:
     return date.today()
 
 
-async def _carteras_visibles(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -> list[Cartera]:
+async def _carteras_visibles(session, tenant_id: uuid.UUID, payload: dict[str, Any], *, solo: uuid.UUID | None = None) -> list[Cartera]:
     """Carteras que el token puede ver: todas con acceso total; las suyas para el gestor.
 
     Acceso total (todas las carteras del tenant): `master`, `propietario` y cualquier
     rol distinto de `gestor` (ADR-0081). El gestor solo ve las carteras asignadas.
+    `solo` acota la consulta a esa cartera. Una cartera borrada no se ve: ni sus evidencias ni
+    eventos offline por esta API (decisión en agent-core#705; el panel sigue viendo las evidencias).
     """
     q = select(Cartera).where(Cartera.tenant_id == tenant_id, Cartera.deleted_at.is_(None)).order_by(Cartera.nombre)
+    if solo is not None:
+        q = q.where(Cartera.id == solo)
     if payload.get("rol") == "gestor":
         gid = payload.get("gestor_id")
         if not gid:
@@ -631,7 +853,38 @@ async def _carteras_visibles(session, tenant_id: uuid.UUID, payload: dict[str, A
 
 
 async def _cartera_visible(session, tenant_id: uuid.UUID, payload: dict[str, Any], cartera_id: uuid.UUID) -> Cartera | None:
-    return next((c for c in await _carteras_visibles(session, tenant_id, payload) if c.id == cartera_id), None)
+    return next(iter(await _carteras_visibles(session, tenant_id, payload, solo=cartera_id)), None)
+
+
+async def _vivo(session, modelo: Any, id_: uuid.UUID) -> Any | None:
+    """`get_owned` sin lo borrado: `get_owned` no mira `deleted_at`, y sin esto se podía aplicar una
+    visita a un préstamo borrado o «borrar» dos veces un movimiento (agent-core#705)."""
+    obj = await get_owned(session, modelo, id_)
+    return None if obj is None or obj.deleted_at is not None else obj
+
+
+async def _prestamo_abierto(session, prestamo_id: uuid.UUID) -> Prestamo | None:
+    """El préstamo si todavía admite visitas: no borrado ni liquidado ni cancelado."""
+    p = await _vivo(session, Prestamo, prestamo_id)
+    return p if p is not None and p.estatus == "vigente" else None
+
+
+async def _cuota_de_cartera(session, cartera_id: uuid.UUID, cuota_id: uuid.UUID) -> tuple[Cuota, uuid.UUID] | None:
+    """La cuota viva y el cliente al que se le cobra, si es de esa cartera.
+
+    Sin préstamo la cuota cuelga de una suscripción (ADR-0082): manda la cartera actual de su cliente,
+    no `Suscripcion.cartera_id`, que no se actualiza al mover al cliente (agent-core#705)."""
+    cuota = await _vivo(session, Cuota, cuota_id)
+    if cuota is None:
+        return None
+    if cuota.prestamo_id is not None:
+        p = await _vivo(session, Prestamo, cuota.prestamo_id)
+        return (cuota, p.cliente_id) if p is not None and p.cartera_id == cartera_id else None
+    sus = await _vivo(session, Suscripcion, cuota.suscripcion_id) if cuota.suscripcion_id else None
+    if sus is None:
+        return None
+    cliente = await _vivo(session, Cliente, sus.cliente_id)
+    return (cuota, sus.cliente_id) if cliente is not None and cliente.cartera_id == cartera_id else None
 
 
 async def _permisos_de(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -643,6 +896,38 @@ async def _permisos_de(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -
     rows = (await session.execute(select(GestorPermiso).where(GestorPermiso.tenant_id == tenant_id, GestorPermiso.gestor_id == uuid.UUID(str(gid))))).scalars().all()
     habilitados = {r.permiso: r.habilitado for r in rows}
     return [{"permiso": p, "habilitado": bool(habilitados.get(p, False))} for p in GESTOR_PERMISOS]
+
+
+class SinPermiso(PermissionError):
+    """El gestor no tiene habilitado el permiso que exige la acción (cola offline)."""
+
+    def __init__(self, permiso: str) -> None:
+        super().__init__(f"sin permiso: {permiso}")
+        self.permiso = permiso
+
+
+async def _permisos_habilitados(session, tenant_id: uuid.UUID, payload: dict[str, Any]) -> frozenset[str]:
+    """Permisos de la matriz que el token puede usar. El servidor aplica la matriz (agent-core#690):
+    el gestor solo lo que tiene habilitado (sin fila = denegado); propietario y master, todo."""
+    return frozenset(p["permiso"] for p in await _permisos_de(session, tenant_id, payload) if p["habilitado"])
+
+
+async def _exigir_permiso(session, tenant_id: uuid.UUID, payload: dict[str, Any], permiso: str) -> JSONResponse | None:
+    """`None` si el token tiene el permiso; si no, el 403 que la ruta devuelve sin escribir nada.
+    Se llama DESPUÉS de comprobar la cartera (un id ajeno sigue siendo 404) y antes de cualquier escritura."""
+    if payload.get("rol") != "gestor":
+        return None
+    if permiso in await _permisos_habilitados(session, tenant_id, payload):
+        return None
+    return JSONResponse({"error": "sin permiso", "permiso": permiso}, status_code=403)
+
+
+def _permiso_de_visita(data: dict[str, Any]) -> str:
+    """Permiso que exige aplicar `data` con `_aplicar_visita`, según la acción EFECTIVA (no la URL):
+    sin `resultado: pago` la visita se aplica como no pago (y puede crear una promesa)."""
+    if str(data.get("resultado") or "no_pago") != "pago":
+        return "registrar_no_pago"
+    return "registrar_abono" if str(data.get("tipoPago") or "cuota") == "abono" else "registrar_pago"
 
 
 def _config_public(cartera_id: uuid.UUID, cfg: CarteraConfig | None) -> dict[str, Any]:
@@ -863,7 +1148,7 @@ async def _saldo_y_mora(session, tenant_id: uuid.UUID, prestamos: list[Prestamo]
 
 
 async def _cliente_o_404(session, tenant_id: uuid.UUID, cartera_id: uuid.UUID, cliente_id: uuid.UUID) -> Cliente | None:
-    cli = await get_owned(session, Cliente, cliente_id)
+    cli = await _vivo(session, Cliente, cliente_id)
     return cli if cli is not None and cli.cartera_id == cartera_id else None
 
 
@@ -934,6 +1219,8 @@ async def prestamos_de_cliente(cartera_id: str, cliente_id: str, authorization: 
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if await _cliente_o_404(session, tenant_id, cid, clid) is None:
+                return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
             prestamos = await _prestamos_de(session, tenant_id, clid)
             out = []
             for p in prestamos:
@@ -956,7 +1243,7 @@ async def estado_cuenta(cartera_id: str, prestamo_id: str, authorization: str | 
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
-            p = await get_owned(session, Prestamo, pid)
+            p = await _vivo(session, Prestamo, pid)
             if p is None or p.cartera_id != cid:
                 return JSONResponse({"error": "préstamo no encontrado"}, status_code=404)
             cliente = await get_owned(session, Cliente, p.cliente_id)
@@ -999,12 +1286,13 @@ async def detalle_cuota(cartera_id: str, prestamo_id: str, cuota_id: str, author
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
-            cuota = await get_owned(session, Cuota, quid)
-            if cuota is None or cuota.prestamo_id != pid:
+            cuota = await _vivo(session, Cuota, quid)
+            prestamo = await _vivo(session, Prestamo, pid)
+            if cuota is None or cuota.prestamo_id != pid or prestamo is None or prestamo.cartera_id != cid:
                 return JSONResponse({"error": "cuota no encontrada"}, status_code=404)
             pagos = (await session.execute(select(Pago).where(Pago.tenant_id == tenant_id, Pago.cuota_id == quid, Pago.deleted_at.is_(None)).order_by(Pago.fecha_hora))).scalars().all()
             abonos = (await session.execute(select(Abono).where(Abono.tenant_id == tenant_id, Abono.prestamo_id == pid, Abono.deleted_at.is_(None)).order_by(Abono.fecha_hora))).scalars().all()
-            ultima = (await session.execute(select(Visita).where(Visita.tenant_id == tenant_id, Visita.cliente_id == cuota.id, Visita.deleted_at.is_(None)).order_by(Visita.created_at.desc()).limit(1))).scalar_one_or_none()
+            ultima = (await session.execute(select(Visita).where(Visita.tenant_id == tenant_id, Visita.cliente_id == prestamo.cliente_id, Visita.deleted_at.is_(None)).order_by(Visita.created_at.desc()).limit(1))).scalar_one_or_none()
             pagado = sum((_f(p.valor) for p in pagos), 0.0)
     return JSONResponse({
         "cuotaId": str(cuota.id), "numeroCuota": cuota.numero_cuota, "valorEsperado": _f(cuota.valor_esperado),
@@ -1036,12 +1324,13 @@ async def crear_link_pago_cuota(cartera_id: str, cuota_id: str, authorization: s
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
-            cuota = await get_owned(session, Cuota, quid)
-            prestamo = await get_owned(session, Prestamo, cuota.prestamo_id) if cuota else None
-            if cuota is None or prestamo is None or prestamo.cartera_id != cid:
+            encontrada = await _cuota_de_cartera(session, cid, quid)
+            if encontrada is None:
                 return JSONResponse({"error": "cuota no encontrada"}, status_code=404)
+            cuota, cliente_id_cuota = encontrada
         try:
-            data = await crear_link_para_cuota(cuota, cfg)
+            # Sin préstamo (suscripción) el pago necesita el cliente del link para poder registrarse.
+            data = await crear_link_para_cuota(cuota, cfg, cliente_id=cliente_id_cuota)
         except PaymentCapabilityError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
     return JSONResponse(data, status_code=201)
@@ -1093,7 +1382,7 @@ async def servir_evidencia(cliente_id: str, ev_id: str, authorization: str | Non
     auth = await _auth(authorization)
     if auth is None:
         return JSONResponse({"error": "no autorizado"}, status_code=401)
-    tenant_id, _payload = auth
+    tenant_id, payload = auth
     try:
         clid, evid = uuid.UUID(cliente_id), uuid.UUID(ev_id)
     except ValueError:
@@ -1101,7 +1390,9 @@ async def servir_evidencia(cliente_id: str, ev_id: str, authorization: str | Non
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             ev = await get_owned(session, ClienteEvidencia, evid)
-            if ev is None or ev.cliente_id != clid:
+            cli = await get_owned(session, Cliente, clid) if ev is not None and ev.cliente_id == clid else None
+            # Solo la evidencia de un cliente de una cartera que el token puede ver (agent-core#701).
+            if ev is None or cli is None or await _cartera_visible(session, tenant_id, payload, cli.cartera_id) is None:
                 return JSONResponse({"error": "evidencia no encontrada"}, status_code=404)
             ruta = await ruta_evidencia(tenant_id, ev.ruta_archivo)
             if ruta is None:
@@ -1119,7 +1410,7 @@ async def _password_ok(session, payload: dict[str, Any], password: str) -> bool:
     if not admin_id or not password:
         return False
     admin = (await session.execute(select(Admin).where(Admin.id == uuid.UUID(str(admin_id)), Admin.active.is_(True)))).scalar_one_or_none()
-    return admin is not None and verify_password(password, admin.password_hash)
+    return admin is not None and cuenta_habilitada(admin) and verify_password(password, admin.password_hash)
 
 
 async def _caja(session, tenant_id: uuid.UUID, cartera_id: uuid.UUID) -> Caja:
@@ -1140,7 +1431,7 @@ def _visita_public(v: Visita, prestamo_id: uuid.UUID | None) -> dict[str, Any]:
 
 
 def _gasto_public(g: Gasto, evidencias: list[GastoEvidencia]) -> dict[str, Any]:
-    return {"id": str(g.id), "carteraId": str(g.cartera_id), "descripcion": g.descripcion, "valor": _f(g.valor), "aprobado": g.aprobado, "aprobadoPor": str(g.aprobado_por) if g.aprobado_por else None, "estado": g.estado, "fechaHora": _d(g.fecha_hora), "evidencias": [{"id": str(e.id), "gastoId": str(e.gasto_id), "nombreOriginal": e.nombre_original or "", "mimetype": e.mimetype or "", "tamaño": e.tamano or 0, "carteraArchivo": e.ruta_archivo} for e in evidencias]}
+    return {"id": str(g.id), "carteraId": str(g.cartera_id), "descripcion": g.descripcion, "valor": _f(g.valor), "aprobado": g.aprobado, "aprobadoPor": str(g.aprobado_por) if g.aprobado_por else None, "estado": g.estado, "fechaHora": _d(g.fecha_hora), "evidencias": [{"id": str(e.id), "gastoId": str(e.gasto_id), "nombreOriginal": e.nombre_original or "", "mimetype": e.mimetype or "", "tamaño": e.tamano or 0} for e in evidencias]}
 
 
 def _nota_public(n: CarteraNota) -> dict[str, Any]:
@@ -1217,6 +1508,8 @@ async def crear_nota(cartera_id: str, request: Request, authorization: str | Non
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "anotar_notas_cartera")) is not None:
+                return denegado
             n = CarteraNota(tenant_id=tenant_id, cartera_id=cid, nota=nota, creado_por_rol="gestor", creado_por_id=uuid.UUID(str(payload["admin_id"])) if payload.get("admin_id") else None)
             session.add(n)
             await session.flush()
@@ -1362,6 +1655,8 @@ async def editar_cliente(cartera_id: str, cliente_id: str, request: Request, aut
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "actualizar_cliente")) is not None:
+                return denegado
             c = await _cliente_o_404(session, tenant_id, cid, clid)
             if c is None:
                 return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
@@ -1393,13 +1688,14 @@ async def crear_cliente(cartera_id: str, request: Request, authorization: str | 
             tope = _num(form.get("topeMaximoDeuda"))
             c = Cliente(
                 tenant_id=tenant_id, cartera_id=cid, nombre=nombre, apellido=str(form.get("apellido") or "").strip() or None,
-                telefono_whatsapp=str(form.get("telefonoWhatsapp") or "").strip() or None, negocio=str(form.get("negocio") or "").strip() or None,
+                telefono_whatsapp=telefono_para_guardar(form.get("telefonoWhatsapp")), negocio=str(form.get("negocio") or "").strip() or None,
                 tipo_documento=str(form.get("tipoDocumento") or "").strip() or None, numero_documento=str(form.get("numeroDocumento") or "").strip() or None,
                 lat=_num(form.get("latitud")), lng=_num(form.get("longitud")), lat_domicilio=_num(form.get("latitudDomicilio")), lng_domicilio=_num(form.get("longitudDomicilio")),
                 tope_maximo_deuda=Decimal(str(tope)) if tope is not None else None,
             )
             session.add(c)
             await session.flush()
+            await enlazar_cliente(session, c)
             await _guardar_evidencias_cliente(session, tenant_id, c.id, form)
             await session.flush()
             data = await _cliente_publico(session, tenant_id, c)
@@ -1421,6 +1717,8 @@ async def agregar_evidencias(cartera_id: str, cliente_id: str, request: Request,
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "actualizar_cliente")) is not None:
+                return denegado
             if await _cliente_o_404(session, tenant_id, cid, clid) is None:
                 return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
             await _guardar_evidencias_cliente(session, tenant_id, clid, form)
@@ -1431,6 +1729,11 @@ async def _aplicar_visita(session, tenant_id: uuid.UUID, cid: uuid.UUID, data: d
     """Aplica una visita (pago o no-pago). Usado por el endpoint y el sync offline."""
     pid = uuid.UUID(str(data.get("prestamoId")))
     clid = uuid.UUID(str(data.get("clienteId")))
+    # El préstamo debe ser de esa cartera y de ese cliente: la cola offline no pasa por la validación
+    # de la ruta y un id ajeno (de otra cartera del mismo negocio) movería su saldo y su caja (agent-core#701).
+    p = await _prestamo_abierto(session, pid)
+    if p is None or p.cartera_id != cid or p.cliente_id != clid:
+        raise ValueError("préstamo no encontrado")
     if str(data.get("resultado") or "no_pago") == "pago":
         valor = Decimal(str(data.get("valor") or 0))
         if valor <= 0:
@@ -1438,28 +1741,31 @@ async def _aplicar_visita(session, tenant_id: uuid.UUID, cid: uuid.UUID, data: d
         metodo = str(data.get("metodoPago") or "efectivo")
         tipo_pago = str(data.get("tipoPago") or "cuota")
         cuota_id = uuid.UUID(str(data["cuotaId"])) if data.get("cuotaId") else None
+        cuota = await _vivo(session, Cuota, cuota_id) if cuota_id else None
+        if cuota is None or cuota.prestamo_id != pid:
+            cuota_id = None  # una cuota que no es de este préstamo no se enlaza ni se marca pagada
         visita = Visita(tenant_id=tenant_id, cartera_id=cid, cliente_id=clid, fecha=date.today(), resultado="pago", valor_pagado=valor, metodo_pago=metodo, creado_por="gestor")
         session.add(visita)
         if tipo_pago == "abono":
             session.add(Abono(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, valor=valor, metodo_pago=metodo, registrado_por="gestor"))
         else:
             session.add(Pago(tenant_id=tenant_id, cliente_id=clid, prestamo_id=pid, cuota_id=cuota_id, valor=valor, metodo_pago=metodo, registrado_por="gestor"))
-            if cuota_id:
-                cuota = await get_owned(session, Cuota, cuota_id)
-                if cuota is not None and cuota.prestamo_id == pid:
-                    cuota.estatus = "pagada"
-        p = await get_owned(session, Prestamo, pid)
-        if p is not None:
-            p.saldo = p.saldo - valor
-            caja = await _caja(session, tenant_id, p.cartera_id)
-            caja.saldo_actual = caja.saldo_actual + valor
+            if cuota is not None and cuota_id:
+                cuota.estatus = "pagada"
+        p.saldo = p.saldo - valor
+        caja = await _caja(session, tenant_id, p.cartera_id)
+        caja.saldo_actual = caja.saldo_actual + valor
         await session.flush()
         _auditar(session, tenant_id, "visita", visita.id, "crear", despues={"resultado": "pago", "valor": float(valor), "tipo": tipo_pago})
         return visita
+    promesa: tuple[date, Decimal] | None = None
+    if data.get("fechaPrometida") and data.get("valorPrometido"):
+        # Se valida antes de crear la visita: un dato mal formado no deja la visita a medias.
+        promesa = (date.fromisoformat(str(data["fechaPrometida"])), Decimal(str(data["valorPrometido"])))
     visita = Visita(tenant_id=tenant_id, cartera_id=cid, cliente_id=clid, fecha=date.today(), resultado="no_pago", motivo_no_pago=data.get("motivoNoPago"), creado_por="gestor")
     session.add(visita)
-    if data.get("fechaPrometida") and data.get("valorPrometido"):
-        session.add(Promesa(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, fecha_prometida=date.fromisoformat(str(data["fechaPrometida"])), valor_prometido=Decimal(str(data["valorPrometido"])), creado_por="gestor"))
+    if promesa is not None:
+        session.add(Promesa(tenant_id=tenant_id, prestamo_id=pid, cliente_id=clid, fecha_prometida=promesa[0], valor_prometido=promesa[1], creado_por="gestor"))
     await session.flush()
     _auditar(session, tenant_id, "visita", visita.id, "crear", despues={"resultado": "no_pago"})
     return visita
@@ -1485,7 +1791,9 @@ async def visita_pago(cartera_id: str, request: Request, authorization: str | No
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
-            p = await get_owned(session, Prestamo, pid)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, _permiso_de_visita(body))) is not None:
+                return denegado
+            p = await _prestamo_abierto(session, pid)
             if p is None or p.cartera_id != cid or p.cliente_id != clid:
                 return JSONResponse({"error": "préstamo no encontrado"}, status_code=404)
             try:
@@ -1509,13 +1817,22 @@ async def visita_no_pago(cartera_id: str, request: Request, authorization: str |
     body = await request.json()
     try:
         pid = uuid.UUID(str(body.get("prestamoId")))
+        clid = uuid.UUID(str(body.get("clienteId")))
     except (TypeError, ValueError):
         return JSONResponse({"error": "datos inválidos"}, status_code=400)
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
-            visita = await _aplicar_visita(session, tenant_id, cid, {**body, "resultado": "no_pago"})
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "registrar_no_pago")) is not None:
+                return denegado
+            p = await _prestamo_abierto(session, pid)
+            if p is None or p.cartera_id != cid or p.cliente_id != clid:
+                return JSONResponse({"error": "préstamo no encontrado"}, status_code=404)
+            try:
+                visita = await _aplicar_visita(session, tenant_id, cid, {**body, "resultado": "no_pago"})
+            except ValueError:
+                return JSONResponse({"error": "datos inválidos"}, status_code=400)
             out = _visita_public(visita, pid)
     return JSONResponse(out, status_code=201)
 
@@ -1539,6 +1856,8 @@ async def registrar_gasto(cartera_id: str, request: Request, authorization: str 
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "registrar_gasto")) is not None:
+                return denegado
             g = Gasto(tenant_id=tenant_id, cartera_id=cid, descripcion=descripcion, valor=Decimal(str(valor)), creado_por=uuid.UUID(str(payload["admin_id"])) if payload.get("admin_id") else None)
             session.add(g)
             await session.flush()
@@ -1584,6 +1903,8 @@ async def crear_prestamo(cartera_id: str, request: Request, authorization: str |
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "registrar_prestamo")) is not None:
+                return denegado
             if await _cliente_o_404(session, tenant_id, cid, clid) is None:
                 return JSONResponse({"error": "cliente no encontrado"}, status_code=404)
             total = (valor * (Decimal(1) + interes / Decimal(100))).quantize(Decimal("1"))
@@ -1619,10 +1940,10 @@ async def editar_cuota(cartera_id: str, cuota_id: str, request: Request, authori
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
             if not await _password_ok(session, payload, str(body.get("password") or "")):
                 return JSONResponse({"error": "contraseña incorrecta"}, status_code=403)
-            cuota = await get_owned(session, Cuota, quid)
-            p = await get_owned(session, Prestamo, cuota.prestamo_id) if cuota else None
-            if cuota is None or p is None or p.cartera_id != cid:
+            encontrada = await _cuota_de_cartera(session, cid, quid)
+            if encontrada is None:
                 return JSONResponse({"error": "cuota no encontrada"}, status_code=404)
+            cuota, _ = encontrada
             antes = {"valor": _f(cuota.valor_esperado)}
             if body.get("valorEsperado") is not None:
                 cuota.valor_esperado = Decimal(str(body["valorEsperado"]))
@@ -1649,10 +1970,10 @@ async def eliminar_cuota(cartera_id: str, cuota_id: str, request: Request, autho
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
             if not await _password_ok(session, payload, str(body.get("password") or "")):
                 return JSONResponse({"error": "contraseña incorrecta"}, status_code=403)
-            cuota = await get_owned(session, Cuota, quid)
-            p = await get_owned(session, Prestamo, cuota.prestamo_id) if cuota else None
-            if cuota is None or p is None or p.cartera_id != cid:
+            encontrada = await _cuota_de_cartera(session, cid, quid)
+            if encontrada is None:
                 return JSONResponse({"error": "cuota no encontrada"}, status_code=404)
+            cuota, _ = encontrada
             cuota.deleted_at = datetime.now(UTC)
             _auditar(session, tenant_id, "cuota", cuota.id, "eliminar", antes={"valor": _f(cuota.valor_esperado)}, motivo=body.get("motivo"))
     return JSONResponse({"id": str(quid)})
@@ -1672,11 +1993,14 @@ async def _eliminar_movimiento(request: Request, authorization: str | None, cart
         async with get_session() as session:
             if await _cartera_visible(session, tenant_id, payload, cid) is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, f"eliminar_{entidad}")) is not None:
+                return denegado
             if not await _password_ok(session, payload, str(body.get("password") or "")):
                 return JSONResponse({"error": "contraseña incorrecta"}, status_code=403)
-            obj = await get_owned(session, modelo, rid)
-            if obj is None:
-                return JSONResponse({"error": "no encontrado"}, status_code=404)
+            obj = await _vivo(session, modelo, rid)
+            cliente = await get_owned(session, Cliente, obj.cliente_id) if obj is not None else None
+            if obj is None or cliente is None or cliente.cartera_id != cid:
+                return JSONResponse({"error": "no encontrado"}, status_code=404)  # también el de otra cartera (agent-core#701)
             obj.deleted_at = datetime.now(UTC)
             _auditar(session, tenant_id, entidad, obj.id, "eliminar", antes={"valor": _f(obj.valor)}, motivo=body.get("motivo"))
     return JSONResponse({"id": str(rid)})
@@ -1727,6 +2051,8 @@ async def generar_liquidacion(cartera_id: str, request: Request, authorization: 
             cartera = await _cartera_visible(session, tenant_id, payload, cid)
             if cartera is None:
                 return JSONResponse({"error": "cartera no encontrada"}, status_code=404)
+            if (denegado := await _exigir_permiso(session, tenant_id, payload, "generar_reporte")) is not None:
+                return denegado
             cfg = (await session.execute(select(CarteraConfig).where(CarteraConfig.tenant_id == tenant_id, CarteraConfig.cartera_id == cid))).scalar_one_or_none()
             periodo = cfg.periodo_liquidacion if cfg is not None else "diario"
         await _generar_liquidacion(cid, periodo)
@@ -1741,6 +2067,8 @@ async def generar_liquidacion(cartera_id: str, request: Request, authorization: 
 @router.get("/gestor/carteras/{cartera_id}/liquidaciones/{liquidacion_id}/export-pdf")
 async def exportar_liquidacion(cartera_id: str, liquidacion_id: str, authorization: str | None = Header(default=None)) -> Any:
     """v1: documento HTML imprimible (sin dependencia de PDF)."""
+    from html import escape
+
     from fastapi import Response
 
     auth = await _auth(authorization)
@@ -1762,8 +2090,8 @@ async def exportar_liquidacion(cartera_id: str, liquidacion_id: str, authorizati
             html = (
                 "<!doctype html><html><head><meta charset='utf-8'><title>Liquidación</title>"
                 "<style>body{font-family:sans-serif;margin:2rem}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:6px 10px}</style>"
-                f"</head><body><h1>Liquidación · {cartera.nombre if cartera else ''}</h1>"
-                f"<p>Periodo: {liq.periodo} · Fecha: {_d(liq.fecha)}</p>"
+                f"</head><body><h1>Liquidación · {escape(cartera.nombre) if cartera else ''}</h1>"
+                f"<p>Periodo: {escape(str(liq.periodo))} · Fecha: {_d(liq.fecha)}</p>"
                 "<table><tr><th>Cobrado</th><th>Prestado</th><th>Gastos</th><th>Comisión</th></tr>"
                 f"<tr><td>{_f(liq.total_cobrado):,.0f}</td><td>{_f(liq.total_prestado):,.0f}</td><td>{_f(liq.total_gastos):,.0f}</td><td>{_f(liq.comision_valor):,.0f}</td></tr></table>"
                 "</body></html>"
@@ -1779,36 +2107,87 @@ def _ack(evento_id: str, estado: str, error: str | None = None) -> dict[str, Any
     return out
 
 
+async def _notificar_actividad_campo(tenant_id: uuid.UUID, payload: dict[str, Any], tipos_aplicados: list[str]) -> None:
+    """Aviso al equipo cuando un GESTOR sincroniza eventos de campo (ADR-0099, ADR-0167).
+
+    Solo si el autor es un gestor (un dueño operando su propia app no se
+    auto-avisa) y se aplicó al menos un evento. Se agrupa por gestor y por media hora para no
+    inundar el feed; un fallo del aviso nunca afecta el ack del sync.
+    """
+    if not tipos_aplicados or str(payload.get("rol") or "") != "gestor":
+        return
+    from datetime import UTC, datetime
+
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
+
+    ahora = datetime.now(UTC)
+    ventana = f"{ahora:%Y%m%d%H}{0 if ahora.minute < 30 else 1}"
+    resumen = ", ".join(sorted(set(tipos_aplicados)))
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key="cobranza.actividad_de_campo",
+            category="cobros",
+            severity="info",
+            title="Actividad de campo",
+            body=f"Tu gestor sincronizó actividad del día: {resumen}.",
+            dedupe_key=f"cobranza_sync:{payload.get('sub') or payload.get('gestorId') or 'gestor'}:{ventana}",
+            section="pack_cobranza",
+            data={"type": "cobranza.sync", "tipos": sorted(set(tipos_aplicados))},
+            target={"entity": "cobranza", "id": None, "section": "pack_cobranza"},
+        ),
+    )
+
+
 async def _cartera_de_evento(session, tenant_id: uuid.UUID, payload: dict[str, Any], data: dict[str, Any]) -> uuid.UUID | None:
-    """Resuelve la cartera del evento: payload → cliente → única cartera visible."""
+    """Resuelve la cartera del evento: payload → cliente → única cartera visible.
+
+    Solo devuelve una cartera que el token puede ver: el `carteraId` del evento es dato del cliente y un
+    gestor no puede mandar eventos a la cartera de otro (agent-core#701)."""
+    carteras = await _carteras_visibles(session, tenant_id, payload)
+    visibles = {c.id for c in carteras}
+    cid: uuid.UUID | None = None
     if data.get("carteraId"):
         try:
-            return uuid.UUID(str(data["carteraId"]))
+            cid = uuid.UUID(str(data["carteraId"]))
         except ValueError:
             return None
-    if data.get("clienteId"):
+    elif data.get("clienteId"):
         try:
             cli = await get_owned(session, Cliente, uuid.UUID(str(data["clienteId"])))
         except ValueError:
             cli = None
         if cli is not None:
-            return cli.cartera_id
-    carteras = await _carteras_visibles(session, tenant_id, payload)
-    return carteras[0].id if len(carteras) == 1 else None
+            cid = cli.cartera_id
+    if cid is None:
+        return carteras[0].id if len(carteras) == 1 else None
+    return cid if cid in visibles else None
 
 
-async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[str, Any], tipo: str, data: dict[str, Any]) -> None:
+def _exigir_habilitado(habilitados: frozenset[str] | None, permiso: str) -> None:
+    """La cola offline aplica la misma matriz que las rutas (agent-core#690). `None` = sin matriz
+    (propietario y master: todo habilitado)."""
+    if habilitados is not None and permiso not in habilitados:
+        raise SinPermiso(permiso)
+
+
+async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[str, Any], tipo: str, data: dict[str, Any], habilitados: frozenset[str] | None = None) -> None:
     if tipo in ("visita", "pago", "abono"):
-        cid = await _cartera_de_evento(session, tenant_id, payload, data)
-        if cid is None:
-            raise ValueError("no se pudo resolver la cartera del evento")
         d = dict(data)
         if tipo == "pago":
             d["resultado"], d["tipoPago"] = "pago", "cuota"
         elif tipo == "abono":
             d["resultado"], d["tipoPago"] = "pago", "abono"
+        # El permiso va antes que la cartera, como en el gasto: sin permiso el evento no se guarda y
+        # se puede reintentar; un error de datos sí queda registrado (agent-core#705).
+        _exigir_habilitado(habilitados, _permiso_de_visita(d))
+        cid = await _cartera_de_evento(session, tenant_id, payload, data)
+        if cid is None:
+            raise ValueError("no se pudo resolver la cartera del evento")
         await _aplicar_visita(session, tenant_id, cid, d)
     elif tipo == "gasto":
+        _exigir_habilitado(habilitados, "registrar_gasto")
         cid = await _cartera_de_evento(session, tenant_id, payload, data)
         if cid is None:
             raise ValueError("no se pudo resolver la cartera del gasto")
@@ -1831,7 +2210,11 @@ async def _aplicar_evento_offline(session, tenant_id: uuid.UUID, payload: dict[s
             raise ValueError("no se pudo resolver la cartera de la trayectoria")
         session.add(CarteraOptimizadaLog(tenant_id=tenant_id, cartera_id=cid, fecha=date.today(), orden_clientes=data.get("puntos") or [], tipo="real"))
     elif tipo == "cambio_cliente":
+        _exigir_habilitado(habilitados, "actualizar_cliente")
         clid = uuid.UUID(str(data.get("clienteId")))
+        cli = await get_owned(session, Cliente, clid)
+        if cli is None or cli.deleted_at is not None or await _cartera_visible(session, tenant_id, payload, cli.cartera_id) is None:
+            raise ValueError("cliente no encontrado")
         campos = data.get("input") or data.get("campos") or {}
         session.add(CambioCliente(tenant_id=tenant_id, cliente_id=clid, campos_propuestos=campos, estado="pendiente", solicitado_por_rol="gestor"))
     else:
@@ -1848,8 +2231,12 @@ async def sync_offline(request: Request, authorization: str | None = Header(defa
     body = await request.json()
     eventos = body.get("eventos") or []
     acks: list[dict[str, Any]] = []
+    tipos_aplicados: list[str] = []
     async with tenant_scope(tenant_id):
         async with get_session() as session:
+            habilitados = await _permisos_habilitados(session, tenant_id, payload) if payload.get("rol") == "gestor" else None
+            # El id lo genera cada app: dos cuentas pueden repetirlo sin ser el mismo evento (agent-core#705).
+            actor = actor_del_token(payload)
             for ev in eventos:
                 eid = str(ev.get("eventoIdCliente") or "").strip()
                 tipo = str(ev.get("tipoEvento") or "").strip()
@@ -1857,19 +2244,26 @@ async def sync_offline(request: Request, authorization: str | None = Header(defa
                 if not eid or not tipo:
                     acks.append(_ack(eid, "error", "evento inválido"))
                     continue
-                existe = (await session.execute(select(SyncEvento.id).where(SyncEvento.tenant_id == tenant_id, SyncEvento.evento_id_cliente == eid))).scalar_one_or_none()
+                # `""` = evento de antes de separar por cuenta: no se puede saber de quién es y aplicarlo otra vez duplicaría el pago.
+                existe = (await session.execute(select(SyncEvento.id).where(SyncEvento.tenant_id == tenant_id, SyncEvento.evento_id_cliente == eid, SyncEvento.actor.in_((actor, ""))).limit(1))).scalar_one_or_none()
                 if existe is not None:
                     acks.append(_ack(eid, "duplicado"))
                     continue
                 try:
                     async with session.begin_nested():
-                        await _aplicar_evento_offline(session, tenant_id, payload, tipo, data)
-                    session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data))
+                        await _aplicar_evento_offline(session, tenant_id, payload, tipo, data, habilitados)
+                    session.add(SyncEvento(tenant_id=tenant_id, actor=actor, evento_id_cliente=eid, tipo=tipo, payload=data))
                     acks.append(_ack(eid, "sincronizado"))
+                    tipos_aplicados.append(tipo)
+                except SinPermiso as exc:
+                    # Sin permiso no se registra el evento: la app lo conserva para reintentar y, si el
+                    # propietario habilita el permiso, el mismo evento se aplica (no queda como duplicado).
+                    acks.append(_ack(eid, "error", str(exc)))
                 except Exception as exc:  # evento inválido: no tumba el lote
-                    session.add(SyncEvento(tenant_id=tenant_id, evento_id_cliente=eid, tipo=tipo, payload=data, estado="error"))
+                    session.add(SyncEvento(tenant_id=tenant_id, actor=actor, evento_id_cliente=eid, tipo=tipo, payload=data, estado="error"))
                     log.warning("sync_offline_error", tipo=tipo, error=type(exc).__name__)
                     acks.append(_ack(eid, "error", str(exc)))
+    await _notificar_actividad_campo(tenant_id, payload, tipos_aplicados)
     return JSONResponse(acks)
 
 

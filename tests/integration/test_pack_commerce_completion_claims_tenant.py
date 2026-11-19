@@ -1,7 +1,8 @@
-"""`crm_completion_check` resuelve `completion_claims_disabled`/
+"""Las afirmaciones de pack-commerce (antes `crm_completion_check`) resuelven
+`completion_claims_disabled`/
 `completion_claims_custom` desde la config REAL del tenant (ADR-0025),
 no solo mockeada -- complementa los tests puros de
-`tests/test_pack_commerce_completion_guardrail.py`.
+`tests/test_pack_commerce_afirmaciones.py`.
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from conftest import TEST_ALPHA_ID
+from conftest import TEST_ALPHA_ID, TEST_BETA_ID
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -20,6 +21,14 @@ pytestmark = [
 ]
 
 T1 = TEST_ALPHA_ID
+T2 = TEST_BETA_ID
+
+
+async def _verificar(module, texto: str, resultados: list[dict]):
+    """El texto pasa por el verificador del core con las afirmaciones del pack."""
+    from core.orchestrator.verificador import Evidencia, verificar
+
+    return verificar(texto, Evidencia.desde(resultados), await module._afirmaciones())
 
 
 def _tool_result(name: str, **fields) -> dict:
@@ -59,12 +68,17 @@ async def test_completion_claims_disabled_desde_config_real():
             )
 
             module = CRMModule()
-            verdict = await module._completion_guardrail("Te envío el link de pago ahora mismo.", [])
-            assert verdict.passed, verdict.reason
+            verdict = await _verificar(module, "Te envío el link de pago ahora mismo.", [])
+            assert verdict.passed, verdict.motivo
 
             # otro claim sigue vigente -- desactivar uno no apaga los demás.
-            verdict2 = await module._completion_guardrail("Cerré tu pedido, ya está confirmado.", [])
+            verdict2 = await _verificar(module, "Cerré tu pedido, ya está confirmado.", [])
             assert not verdict2.passed
+
+            # La config de T1 no alcanza a otro negocio (auditor-multitenant).
+            async with tenant_scope(T2):
+                verdict3 = await _verificar(module, "Te envío el link de pago ahora mismo.", [])
+            assert not verdict3.passed
         finally:
             await _delete_pack_commerce_config()
 
@@ -85,13 +99,13 @@ async def test_completion_claims_custom_desde_config_real():
             )
 
             module = CRMModule()
-            verdict = await module._completion_guardrail("Listo, ya agendé tu cita.", [])
+            verdict = await _verificar(module, "Listo, ya agendé tu cita.", [])
             assert not verdict.passed
-            assert "agenda_cita" in verdict.reason
+            assert "agenda_cita" in verdict.afirmacion
 
-            verdict2 = await module._completion_guardrail(
+            verdict2 = await _verificar(module, 
                 "Listo, ya agendé tu cita.", [_tool_result("crear_cita", status="ok")]
             )
-            assert verdict2.passed, verdict2.reason
+            assert verdict2.passed, verdict2.motivo
         finally:
             await _delete_pack_commerce_config()

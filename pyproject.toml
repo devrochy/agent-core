@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-core"
-version = "0.3.0"
+version = "0.4.0"
 description = "Framework para construir asistentes IA empresariales como monolitos modulares con plugins embebidos"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -27,6 +27,9 @@ dependencies = [
     # Cache / colas
     "redis>=5.0",
     "celery>=5.4",
+    # kombu 5.7.0 importa `packaging` (transporte de redis) sin declararlo; la imagen instala con pip
+    # sin lock y quedaba sin él (2026-11-03: worker y beat de test en bucle de reinicios).
+    "packaging>=24.0",
     # Config / validación
     "pydantic>=2.8",
     "pydantic-settings>=2.4",
@@ -47,6 +50,12 @@ dependencies = [
     "sentry-sdk>=2.69.2",
     # Utilidades (QR de pago, ADR-0067)
     "qrcode[png]>=7.4",
+    # Catálogo del centro de pruebas (SPEC-30): YAML de solvershub-docs
+    "pyyaml>=6.0",
+    # Autoinstrumentación de trazas (ADR-0188): misma serie 0.66bN que semantic-conventions del SDK.
+    "opentelemetry-instrumentation-fastapi>=0.66b1",
+    "opentelemetry-instrumentation-sqlalchemy>=0.66b1",
+    "opentelemetry-instrumentation-httpx>=0.66b1",
 ]
 
 [project.optional-dependencies]
@@ -58,8 +67,16 @@ waweb = ["neonize>=0.5"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    "mypy>=1.11",
+    # Unitarios en paralelo en el CI (`-n`); la integración sigue en serie hasta que
+    # cada worker tenga su base y su Redis (ADR-0120, adenda 2026-10-28).
+    "pytest-xdist>=3.6",
+    # La serie 2.x de mypy (2.3/2.4) crashea con INTERNAL ERROR en este repo
+    # (metastore/sqlite y plugin pydantic). Se fija a 1.x estable. El gate de
+    # tipos en CI usa basedpyright (no depende de sqlite del intérprete).
+    "mypy>=1.11,<2",
+    "basedpyright>=1.30",
     "ruff>=0.6",
+    "import-linter>=2.0",
 ]
 
 [project.scripts]
@@ -111,3 +128,8 @@ testpaths = ["tests"]
 # todas las corrutinas corren en un único loop de SESIÓN, no uno por test/módulo.
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
+# Subconjunto crítico de integración que corre en las PRs a develop (ADR-0120).
+markers = [
+    "aislamiento: RLS, aislamiento entre tenants, webhooks e IDOR (nivel rápido del CI)",
+    "pausa_real: el test usa la pausa del negocio y del cliente de verdad (sin el fixture `_sin_pausa_automatica`)",
+]

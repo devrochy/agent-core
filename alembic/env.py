@@ -47,7 +47,16 @@ def run_migrations_online() -> None:
         # y `alembic check` reflejan también schemas que no son `public` -- sin
         # esto, cualquier tabla fuera de `public` aparece como "falta crear" aunque
         # ya exista (falso positivo de la comparación, no un drift real).
-        context.configure(connection=connection, target_metadata=target_metadata, include_schemas=True)
+        # transaction_per_migration=True: cada revisión se confirma por separado. Sin esto, una
+        # tanda de migraciones corre en UNA transacción y los ACCESS EXCLUSIVE de un ALTER sobre
+        # una tabla grande (conversations, usage_ledger…) quedan tomados hasta el final de la
+        # tanda (HU-AOS-02). Un `SET LOCAL lock_timeout` también vale solo para su revisión.
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            include_schemas=True,
+            transaction_per_migration=True,
+        )
         with context.begin_transaction():
             context.run_migrations()
 

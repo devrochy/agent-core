@@ -25,40 +25,52 @@ async def check_tokens_expiry() -> None:
     from core.db.admin_enum import admin_meta_connection_ids
     from core.db.models import MetaConnection
     from core.db.session import get_session
-    from core.gateway.meta_byok import CLOUD_API_ACCESS_TOKEN_KIND
-    from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.gateway.meta_token_store import get_token_expires_at
-    from core.shared.alerts import send_alert
+    from core.gateway.meta_credentials import access_token_expires_at
+    from core.shared.alerts import send_alert_once
     from core.shared.tenant import tenant_scope
 
     now = datetime.now(UTC)
     soon = now + timedelta(days=_WARN_DAYS)
 
-    for connection_id, tenant_id in await admin_meta_connection_ids(["connected", "degraded"]):
+    # `error` también: un token a menos de 7 días de vencer ya pone la conexión en `error`
+    # (`meta_health.decide_status`), y desde ADR-0101 sigue recibiendo mensajes, así que el
+    # aviso de vencimiento es lo que lo hace visible. Tenga o no números (ADR-0102): un
+    # reintento BYOK fallido se queda con el número, y la que lo pierde es la sana.
+    for connection_id, tenant_id in await admin_meta_connection_ids(["connected", "degraded", "error"]):
         try:
             async with tenant_scope(tenant_id):
                 async with get_session() as session:
                     connection = await session.get(MetaConnection, connection_id)
-                    if connection is None:
+                    if connection is None or connection.tenant_id != tenant_id:
                         continue
-                    subject_byok = connection.meta_app_id
-                    subject_es = connection.business_id or str(connection.id)
-                expires_at = await get_token_expires_at(
-                    connection_id, CLOUD_API_ACCESS_TOKEN_KIND, subject_byok, tenant_id=tenant_id
-                )
-                if expires_at is None:
-                    expires_at = await get_token_expires_at(
-                        connection_id, TOKEN_KIND, subject_es, tenant_id=tenant_id
-                    )
+                # Solo el token que la conexión usa según su `origin` (ADR-0094): uno
+                # viejo de otro origen no debe disparar alertas críticas falsas.
+                expires_at = await access_token_expires_at(connection)
             if expires_at is None or expires_at > soon:
                 continue  # token permanente, sin dato, o con margen
             expired = expires_at <= now
-            await send_alert(
-                "Access token de Meta por vencer",
+            # Mismas claves que las alertas del cron de salud, así cada condición avisa una vez
+            # al día por conexión aunque la vean los dos: un token vencido es el "inválido" de
+            # `debug_token`, y va aparte del "por vencer" para que uno de ayer no lo calle.
+            await send_alert_once(
+                f"meta_token_{'invalido' if expired else 'por_vencer'}:{connection_id}",
+                "Access token de Meta vencido" if expired else "Access token de Meta por vencer",
                 f"La conexión {connection_id} (tenant {tenant_id}) tiene el access token "
                 f"{'VENCIDO' if expired else 'por vencer'} ({expires_at.isoformat()}). "
                 "Reconectá la app en /admin/conexiones para no dejar de responder.",
                 severity="critical" if expired else "warning",
+            )
+            from core.notifications import catalog
+            from core.notifications.service import notify_standalone
+
+            dia = now.date().isoformat()
+            await notify_standalone(
+                tenant_id,
+                catalog.conexion_sin_acceso(connection_id, vencido=True, dia=dia)
+                if expired
+                else catalog.conexion_token_por_vencer(
+                    connection_id, vence=expires_at.date().isoformat(), dia=dia
+                ),
             )
         except Exception:
             log.exception("meta_token_expiry_check_error", connection_id=str(connection_id))

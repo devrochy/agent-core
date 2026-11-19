@@ -1,11 +1,17 @@
 """Plan y consumo (lectura): `GET /api/v1/admin/plan`.
 
-Plan activo, consumo por métrica, historial de pagos y catálogo de planes.
+Plan activo, consumo por métrica, historial de pagos y catálogo de planes. Desde HU-BILL-05
+(D-35, ADR-0142) el consumo trae `agentes` y `colaboradores`, y `credit` el crédito mensual.
 Mismos datos que la vista SSR `/admin/plan` (ADR-0045).
+
+Desde HU-SH-04 (ADR-0123) es también el **canal panel** del cobro de la plataforma: muestra el
+período que toca pagar (`cobro`) con su referencia, si ya lo pagó el asistente, y
+`POST /subscribe` responde 409 `ya_pagado` en vez de cobrar dos veces el mismo período.
 """
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
@@ -15,6 +21,8 @@ from pydantic import BaseModel
 from core.admin.plan_view import (
     billing_payments,
     billing_usage,
+    cobro_del_periodo,
+    credito_del_mes,
     subscription_overview_or_none,
 )
 from core.api.deps import Principal, require
@@ -35,6 +43,39 @@ class PlanInfo(BaseModel):
     current: bool
     limits: dict[str, int | None]
     features: dict[str, Any]
+    # Crédito mensual de uso del plan (D-35; 1 crédito = COP 10).
+    monthly_credits: int | None = None
+
+
+class CreditByAgent(BaseModel):
+    """Créditos del mes de un agente. `agent_id`/`name` null: consumo sin agente (turnos de antes
+    del runtime v3 y fees de notas de voz, imágenes y plantillas)."""
+
+    agent_id: uuid.UUID | None = None
+    name: str | None = None
+    used: float
+
+
+class CreditUsage(BaseModel):
+    """Crédito mensual del plan (D-35, ADR-0142; medición ADR-0144). `used` en créditos con
+    décimas (1 crédito = COP 10), `percent` sin tope de 100 (puede pasarse: hoy solo se avisa).
+    `used`/`percent` son `null` si no se pudo medir: el panel muestra «medición pendiente».
+    El mes de consumo es `[period_start, period_end)`, alineado con el ciclo de la suscripción."""
+
+    limit: int
+    used: float | None = None
+    percent: float | None = None
+    period_start: datetime | None = None
+    period_end: datetime | None = None
+    # Desglose por concepto: llm_turn | stt | vision | template_sent.
+    by_concept: dict[str, float] | None = None
+    # Por agente (no por instancia), mayor consumo primero y el renglón sin agente al final.
+    # Como mucho `MAX_AGENTES_EN_CREDITO` agentes con nombre; `by_agent_truncated` avisa si hay más.
+    by_agent: list[CreditByAgent] | None = None
+    by_agent_truncated: bool = False
+
+
+MAX_AGENTES_EN_CREDITO = 50
 
 
 class PlanOverview(BaseModel):
@@ -54,6 +95,22 @@ class Payment(BaseModel):
     created_at: datetime
     paid_at: datetime | None
     checkout_url: str | None
+    # HU-SH-04: referencia del período que cubre (`plat-<slug>-<AAAAMM>`).
+    periodo: str | None = None
+
+
+class Cobro(BaseModel):
+    """El período que toca pagar del plan actual (HU-SH-04, ADR-0123)."""
+
+    referencia: str
+    inicio: datetime
+    fin: datetime
+    plan_id: str
+    monto_cop: int
+    estado: str  # pendiente | pagado
+    pagado_por: str | None = None  # asistente | panel
+    # Al día: desde cuándo se puede pagar el período siguiente.
+    disponible_desde: datetime | None = None
 
 
 class PlanResponse(BaseModel):
@@ -61,20 +118,48 @@ class PlanResponse(BaseModel):
     usage: list[UsageMetric]
     payments: list[Payment]
     plans: list[PlanInfo]
+    cobro: Cobro | None = None
+    # Crédito mensual del plan actual (null sin plan o si el plan no define crédito).
+    credit: CreditUsage | None = None
+    # El negocio lo creó el asistente de SolversHub: su plan se cambia por el asistente.
+    plan_por_el_asistente: bool = False
 
 
 @router.get("", response_model=PlanResponse)
 async def get_plan(
     principal: Annotated[Principal, Depends(require("plan"))],
 ) -> PlanResponse:
+    from core.billing.plans import get_plan as plan_del_catalogo
     from core.billing.plans import public_plans
 
     tenant_id = principal.tenant_id
     overview = await subscription_overview_or_none(tenant_id) if tenant_id else None
     usage = await billing_usage(tenant_id, overview) if tenant_id else []
     payments = await billing_payments(tenant_id) if tenant_id else []
+    cobro, por_el_asistente = await cobro_del_periodo(tenant_id) if tenant_id else (None, False)
 
     current_plan_id = overview.plan_id if overview else None
+    plan_actual = plan_del_catalogo(current_plan_id) if current_plan_id else None
+    credito = None
+    if plan_actual is not None and plan_actual.monthly_credits is not None:
+        limite = plan_actual.monthly_credits
+        medido = await credito_del_mes(tenant_id, overview) if tenant_id else None
+        if medido is None:
+            credito = CreditUsage(limit=limite)
+        else:
+            con_nombre = [a for a in medido["by_agent"] if a["agent_id"] is not None]
+            sin_agente = [a for a in medido["by_agent"] if a["agent_id"] is None]
+            agentes = con_nombre[:MAX_AGENTES_EN_CREDITO] + sin_agente
+            credito = CreditUsage(
+                limit=limite,
+                used=round(medido["used"], 1),
+                percent=(100.0 if limite <= 0 else round(medido["used"] * 100.0 / limite, 1)),
+                period_start=medido["period_start"],
+                period_end=medido["period_end"],
+                by_concept={k: round(v, 1) for k, v in medido["by_concept"].items()},
+                by_agent=[CreditByAgent(**a) for a in agentes],
+                by_agent_truncated=len(con_nombre) > MAX_AGENTES_EN_CREDITO,
+            )
     return PlanResponse(
         overview=(
             PlanOverview(
@@ -99,9 +184,13 @@ async def get_plan(
                 current=plan.id == current_plan_id,
                 limits=plan.limits,
                 features=plan.features,
+                monthly_credits=plan.monthly_credits,
             )
             for plan in public_plans()
         ],
+        cobro=Cobro(**cobro) if cobro else None,
+        credit=credito,
+        plan_por_el_asistente=por_el_asistente,
     )
 
 
@@ -118,8 +207,11 @@ async def subscribe_to_plan(
     payload: SubscribeRequest,
     principal: Annotated[Principal, Depends(require("plan", write=True))],
 ) -> SubscribeResponse:
-    """Inicia la suscripción a un plan pago: devuelve la URL del checkout."""
-    from core.billing.checkout import start_subscription
+    """Link de pago del período que toca pagar (plan actual) o de un plan nuevo.
+
+    409 `ya_pagado`: ese período ya está pagado (por el panel o por el asistente).
+    409 `cambio_en_el_asistente`: el negocio lo creó el asistente; su plan se cambia ahí."""
+    from core.billing.checkout import CambioDePlanEnElAsistente, PeriodoYaPagado, start_subscription
     from core.billing.plans import get_plan
 
     if get_plan(payload.plan_id) is None:
@@ -127,9 +219,12 @@ async def subscribe_to_plan(
 
     try:
         checkout_url = await start_subscription(payload.plan_id)
+    except (PeriodoYaPagado, CambioDePlanEnElAsistente) as exc:
+        raise ApiError(409, exc.code, str(exc)) from exc
     except Exception as exc:
         log.exception("plan_subscribe_failed", plan=payload.plan_id)
-        raise ApiError(502, "checkout_failed", f"No se pudo iniciar el pago: {str(exc)[:140]}") from exc
+        # El detalle (respuesta del proveedor, ids) va al log, no al cliente.
+        raise ApiError(502, "checkout_failed", "No se pudo iniciar el pago. Intenta de nuevo en unos minutos.") from exc
     if checkout_url is None:
         raise ApiError.bad_request(
             "La pasarela de pago no está configurada.", "checkout_unavailable"

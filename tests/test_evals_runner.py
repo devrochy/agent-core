@@ -101,3 +101,73 @@ def test_build_messages_multiples_tool_calls_en_un_turno_tienen_ids_distintos():
     assert tool_a.tool_call_id in ids
     assert tool_b.tool_call_id in ids
     assert tool_a.tool_call_id != tool_b.tool_call_id
+
+
+# --- `must_not_call_tools`: solo cuentan las tools listadas -------------------
+#
+# Hallazgo (escenario 17 `limite_de_altas` del tenant solvershub): la aserción
+# `["crear_pedido"]` fallaba por un `set_conversation_note`, porque el runner
+# trataba cualquier valor truthy como «no debe llamar ninguna tool».
+
+from runner import _falla_tools_prohibidas  # noqa: E402
+
+
+def test_lista_ignora_tools_que_no_estan_en_ella():
+    assert _falla_tools_prohibidas(["crear_pedido"], ["set_conversation_note"]) == ""
+
+
+def test_lista_falla_si_llama_una_tool_listada():
+    falla = _falla_tools_prohibidas(["crear_pedido"], ["set_conversation_note", "crear_pedido"])
+    assert "['crear_pedido']" in falla
+    assert "set_conversation_note" in falla  # el detalle muestra todo lo que llamó
+
+
+def test_lista_sin_llamadas_pasa():
+    assert _falla_tools_prohibidas(["crear_pedido"], []) == ""
+
+
+def test_true_sigue_prohibiendo_cualquier_tool():
+    """Regresión: los escenarios del framework usan `true` (01, 03, 04, 21-23)."""
+    assert _falla_tools_prohibidas(True, ["set_conversation_note"]) != ""
+    assert _falla_tools_prohibidas(True, []) == ""
+
+
+def test_false_lista_vacia_y_ausente_no_restringen():
+    """`false` (12, 25, 32), `[]` y la clave ausente no prohíben nada."""
+    for valor in (False, []):
+        assert _falla_tools_prohibidas(valor, ["crear_pedido"]) == ""
+
+
+def test_valor_invalido_falla_en_vez_de_pasar_en_silencio():
+    for valor in ("crear_pedido", 1, None, [1]):
+        assert "inválido" in _falla_tools_prohibidas(valor, [])
+
+
+# --------------------------------------------------------------- spec y conexiones por escenario (HU-CONN-26)
+def test_spec_del_escenario_carga_el_de_evals_specs_y_sin_campo_deja_el_neutro():
+    import pytest
+    from runner import _load_spec, _spec_del_escenario
+
+    neutro = _load_spec(None)
+    assert _spec_del_escenario({}, neutro, None) is neutro
+    cobranza = _spec_del_escenario({"spec": "cobranza"}, neutro, None)
+    assert cobranza.packs == ["pack_cobranza"]
+    assert "cobranza" in [p.name for p in cobranza.playbooks]
+    with pytest.raises(ValueError):
+        _spec_del_escenario({"spec": "cobranza"}, neutro, "un-negocio")  # con --tenant manda el spec real
+    with pytest.raises(ValueError):
+        _spec_del_escenario({"spec": "../framework"}, neutro, None)
+
+
+async def test_predicado_recibe_los_tipos_de_conexion_del_escenario():
+    import uuid
+    from types import SimpleNamespace
+
+    from runner import _predicado_ok
+
+    from core.tools.core_skill import hay_canal_que_pide_contacto
+
+    tool = SimpleNamespace(connection_predicate=hay_canal_que_pide_contacto)
+    tid = uuid.uuid4()
+    assert await _predicado_ok(tool, tid, {"telegram"}) is True
+    assert await _predicado_ok(tool, tid, set()) is False

@@ -22,11 +22,11 @@ pytestmark = [
 
 
 async def _setup_connected_tenant():
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, WabaAccount
     from core.db.session import get_session
     from core.gateway import meta_token_store
     from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("plantillas-api")
@@ -43,7 +43,7 @@ async def _setup_connected_tenant():
             connection = MetaConnection(
                 tenant_id=tid,
                 channel="whatsapp",
-                meta_app_id="app-embedded-signup",
+                origin="embedded_signup", meta_app_id="app-embedded-signup",
                 status="connected",
                 business_id="biz-plantillas",
             )
@@ -148,11 +148,17 @@ async def test_crear_sincronizar_webhook_y_borrar(app_client, monkeypatch):
     row = rows[0]
     assert row.meta_template_id == meta_template_id
 
-    # 3. Sync manual respeta el lock -- ya se sincronizó al listar.
+    # 3. Sync manual: no espera el turno horario del listado (P0 de pruebas 2026-10-17), pero
+    # a lo sumo una vez por minuto.
     r_sync = await app_client.post(
         f"/api/v1/admin/meta/connections/{connection_id}/templates/sync", headers=headers
     )
-    assert r_sync.status_code == 400
+    assert r_sync.status_code == 204, r_sync.text
+    r_sync_2 = await app_client.post(
+        f"/api/v1/admin/meta/connections/{connection_id}/templates/sync", headers=headers
+    )
+    assert r_sync_2.status_code == 429
+    assert r_sync_2.json()["error"]["code"] == "sync_rate_limited"
 
     # 4. Webhook de estado actualiza el listado (fuente de verdad real).
     from core.gateway.meta_template_webhooks import handle_template_status_update
@@ -165,7 +171,8 @@ async def test_crear_sincronizar_webhook_y_borrar(app_client, monkeypatch):
                 "reason": "SCAM",
                 "recommendation": "Revisá el contenido del mensaje",
             },
-        }
+        },
+        expected_tenant_id=tid,
     )
 
     async with tenant_scope(tid):

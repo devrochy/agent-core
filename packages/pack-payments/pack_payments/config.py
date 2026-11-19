@@ -19,4 +19,6 @@ class PaymentsConfig(BasePluginConfig):
     events_secret: SecretStr = Field(..., description="Secreto de eventos de Wompi (para validar webhooks)")
     sandbox: bool = Field(default=True, description="Usar el ambiente de pruebas de Wompi")
     currency: str = Field(default="COP", description="Moneda ISO-4217 de los cobros")
-    link_expira_horas: int = Field(default=24, description="Horas de vigencia del link de pago generado")
+    link_expira_horas: int = Field(
+        default=24, ge=1, le=720, description="Horas de vigencia del link de pago generado"
+    )

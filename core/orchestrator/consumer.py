@@ -3,11 +3,12 @@
 Idempotencia Capa 2: consumer group con reintentos limitados y dead-letter.
 Flujo por mensaje:
   1. Resolver/crear customer y conversation.
-  2. Kill-switch (global > cliente > conversación): guardar mensaje, NO responder.
-  3. Persistir inbound (idempotency_key = message_id del canal).
-  4. Conversación escalada => solo guardar (la atiende un humano).
-  5. Keywords de escalamiento => escalar + respuesta fija.
-  6. Velocidad: inmediato => procesar ya; si no => schedule_debounce
+  2. Persistir inbound (idempotency_key = message_id del canal): SIEMPRE, aunque se bloquee.
+  3. Políticas de entrada del kernel (`core.kernel.ingress.politicas_de_entrada`, HU-AOS-10):
+     conexión pausada (ADR-0122), kill-switch (negocio > cliente > conversación) o conversación
+     escalada => solo guardar; keywords de escalamiento => escalar + respuesta fija; fuera de
+     horario => mensaje configurado. Cada bloqueo deja su decisión en `core_decisions`.
+  4. Velocidad: inmediato => procesar ya; si no => schedule_debounce
      (el ACK se hace YA — el sorted set pasa a ser el dueño del turno).
 """
 
@@ -15,15 +16,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
+import socket
 import uuid
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 
-from core.agents.responses import load_response
-from core.agents.spec import load_active_spec
 from core.billing.enforcement import QuotaExceeded, enforce_metric
 from core.config import DEBOUNCE_DELAY_MS, get_settings
 from core.db.models import (
@@ -37,18 +39,21 @@ from core.db.models import (
     utcnow,
 )
 from core.db.session import get_session
-from core.gateway.sender import send_to_conversation
+from core.gateway.conexion_canonica import asegurar_conexion_en_vuelo
 from core.gateway.webhooks import INBOUND_STREAM
+from core.kernel.decisions import anotar_entrada, en_turno
+from core.kernel.egress import entregar
+from core.kernel.ingress import politicas_de_entrada
+from core.kernel.procedures.ejecucion import entrada_sin_llm
 from core.memory.working import get_redis
 from core.orchestrator.debounce import schedule_debounce
-from core.orchestrator.escalation import (
-    ESCALATION_REPLY,
-    escalate,
-    matches_escalation_keywords,
-    within_business_hours,
-)
 from core.orchestrator.loop import process_conversation
-from core.orchestrator.turn_gate import run_turn
+from core.orchestrator.retencion_streams import recortar_dlq, recortar_inbound
+from core.orchestrator.ruta_de_conversacion import (
+    actualizar_ruta,
+    buscar_conversacion_abierta,
+)
+from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
 from core.shared.events import ON_CONVERSATION_STARTED, ON_MESSAGE_RECEIVED, event_bus
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
@@ -56,9 +61,32 @@ from core.shared.tenant import get_current_tenant_id, tenant_scope
 log = get_logger(__name__)
 
 GROUP = "orchestrator-group"
-CONSUMER = "orchestrator-1"
+
+
+def consumer_name() -> str:
+    """Nombre de consumer único por réplica (HU-ARCH-06).
+
+    Antes era `orchestrator-1` fijo: con dos réplicas, ambas compartían nombre y
+    el reclamo de pendientes (`XAUTOCLAIM`) no podía distinguir cuál seguía vivo.
+    """
+    return f"orchestrator-{socket.gethostname()}-{os.getpid()}"[:120]
+
+
+CONSUMER = consumer_name()
 MAX_DELIVERIES = 3
 DEAD_LETTER_STREAM = "agent_core:inbound:dlq"
+# Campo de las entradas que siembra el escenario «Mensajes fallidos» del centro de pruebas (HU-QA-13):
+# se ven en la bandeja del negocio de prueba, pero no cuentan como fallos reales para las alertas.
+MARCA_ESCENARIO = "qa_escenario"
+# Cada cuánto se intenta el reclamo de pendientes huérfanos (HU-ARCH-06).
+RECLAIM_EVERY_S = 30.0
+# Cada cuánto se recortan el stream de entrada y la DLQ (ADR-0053).
+TRIM_EVERY_S = 600.0
+# Resultado del procesamiento de un inbound (HU-ARCH-06).
+TURN_PROCESSED = "processed"
+TURN_DUPLICATE = "duplicate"
+TURN_BUSY = "busy"
+TURN_SKIPPED = "skipped"
 
 
 async def ensure_group() -> None:
@@ -78,11 +106,20 @@ async def consume_loop() -> None:
     procesa de forma concurrente acotada por el gate (global + por tenant).
     Así el mensaje de un tenant B se programa aunque A tenga cientos por delante:
     el cupo de A (max_turns_per_tenant) deja slots globales libres para B.
+
+    HU-ARCH-06: además de los mensajes NUEVOS, cada `RECLAIM_EVERY_S` se reclaman
+    con `XAUTOCLAIM` los pendientes huérfanos (crash, deploy, turno colgado), para
+    que ningún mensaje quede sin procesar ni sin llegar a la DLQ.
+
+    Retención (ADR-0053): cada `TRIM_EVERY_S` se recorta lo ya procesado del
+    stream y lo vencido de la DLQ (`_recortar_streams`).
     """
     await ensure_group()
     r = get_redis()
     pending: set[asyncio.Task[None]] = set()
     max_inflight = get_settings().max_concurrent_turns * 5
+    last_reclaim = 0.0
+    last_trim = 0.0
     while True:
         try:
             batches = await r.xreadgroup(GROUP, CONSUMER, {INBOUND_STREAM: ">"}, count=10, block=2000)
@@ -91,6 +128,13 @@ async def consume_loop() -> None:
                     task = asyncio.create_task(_handle_entry(entry_id, fields))
                     pending.add(task)
                     task.add_done_callback(pending.discard)
+            now = asyncio.get_running_loop().time()
+            if now - last_reclaim >= RECLAIM_EVERY_S:
+                last_reclaim = now
+                await _reclaim_pending(r, pending)
+            if now - last_trim >= TRIM_EVERY_S:
+                last_trim = now
+                await _recortar_streams(r)
             if len(pending) >= max_inflight:
                 _, pending = await asyncio.wait(
                     pending, timeout=2, return_when=asyncio.FIRST_COMPLETED
@@ -108,81 +152,290 @@ async def consume_loop() -> None:
             await asyncio.sleep(2)
 
 
-async def _handle_entry(entry_id: str, fields: dict[str, str]) -> None:
+async def _reclaim_pending(r: Any, pending: set[asyncio.Task[None]]) -> None:
+    """Reclama pendientes con idle > `inbound_reclaim_idle_ms` (HU-ARCH-06).
+
+    El XAUTOCLAIM es una llamada corta; el procesamiento de cada entrada
+    reclamada se agenda como task concurrente, igual que el camino de mensajes
+    nuevos. Un pendiente que OTRO worker sigue procesando se salta en
+    `_claim_event` (claim reciente = "busy") sin ACK.
+    """
+    settings = get_settings()
+    try:
+        result = await r.xautoclaim(
+            INBOUND_STREAM,
+            GROUP,
+            CONSUMER,
+            min_idle_time=settings.inbound_reclaim_idle_ms,
+            start_id="0-0",
+            count=10,
+        )
+    except Exception:
+        log.exception("inbound_reclaim_failed")
+        return
+    # redis-py: [next_cursor, entries] (>=5.x) o [next_cursor, entries, deleted] (7.x).
+    entries = result[1] if isinstance(result, (list, tuple)) and len(result) >= 2 else []
+    for item in entries or []:
+        try:
+            entry_id, fields = item[0], item[1]
+        except (IndexError, TypeError):
+            continue
+        log.warning("inbound_reclaimed", entry_id=entry_id)
+        task = asyncio.create_task(_handle_entry(entry_id, dict(fields), reclaimed=True))
+        pending.add(task)
+        task.add_done_callback(pending.discard)
+
+
+async def _recortar_streams(r: Any) -> None:
+    """Recorta lo procesado del stream y lo vencido de la DLQ; best-effort (ADR-0053).
+
+    Corre en cada réplica: `XTRIM MINID` es idempotente y el corte se calcula con el
+    PEL y el último entregado del grupo, así que nunca borra lo pendiente ni lo no leído.
+    """
+    settings = get_settings()
+    # Un `try` por stream: que un fallo en uno no deje al otro sin recortar.
+    inbound = dlq = 0
+    try:
+        inbound = await recortar_inbound(r, INBOUND_STREAM, settings.inbound_stream_retention_hours)
+    except Exception:
+        log.exception("inbound_stream_trim_failed")
+    try:
+        dlq = await recortar_dlq(r, DEAD_LETTER_STREAM, settings.inbound_dlq_retention_hours)
+    except Exception:
+        log.exception("inbound_dlq_trim_failed")
+    if inbound or dlq:
+        log.info("inbound_stream_trimmed", inbound=inbound, dlq=dlq)
+
+
+async def _ack_y_borrar(r: Any, entry_id: str) -> None:
+    """`XACK` y luego `XDEL`: lo procesado no se queda en Redis (ADR-0053).
+
+    El `XDEL` es best-effort: si falla, el mensaje YA está ackeado y no debe contar como
+    fallo del turno (reintento/DLQ); lo recoge el recorte periódico.
+    """
+    await r.xack(INBOUND_STREAM, GROUP, entry_id)
+    try:
+        await r.xdel(INBOUND_STREAM, entry_id)
+    except Exception:
+        log.warning("inbound_xdel_failed", entry_id=entry_id, exc_info=True)
+
+
+async def _handle_entry(entry_id: str, fields: dict[str, str], *, reclaimed: bool = False) -> None:
     r = get_redis()
     retry_key = f"inbound:retries:{entry_id}"
     try:
         tenant_id = fields.get("tenant_id")
-        await run_turn(tenant_id, handle_inbound(fields))
-        await r.xack(INBOUND_STREAM, GROUP, entry_id)
+        outcome = await run_turn(tenant_id, handle_inbound(fields))
+        if outcome == TURN_BUSY:
+            # Otro worker lo está procesando: NO se ackea; el reclamo lo reintenta
+            # cuando el claim quede abandonado (HU-ARCH-06).
+            log.info("inbound_busy_skip", entry_id=entry_id, reclaimed=reclaimed)
+            return
+        await _ack_y_borrar(r, entry_id)
         await r.delete(retry_key)
-    except Exception:
+    except TurnQueueTimeout:
+        # El cupo del tenant está saturado (HU-ARCH-27): el turno no llegó a
+        # correr. No se ackea ni cuenta como fallo; el reclamo lo reintenta.
+        log.warning("inbound_queue_timeout_skip", entry_id=entry_id, reclaimed=reclaimed)
+        return
+    except Exception as exc:
         log.exception("inbound_handling_failed", entry_id=entry_id)
         retries = await r.incr(retry_key)
         await r.expire(retry_key, 3600)
+        # El turno falló: se revoca el claim para que el reclamo lo reintente sin
+        # esperar al umbral de abandono (HU-ARCH-06). El contador gobierna los intentos.
+        await _revoke_claim(fields)
         if retries >= MAX_DELIVERIES:
-            await r.xadd(DEAD_LETTER_STREAM, fields)
-            await r.xack(INBOUND_STREAM, GROUP, entry_id)
+            await _dead_letter(r, entry_id, fields, retries, error=f"{type(exc).__name__}: {exc}")
             await r.delete(retry_key)
-            log.error("message_dead_lettered", entry_id=entry_id)
 
 
-async def handle_inbound(fields: dict[str, str]) -> bool:
-    """Procesa un inbound. Devuelve True si se procesó, False si era duplicado.
+async def dlq_pendientes(r: Any) -> int:
+    """Entradas de la DLQ sin contar las sembradas por los escenarios de prueba (HU-QA-13). Lo usan la
+    alerta de salud y el chequeo previo a producción: una entrada de prueba no despierta al on-call."""
+    total = int(await r.xlen(DEAD_LETTER_STREAM))
+    if total == 0:
+        return 0
+    entradas = await r.xrange(DEAD_LETTER_STREAM, count=min(total, 5000))
+    marcadas = sum(1 for _id, campos in entradas if MARCA_ESCENARIO in campos or MARCA_ESCENARIO.encode() in campos)
+    return max(0, total - marcadas)
 
-    ADR-0007: se inserta el claim en `processed_events` ANTES de procesar; si ya
-    existe (único por tenant y message_id), el evento es un duplicado y se descarta
-    (ACK arriba). ADR-0013: el claim es revocable para permitir el reintento del DLQ.
+
+async def _dead_letter(
+    r: Any, entry_id: str, fields: dict[str, str], deliveries: int, *, error: str
+) -> None:
+    """Manda el mensaje a la DLQ con el error, lo ackea y lo borra del stream (HU-ARCH-06).
+
+    El reintento manual del panel (ADR-0013) revoca el claim y lo re-encola.
+    El claim incompleto se revoca aquí para no bloquear ese reintento.
+    """
+    payload = dict(fields)
+    payload["error"] = (error or "")[:500]
+    payload["deliveries"] = str(deliveries)
+    payload["failed_at"] = utcnow().isoformat()
+    await r.xadd(DEAD_LETTER_STREAM, payload)
+    await _ack_y_borrar(r, entry_id)
+    await _revoke_claim(fields)
+    log.error("message_dead_lettered", entry_id=entry_id, deliveries=deliveries)
+    await _avisar_mensaje_fallido(fields.get("tenant_id"), entry_id)
+
+
+async def _avisar_mensaje_fallido(tenant_id: str | None, entry_id: str) -> None:
+    """Aviso al equipo (centro de notificaciones, ADR-0167) de un mensaje en la DLQ. Nunca lanza."""
+    if not tenant_id:
+        return
+    try:
+        import uuid as _uuid
+
+        from core.notifications.catalog import mensaje_fallido
+        from core.notifications.service import notify_standalone
+
+        await notify_standalone(_uuid.UUID(tenant_id), mensaje_fallido(entry_id))
+    except Exception:
+        log.warning("aviso_mensaje_fallido_fallo", entry_id=entry_id, exc_info=True)
+
+
+async def _revoke_claim(fields: dict[str, str]) -> None:
+    """Soft-delete del claim de idempotencia (ADR-0013), best-effort.
+
+    Abre su propio `tenant_scope`: `processed_events` tiene RLS forzada y este
+    helper se llama fuera del scope del turno (HU-ARCH-06).
+    """
+    tenant_id = fields.get("tenant_id")
+    if not tenant_id:
+        return
+    try:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                await session.execute(
+                    update(ProcessedEvent)
+                    .where(
+                        ProcessedEvent.tenant_id == uuid.UUID(tenant_id),
+                        ProcessedEvent.external_message_id == fields.get("external_message_id", ""),
+                        ProcessedEvent.deleted_at.is_(None),
+                    )
+                    .values(deleted_at=utcnow())
+                )
+    except Exception:
+        log.warning("claim_revoke_failed", exc_info=True)
+
+
+async def handle_inbound(fields: dict[str, str]) -> str:
+    """Procesa un inbound y devuelve el resultado del claim (HU-ARCH-06).
+
+    - `TURN_PROCESSED`: procesado (o manejado: cuota, pausa, escalado por keyword).
+    - `TURN_DUPLICATE`: ya estaba terminado; se descarta (ACK).
+    - `TURN_BUSY`: hay un claim incompleto reciente (otro worker en vuelo); NO se
+      ackea y el reclamo lo reintenta.
+    - `TURN_SKIPPED`: sin tenant o tenant no operativo; se descarta (ACK).
+
+    ADR-0007: el claim se inserta ANTES de procesar; ADR-0013: es revocable;
+    ADR-0090: lleva estado (`completed_at`) para distinguir en vuelo de terminado.
     """
     tenant_id = fields.get("tenant_id")
     if not tenant_id:
         log.warning("inbound_without_tenant", message_id=fields.get("external_message_id"))
-        return False
+        return TURN_SKIPPED
 
     async with tenant_scope(tenant_id):
         # Ciclo de vida + billing: mensajes de un tenant suspendido/eliminado o
         # con el plan vencido se descartan (ACK) sin procesar (ADR-0001/0045).
-        from core.billing.enforcement import is_tenant_operational
+        from core.billing.enforcement import tenant_operativo
+        from core.kernel.opciones.bandera import habilitada_desde
 
-        if not await is_tenant_operational(uuid.UUID(tenant_id)):
+        tenant = await tenant_operativo(uuid.UUID(tenant_id))
+        if tenant is None:
             log.warning(
                 "inbound_tenant_not_operational",
                 tenant_id=tenant_id,
                 message_id=fields.get("external_message_id"),
             )
-            return False
-        if not await _claim_event(uuid.UUID(tenant_id), fields):
+            return TURN_SKIPPED
+        claim = await _claim_event(uuid.UUID(tenant_id), fields)
+        if claim == "busy":
+            return TURN_BUSY
+        if claim == "duplicate":
             log.info(
                 "event_already_processed",
                 message_id=fields.get("external_message_id"),
                 tenant_id=tenant_id,
             )
-            return False
-        await _handle_inbound_scoped(fields)
-        return True
+            return TURN_DUPLICATE
+        # La fila del negocio ya se leyó para el gate de arriba: de ella sale la bandera de las opciones directas
+        # (sin otra consulta a `tenants` por mensaje; ver `_toque_de_opcion`).
+        await _handle_inbound_scoped(fields, opciones_habilitada=habilitada_desde(tenant.settings))
+        await _mark_event_completed(uuid.UUID(tenant_id), fields.get("external_message_id", ""))
+        return TURN_PROCESSED
 
 
-async def _claim_event(tenant_id: uuid.UUID, fields: dict[str, str]) -> bool:
-    """INSERT del claim de idempotencia. False = ya procesado (duplicado)."""
+async def _claim_event(tenant_id: uuid.UUID, fields: dict[str, str]) -> str:
+    """Claim de idempotencia con estado (HU-ARCH-06).
+
+    - `claimed`: evento nuevo, o su claim incompleto quedó abandonado (más viejo
+      que `claim_stale_seconds`) y se revocó para reprocesar.
+    - `duplicate`: ya se procesó por completo.
+    - `busy`: hay un claim incompleto reciente (otro worker en vuelo).
+    """
+    settings = get_settings()
+    external_id = fields.get("external_message_id", "")
+    provider = fields.get("provider", "")
     async with get_session() as session:
+        existing = (
+            await session.execute(
+                select(ProcessedEvent).where(
+                    ProcessedEvent.tenant_id == tenant_id,
+                    ProcessedEvent.external_message_id == external_id,
+                    ProcessedEvent.deleted_at.is_(None),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            if existing.completed_at is not None:
+                return "duplicate"
+            stale_before = utcnow() - timedelta(seconds=settings.claim_stale_seconds)
+            if existing.handled_at is None or existing.handled_at < stale_before:
+                # Claim abandonado (proceso muerto a mitad): se revoca.
+                existing.deleted_at = utcnow()
+                await session.flush()
+            else:
+                return "busy"
         session.add(
             ProcessedEvent(
                 tenant_id=tenant_id,
-                provider=fields.get("provider", ""),
-                external_message_id=fields.get("external_message_id", ""),
+                provider=provider,
+                external_message_id=external_id,
             )
         )
         try:
             await session.flush()
         except IntegrityError:
-            # El UNIQUE ya cortó: el evento es un duplicado. La transacción quedó
-            # en rollback pendiente; se revierte aquí y el ACK del stream la cierra.
+            # Carrera con otra réplica: la otra ganó el claim.
             await session.rollback()
-            return False
-    return True
+            return "duplicate"
+    return "claimed"
 
 
-async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
+async def _mark_event_completed(tenant_id: uuid.UUID, external_id: str) -> None:
+    """Marca el claim como terminado (HU-ARCH-06). Best-effort."""
+    if not external_id:
+        return
+    try:
+        async with get_session() as session:
+            await session.execute(
+                update(ProcessedEvent)
+                .where(
+                    ProcessedEvent.tenant_id == tenant_id,
+                    ProcessedEvent.external_message_id == external_id,
+                    ProcessedEvent.deleted_at.is_(None),
+                )
+                .values(completed_at=utcnow())
+            )
+    except Exception:
+        log.warning("claim_complete_failed", exc_info=True)
+
+
+@en_turno  # decisión y resultado del turno (HU-AOS-10); el loop reusa este turno
+async def _handle_inbound_scoped(fields: dict[str, str], *, opciones_habilitada: bool | None = None) -> None:
     settings = get_settings()
     content = fields.get("content", "")
     media_context = fields.get("media_context", "")
@@ -190,6 +443,9 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
 
     try:
         conversation, customer, app_settings = await _resolve_conversation(fields)
+    except InboundSinConexion as exc:
+        log.warning("inbound_sin_conexion_descartado", tenant_id=get_current_tenant_id(), provider=str(exc))
+        return
     except QuotaExceeded as exc:
         # Bloqueo duro de cuota (ADR-0045): se descarta el inbound sin procesar.
         log.warning(
@@ -201,17 +457,55 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         )
         return
 
-    # ---------------- kill-switch en 3 niveles
-    paused = (
+    # Media entrante (SPEC-04, ADR-0151): descarga, guarda, transcribe/describe antes
+    # de persistir. Un fallo transitorio se propaga para que el consumer reintente.
+    from core.media.ingesta import procesar_media_entrante
+
+    # Si el bot está pausado o la conversación escalada, no se gasta en descargar ni
+    # transcribir: se persiste el marcador y `politicas_de_entrada` cierra el turno.
+    from core.shared import kill_switch
+
+    pausado = bool(
         (app_settings.bot_paused if app_settings else False)
         or customer.bot_paused
         or conversation.bot_paused
+        or conversation.status == "escalated"
+        or await kill_switch.global_activo()  # interruptor global (HU-ARCH-38): no se gasta en STT/OCR
     )
+    if pausado:
+        from core.media.ingesta import MediaOutcome
+
+        media_outcome = MediaOutcome.skipped()
+    else:
+        media_outcome = await procesar_media_entrante(fields, conversation, app_settings)
+    if media_outcome.handled:
+        content = media_outcome.content or content
+        effective_message = media_outcome.effective_message or content
+        log.info(
+            "media_procesada",
+            conversation_id=str(conversation.id),
+            decision=media_outcome.decision,
+            media_type=media_outcome.media_type,
+        )
+    elif fields.get("media") and fields.get("media") != "[]" and not effective_message:
+        # Canal aún no soportado (Messenger/Instagram/waweb): el mensaje no queda vacío.
+        effective_message = "[El cliente envió un archivo multimedia que no puedo procesar]"
 
     # Persistir SIEMPRE el inbound (historial completo aunque el bot esté pausado)
-    persisted = await _persist_inbound(conversation.id, fields, effective_message)
+    persisted = await _persist_inbound(
+        conversation.id,
+        fields,
+        effective_message,
+        content=media_outcome.content if media_outcome.handled else None,
+        media_type=media_outcome.media_type if media_outcome.handled else None,
+        media_key=media_outcome.media_key if media_outcome.handled else None,
+        media_transcription=(
+            media_outcome.media_transcription if media_outcome.handled else None
+        ),
+    )
     if not persisted:
         return  # duplicado (Capa 3 de idempotencia: UNIQUE en Postgres)
+    anotar_entrada(persisted)
 
     await event_bus.emit(
         ON_MESSAGE_RECEIVED,
@@ -219,50 +513,41 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
         customer_id=customer.id,
         content=effective_message,
     )
+    await _baja_de_promociones(conversation, customer, app_settings, effective_message)
 
-    if paused or conversation.status == "escalated":
+    # Políticas de entrada del kernel (HU-AOS-10), en orden fijo y sin LLM: conexión pausada
+    # (ADR-0122), kill-switch o conversación escalada, palabras de escalamiento y horario.
+    # Van ANTES de la respuesta fija de media: si el bot está pausado, no contesta.
+    if await politicas_de_entrada(conversation, customer, app_settings, effective_message):
         return
 
-    # ---------------- escalamiento por keywords
-    escalation_cfg = dict(app_settings.escalation_config or {}) if app_settings else {}
-    keywords = list(escalation_cfg.get("keywords", []))
-    if matches_escalation_keywords(effective_message, keywords or None):
-        # Resolver el texto ANTES de escalar (auditor-multitenant): si
-        # load_active_spec falla (ej. BD caída), no queremos dejar la
-        # conversación ya marcada `escalated`/`bot_paused` sin haber podido
-        # avisarle nada al cliente -- y el claim de idempotencia de este
-        # evento ya se insertó en _claim_event, así que un reintento
-        # posterior lo vería como duplicado y no volvería a intentar nada.
-        # `load_active_spec()` sin tenant explícito resuelve el de la
-        # conversación en curso vía el `tenant_scope` que `handle_inbound`
-        # ya abrió más arriba en la pila (mismo patrón que loop.py:171).
-        spec = await load_active_spec()
-        escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
-        await escalate(conversation.id, reason="keyword", summary=effective_message[:200])
-        await send_to_conversation(conversation.id, escalation_text)
+    # Audio ilegible / imagen no identificada / proveedor sin configurar: se responde
+    # el texto configurado y NO se gasta LLM ni se sigue el turno.
+    if media_outcome.handled and media_outcome.reply:
+        from core.gateway.sender import send_to_conversation
+
+        try:
+            await send_to_conversation(conversation.id, media_outcome.reply)
+        except Exception:
+            log.warning(
+                "media_reply_send_failed",
+                conversation_id=str(conversation.id),
+                reply_key=media_outcome.reply_key,
+                exc_info=True,
+            )
         return
 
-    # ---------------- horario de atención (ADR-0051)
-    # Fuera de horario: se responde el mensaje configurado y NO se procesa el turno
-    # con el LLM (ahorra costo y evita prometer atención que no hay). Sin config,
-    # `within_business_hours` devuelve True (fail-open).
-    business_hours = escalation_cfg.get("business_hours")
-    if business_hours and not within_business_hours(business_hours):
-        out_msg = str(escalation_cfg.get("out_of_hours_message") or "").strip()
-        if out_msg:
-            text = out_msg
-            for key, value in (
-                ("{assistant_name}", app_settings.assistant_name if app_settings else ""),
-                ("{business_description}", app_settings.business_description if app_settings else ""),
-            ):
-                text = text.replace(key, value or "")
-            delivered = await send_to_conversation(conversation.id, text)
-            if not delivered:
-                # Mismo criterio que el camino inmediato: si el envío falla, se
-                # escala para que una persona retome (el claim de idempotencia ya
-                # se quemó, no habrá reintento).
-                await escalate(conversation.id, reason="send_failed", summary=text[:200])
+    # ---------------- opciones directas (SPEC-40, ADR-0172): el toque de un botón `opt:`/`optc:`/`optn:`
+    # ejecuta su tool y contesta con un texto fijo. Con la bandera del negocio encendida lo atiende el
+    # resolver y el turno termina aquí (ni debounce ni LLM); apagada, o con cualquier otro payload, el
+    # mensaje sigue exactamente como siempre. En un canal de texto, el «1» (o el título exacto) que contesta
+    # un menú numerado vigente equivale al toque (pista C2); cualquier otro texto sigue al agente.
+    if await _toque_de_opcion(conversation, customer, fields, habilitada=opciones_habilitada):
         return
+
+    # ---------------- datos sin LLM (HU-AOS-05): botón, fila de lista o contenido que llena un
+    # dato de la tarea en foco. Sin botón ni media no consulta nada.
+    await entrada_sin_llm(conversation, fields)
 
     # ---------------- velocidad de respuesta
     behavior = dict(app_settings.behavior_config) if app_settings else {}
@@ -271,18 +556,67 @@ async def _handle_inbound_scoped(fields: dict[str, str]) -> None:
 
     if delay_ms == 0:
         result = await process_conversation(conversation.id, effective_message)
-        if result is not None and result.text:
-            delivered = await send_to_conversation(
-                conversation.id, result.text, image_url=result.image_url
-            )
-            if not delivered and not result.escalated:
-                await escalate(conversation.id, reason="send_failed",
-                               summary=result.text[:200])
+        await entregar(conversation.id, result)
     else:
-        await schedule_debounce(conversation.id, delay_ms, {"latest_message": effective_message})
+        await schedule_debounce(
+            conversation.id,
+            delay_ms,
+            {"latest_message": effective_message, "inbound_message_ids": [persisted]},
+        )
 
 
 # ------------------------------------------------------------------ resolución
+_E164 = re.compile(r"^\+[1-9]\d{6,14}$")
+
+
+async def _guardar_telefono_compartido(session: Any, tenant_id: Any, customer: Any, telefono: str) -> None:
+    """El teléfono que el cliente compartió de sí mismo por Telegram (ADR-0199 §8) queda en `contact_phone`, sin
+    pisar otro número y sin fusionar clientes: un solo UPDATE condicionado. Otro número ya guardado es un conflicto
+    que se registra (sin el número). Se revalida el formato: el stream no es la fuente de verdad."""
+    if not _E164.match(telefono or ""):
+        log.warning("telegram.contacto.invalido", tenant_id=str(tenant_id), customer_id=str(customer.id))
+        return
+    resultado = await session.execute(
+        update(Customer)
+        .where(
+            Customer.tenant_id == tenant_id,
+            Customer.id == customer.id,
+            or_(Customer.contact_phone.is_(None), Customer.contact_phone == telefono),
+        )
+        .values(contact_phone=telefono)
+    )
+    evento = "telegram.contacto.compartido" if resultado.rowcount else "telegram.contacto.conflicto"
+    log.info(evento, tenant_id=str(tenant_id), customer_id=str(customer.id))
+    if resultado.rowcount:
+        customer.contact_phone = telefono
+
+
+class InboundSinConexion(Exception):
+    """El entrante es de un proveedor que solo responde por su conexión (Twilio, Telegram) y esa conexión no está."""
+
+
+async def _conexion_validada(session: Any, tenant_id: uuid.UUID | None, fields: dict[str, str]) -> Any:
+    """La conexión que el webhook ya validó (`connection_id` del stream), del mismo negocio y proveedor. Se usa aunque
+    la hayan borrado o pausado después: la conversación queda con SU conexión y el envío falla cerrado
+    (`resolve_credentials`), en vez de buscar otra por número y caer a la primaria."""
+    crudo = fields.get("connection_id") or ""
+    if not crudo or tenant_id is None:
+        return None
+    try:
+        connection_id = uuid.UUID(crudo)
+    except ValueError:
+        return None
+    return (
+        await session.execute(
+            select(ChannelConnection).where(
+                ChannelConnection.id == connection_id,
+                ChannelConnection.tenant_id == tenant_id,
+                ChannelConnection.provider == fields.get("provider", ""),
+            )
+        )
+    ).scalars().first()
+
+
 async def _resolve_conversation(
     fields: dict[str, str],
 ) -> tuple[Conversation, Customer, AppSettings | None]:
@@ -346,14 +680,42 @@ async def _resolve_conversation(
         elif name and not customer.name:
             customer.name = name
 
-        connection = (
-            await session.execute(
-                select(ChannelConnection).where(
-                    ChannelConnection.tenant_id == tenant_id,
-                    ChannelConnection.external_id == connection_external_id,
-                )
+        if fields.get("shared_phone") and fields.get("provider") == "telegram":
+            await _guardar_telefono_compartido(session, tenant_id, customer, fields["shared_phone"])
+
+        # El nombre que manda el canal es el alias: si después el agente aprende el
+        # nombre real, `name` cambia pero el alias queda para no perder cómo escribe
+        # la persona en WhatsApp.
+        if name and not (customer.attributes or {}).get("alias"):
+            from core.memory import facts
+
+            await facts.escribir_hechos(
+                session,
+                tenant_id=tenant_id,
+                customer_id=customer.id,
+                namespace=facts.PERFIL,
+                valores={"alias": name},
+                source="import",
             )
-        ).scalar_one_or_none()
+
+        connection = await _conexion_validada(session, tenant_id, fields)
+        if connection is None and fields.get("provider") in ("twilio", "telegram"):
+            # Twilio y Telegram no tienen ruta sin su conexión (ADR-0186, ADR-0199): una conversación sin conexión
+            # respondería por la primaria o por el número de la plataforma. No se crea.
+            raise InboundSinConexion(fields.get("provider", ""))
+        if connection is None:
+            connection = (
+                await session.execute(
+                    select(ChannelConnection)
+                    .where(
+                        ChannelConnection.tenant_id == tenant_id,
+                        ChannelConnection.external_id == connection_external_id,
+                        ChannelConnection.deleted_at.is_(None),
+                    )
+                    .order_by(ChannelConnection.created_at)
+                    .limit(1)
+                )
+            ).scalars().first()
 
         # Puente para conexiones del wizard de Embedded Signup (ADR-0030):
         # no tienen fila en channel_connections, pero sí una en phone_numbers.
@@ -364,27 +726,37 @@ async def _resolve_conversation(
         # garantía real, no depender solo de eso).
         meta_phone = (
             await session.execute(
-                select(PhoneNumber).where(
+                select(PhoneNumber)
+                .where(
                     PhoneNumber.phone_number_id == connection_external_id,
                     PhoneNumber.tenant_id == tenant_id,
                 )
-            )
-        ).scalar_one_or_none()
-        meta_connection_id = meta_phone.connection_id if meta_phone else None
-
-        conversation = (
-            await session.execute(
-                select(Conversation)
-                .where(
-                    Conversation.tenant_id == tenant_id,
-                    Conversation.customer_id == customer.id,
-                    Conversation.status.in_(["open", "escalated"]),
-                    Conversation.deleted_at.is_(None),
-                )
-                .order_by(Conversation.started_at.desc())
+                .order_by(PhoneNumber.created_at)
                 .limit(1)
             )
-        ).scalar_one_or_none()
+        ).scalars().first()
+        meta_connection_id = meta_phone.connection_id if meta_phone else None
+        if connection is None and meta_phone is not None and channel == "whatsapp":
+            # Un número de la cuenta sin su fila canónica (se conectó fuera de los caminos de alta
+            # que la crean): se asegura aquí, con el mismo candado por número, para que la
+            # conversación nazca con conexión (el contract la exige, ADR-0115 adenda 2026-10-24).
+            connection = await asegurar_conexion_en_vuelo(
+                session, tenant_id, connection_external_id, meta_phone.connection_id
+            )
+
+        # Ráfaga del mismo cliente procesada en paralelo (una tarea por entrada del
+        # batch): sin candado, cada tarea que no ve conversación abierta crearía la suya
+        # y los mensajes quedarían en turnos distintos. Se serializa el get-or-create por
+        # cliente hasta el commit de esta sesión, como `meta_asset_claims` (ADR-0095).
+        await session.execute(
+            text("select pg_advisory_xact_lock(hashtext(:k))"),
+            {"k": f"conversation:{tenant_id}:{customer.id}"},
+        )
+        # Conversación por (conexión, cliente) (ADR-0115); el ruteo por conexión es siempre (ADR-0191).
+        por_conexion = True
+        conversation = await buscar_conversacion_abierta(
+            session, tenant_id, customer.id, connection, por_conexion=por_conexion
+        )
 
         is_new = conversation is None
         if conversation is None:
@@ -392,6 +764,15 @@ async def _resolve_conversation(
             # las conversaciones ya abiertas siguen respondiendo. Sesión abierta
             # reutilizada (mismo criterio que el gate de clientes).
             await enforce_metric(tenant_id, "conversaciones", session=session)
+            if connection is None:
+                # Hasta el contract se permite (número de la plataforma, canal sin fila); después el
+                # NOT NULL la rechaza. Este aviso lista los caminos que quedan antes de aplicarlo.
+                log.warning(
+                    "conversacion_sin_conexion",
+                    tenant_id=str(tenant_id),
+                    channel=channel,
+                    connection_external_id=connection_external_id,
+                )
             conversation = Conversation(
                 tenant_id=tenant_id,
                 customer_id=customer.id,
@@ -401,11 +782,18 @@ async def _resolve_conversation(
             )
             session.add(conversation)
             await session.flush()
-        else:
-            if connection and conversation.connection_id != connection.id:
-                conversation.connection_id = connection.id  # responder por donde escribió
-            if meta_connection_id and conversation.meta_connection_id != meta_connection_id:
-                conversation.meta_connection_id = meta_connection_id
+        elif connection is not None or meta_connection_id is not None:
+            # Responder por donde escribió: la conversación queda con la ruta de ESTA
+            # entrada y nada más. Si el cliente pasó de WhatsApp Web (QR) al número de Meta
+            # (o al revés), la conexión anterior queda obsoleta y `resolve_credentials`
+            # prioriza `connection_id`: la respuesta salía por WhatsApp Web aunque el
+            # cliente escribiera a Meta (visto en test, 2026-10-08). Sin ruta identificable
+            # (número de la plataforma) se conserva la que había. Con el ruteo por conexión
+            # la conversación ya es de esta conexión y no se reescribe (ADR-0115 §6).
+            await actualizar_ruta(
+                session, conversation, connection.id if connection else None, meta_connection_id,
+                por_conexion=por_conexion,
+            )
 
     if is_new:
         await event_bus.emit(
@@ -417,33 +805,122 @@ async def _resolve_conversation(
 _SERVICE_WINDOW_HOURS = 24
 
 
-async def _persist_inbound(
-    conversation_id: uuid.UUID, fields: dict[str, str], effective_message: str
+async def _toque_de_opcion(
+    conversation: Conversation, customer: Customer, fields: dict[str, str], *, habilitada: bool | None = None
 ) -> bool:
+    """¿Lo atendió el resolver de opciones directas? Dos entradas: el payload `opt:`/`optc:`/`optn:` de un botón, y
+    (pista C2) el texto «1» o el título de una opción que contesta un menú numerado en un canal sin botones. Un
+    mensaje que no es ninguna de las dos (el caso común) no paga ni una consulta.
+
+    `habilitada` es la bandera del negocio tal como la leyó el gate del mensaje (`handle_inbound`: la misma fila de
+    `tenants` que valida que el negocio esté operativo): con ella la bandera apagada cuesta CERO consultas, y la
+    encendida solo paga la búsqueda del menú. Sin ella (`None`: quien llama no pasó por el gate) se lee de la base.
+    Una bandera que no se puede leer cuenta como apagada (fail-closed: el mensaje sigue su camino de siempre)."""
+    from core.kernel.opciones import bandera
+    from core.kernel.opciones.payload import es_de_opciones
+    from core.kernel.opciones.resolver import VIA_TEXTO
+    from core.orchestrator.opciones_toque import (
+        atender,
+        opcion_elegida_por_texto,
+        puede_ser_respuesta_de_menu,
+    )
+
+    por_texto = not (fields.get("interactive_id") or "").strip() and puede_ser_respuesta_de_menu(conversation, fields)
+    if not por_texto and not es_de_opciones((fields.get("interactive_id") or "").strip()):
+        return False
+    encendida = habilitada
+    if encendida is None:
+        try:
+            async with get_session() as session:
+                encendida = await bandera.habilitada(session, conversation.tenant_id)
+        except Exception as exc:
+            log.warning("opciones_directas_bandera_ilegible", tenant_id=str(conversation.tenant_id), error=type(exc).__name__)
+            return False
+    if not encendida:
+        return False
+    if por_texto:
+        try:
+            firmado = await opcion_elegida_por_texto(conversation, fields)
+        except Exception as exc:
+            # No es un toque: ante cualquier fallo el mensaje sigue al agente como siempre.
+            log.warning("opciones_respuesta_texto_fallo", tenant_id=str(conversation.tenant_id), error=type(exc).__name__)
+            return False
+        if firmado is None:
+            return False
+        await atender(conversation, customer, fields, payload_firmado=firmado, via=VIA_TEXTO)
+        return True
+    await atender(conversation, customer, fields)
+    return True
+
+
+async def _baja_de_promociones(conversation: Any, customer: Any, app_settings: Any, texto: str) -> None:
+    """HU-CRM-06 (ADR-0150): si el mensaje entero es una palabra de baja, el cliente sale de los
+    envíos a segmentos. El turno sigue igual (el agente responde como siempre). Nunca rompe el
+    inbound: un fallo se loguea."""
+    from core.admin.envios_segmento import registrar_baja_si_corresponde
+
+    behavior = dict(getattr(app_settings, "behavior_config", None) or {})
+    palabras = behavior.get("palabras_de_baja")
+    try:
+        await registrar_baja_si_corresponde(
+            customer.id, conversation.channel, texto, palabras if isinstance(palabras, list) else None
+        )
+    except Exception:
+        log.warning("baja_de_promociones_fallo", customer_id=str(customer.id), exc_info=True)
+
+
+async def _persist_inbound(
+    conversation_id: uuid.UUID,
+    fields: dict[str, str],
+    effective_message: str,
+    *,
+    content: str | None = None,
+    media_type: str | None = None,
+    media_key: str | None = None,
+    media_transcription: str | None = None,
+) -> uuid.UUID | None:
+    """Guarda el inbound y devuelve su id (None si es un duplicado).
+
+    Los cuatro overrides los usa la ingesta de media (ADR-0151): `content` es el
+    caption/placeholder visible en la bandeja, `media_type`/`media_key` salen de
+    la descarga y `media_transcription` es la transcripción/descripción.
+    """
     media: list[dict[str, Any]] = json.loads(fields.get("media", "[]") or "[]")
+    tipo_media = media_type or (
+        str(media[0]["type"]).split(";")[0].strip() if media and media[0].get("type") else None
+    )
+    message_id = uuid.uuid4()
     try:
         async with get_session() as session:
             session.add(
                 Message(
+                    id=message_id,
                     tenant_id=get_current_tenant_id(),
                     conversation_id=conversation_id,
                     direction="inbound",
                     sender_type="customer",
-                    content=effective_message,
-                    media_type=media[0]["type"] if media else None,
-                    media_url=media[0].get("url") if media else None,
-                    media_transcription=fields.get("media_context") or None,
+                    content=effective_message if content is None else content,
+                    media_type=tipo_media,
+                    media_url=media_key or (media[0].get("url") if media else None),
+                    media_transcription=(
+                        media_transcription
+                        if media_transcription is not None
+                        else (fields.get("media_context") or None)
+                    ),
                     idempotency_key=fields.get("external_message_id") or None,
                 )
             )
-            # Ventana de 24h de WhatsApp: cada inbound la refresca --
-            # validada por `sender.py::validate_service_window` antes de
-            # encolar un envío libre.
-            if fields.get("provider") == "meta" and fields.get("channel") == "whatsapp":
+            # Ventana de 24h de Meta (WhatsApp, Messenger e Instagram): cada inbound la refresca --
+            # validada por `sender.py::validate_service_window` antes de encolar un envío libre.
+            # Sin esto, una conversación de Messenger o Instagram nunca vencería para el validador.
+            # WhatsApp vía Twilio tiene la misma ventana (ADR-0186): fuera de ella Twilio rechaza el texto libre (63016).
+            if (
+                fields.get("provider") == "meta" and fields.get("channel") in ("whatsapp", "messenger", "instagram")
+            ) or (fields.get("provider") == "twilio" and fields.get("channel") == "whatsapp"):
                 conversation = await session.get(Conversation, conversation_id)
                 if conversation is not None:
                     conversation.service_window_expires_at = utcnow() + timedelta(hours=_SERVICE_WINDOW_HOURS)
-        return True
+        return message_id
     except IntegrityError:
         log.info("inbound_duplicate_ignored", message_id=fields.get("external_message_id"))
-        return False
+        return None

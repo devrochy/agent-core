@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, Query
 from core.api.deps import Principal, get_principal
 from core.api.pagination import Page, PageParams, build_page, page_params
 from core.api.schemas import TenantOption
-from core.shared.tenant import admin_tenants
+from core.shared.tenant import negocios_de_cuenta
 
 router = APIRouter(prefix="/admin/tenants", tags=["admin · tenants"])
 
@@ -28,7 +28,8 @@ async def list_tenants(
     params: Annotated[PageParams, Depends(page_params)],
     q: Annotated[str | None, Query(description="Busca por nombre del negocio.")] = None,
 ) -> Page[TenantOption]:
-    rows = await admin_tenants(principal.admin.id)
+    # Sin los suspendidos para dueños y colaboradores (ADR-0136); el master los ve.
+    rows = (await negocios_de_cuenta(principal.admin)).operativos
     if q:
         needle = q.lower()
         rows = [r for r in rows if needle in r[1].lower()]

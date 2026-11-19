@@ -80,7 +80,7 @@ async def test_sin_pricing_no_inserta_nada(monkeypatch):
     row = _row(tenant_id=tenant_id)
     session_cm = _patch(monkeypatch, row, tenant_id)
 
-    await apply_status_update({"id": "wamid-1", "status": "sent", "timestamp": "2000000000"})
+    await apply_status_update({"id": "wamid-1", "status": "sent", "timestamp": "2000000000"}, expected_tenant_id=tenant_id)
 
     all_added = [obj for s in session_cm.sessions for obj in s.added]
     assert all_added == []
@@ -97,6 +97,7 @@ async def test_con_pricing_inserta_message_cost(monkeypatch):
             "id": "wamid-1", "status": "delivered", "timestamp": "2000000000",
             "pricing": {"billable": True, "pricing_model": "CBP", "category": "utility"},
         },
+        expected_tenant_id=tenant_id,
         phone_number_id="1234567890",
     )
 
@@ -120,9 +121,9 @@ async def test_pricing_dos_eventos_inserta_dos_filas_nunca_upsert(monkeypatch):
         "id": "wamid-1", "status": "sent", "timestamp": "2000000000",
         "pricing": {"billable": True, "category": "utility"},
     }
-    await apply_status_update(payload)
+    await apply_status_update(payload, expected_tenant_id=tenant_id)
     payload2 = {**payload, "status": "delivered", "timestamp": "2000000100"}
-    await apply_status_update(payload2)
+    await apply_status_update(payload2, expected_tenant_id=tenant_id)
 
     all_added = [obj for s in session_cm.sessions for obj in s.added]
     assert len(all_added) == 2
@@ -139,5 +140,24 @@ async def test_valor_desconocido_se_guarda_igual_y_loguea(monkeypatch, caplog):
         {
             "id": "wamid-1", "status": "sent", "timestamp": "2000000000",
             "pricing": {"billable": True, "category": "algo_nuevo_no_documentado"},
-        }
+        },
+        expected_tenant_id=tenant_id,
     )
+
+
+@pytest.mark.asyncio
+async def test_pricing_de_un_mensaje_de_otro_negocio_no_inserta_nada(monkeypatch):
+    """ADR-0100: B no puede sumarle costos a un mensaje de A."""
+    tenant_a = uuid.uuid4()
+    # El mensaje es de A: dentro del scope de B no aparece.
+    session_cm = _patch(monkeypatch, None, tenant_a)
+
+    await apply_status_update(
+        {
+            "id": "wamid-1", "status": "delivered", "timestamp": "2000000000",
+            "pricing": {"billable": True, "category": "marketing"},
+        },
+        expected_tenant_id=uuid.uuid4(),
+    )
+
+    assert [obj for s in session_cm.sessions for obj in s.added] == []

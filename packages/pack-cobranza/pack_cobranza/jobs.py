@@ -20,6 +20,8 @@ from sqlalchemy import delete, func, select, text, update
 from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.shared.tiempo_negocio import hoy_del_negocio
+from core.tasks.cron_negocio import debe_correr, registrar
 from core.tasks.decorators import register_cron
 from pack_cobranza.models import (
     Abono,
@@ -32,12 +34,17 @@ from pack_cobranza.models import (
     Pago,
     Prestamo,
     ReporteDiario,
+    Suscripcion,
     Visita,
 )
 
 log = get_logger(__name__)
 
 PACK_ID = "pack_cobranza"
+
+CRON_MORA = f"{PACK_ID}.marcar_mora"
+CRON_CIERRE = f"{PACK_ID}.cierre_diario"
+CRON_CARGOS = f"{PACK_ID}.generar_cargos_suscripcion"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
@@ -65,16 +72,16 @@ async def _tenant_ids() -> list[uuid.UUID]:
     return result
 
 
-@register_cron("pack_cobranza", "0 2 * * *")
+@register_cron("pack_cobranza", "0 * * * *")
 async def marcar_mora() -> None:
     """Marca cuotas vencidas como `atrasada` y recalcula el color de riesgo del cliente."""
-    from datetime import date
-
-    hoy = date.today()
+    hoy = await hoy_del_negocio()
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            if not await debe_correr(tenant_id, CRON_MORA):
+                continue
             async with get_session() as session:
-                await session.execute(
+                resultado = await session.execute(
                     update(Cuota)
                     .where(
                         Cuota.tenant_id == tenant_id,
@@ -116,6 +123,11 @@ async def marcar_mora() -> None:
                         nuevo = "rojo" if atrasadas else "azul"
                     if cliente.color_riesgo != nuevo:
                         cliente.color_riesgo = nuevo
+            acciones = int(resultado.rowcount or 0)
+            await registrar(
+                tenant_id, CRON_MORA, acciones=acciones,
+                resumen=f"{acciones} cuotas en mora",
+            )
             log.info("cobranza_mora_actualizada", tenant_id=str(tenant_id))
 
 
@@ -165,13 +177,87 @@ async def snapshot_cartera(session, tenant_id: uuid.UUID, cartera: Cartera, hoy:
     )
 
 
-@register_cron("pack_cobranza", "55 23 * * *")
+@register_cron("pack_cobranza", "55 * * * *")
 async def cierre_diario() -> None:
     """Congela reporte diario + estadísticas de cada cartera (idempotente por fecha)."""
     for tenant_id in await _tenant_ids():
         async with tenant_scope(tenant_id):
+            if not await debe_correr(tenant_id, CRON_CIERRE):
+                continue
             async with get_session() as session:
                 carteras = (await session.execute(select(Cartera).where(Cartera.tenant_id == tenant_id, Cartera.deleted_at.is_(None)))).scalars().all()
+                hoy = await hoy_del_negocio()
                 for cartera in carteras:
-                    await snapshot_cartera(session, tenant_id, cartera)
+                    await snapshot_cartera(session, tenant_id, cartera, hoy)
+            await registrar(
+                tenant_id, CRON_CIERRE, acciones=len(carteras),
+                resumen=f"{len(carteras)} carteras cerradas",
+            )
             log.info("cobranza_cierre_diario", tenant_id=str(tenant_id))
+
+
+def fecha_cargo(dia: int, desde: date, *, estricto: bool = True) -> date:
+    """Primera fecha con día `dia` (1..28) en/después de `desde` (ADR-0082).
+
+    `estricto=True` exige una fecha POSTERIOR (para avanzar el período); `False`
+    permite el mismo día (alta de la suscripción). Puro y determinista.
+    """
+    dia = min(max(int(dia or 1), 1), 28)
+    year, month = desde.year, desde.month
+    candidato = date(year, month, dia)
+    if candidato < desde or (estricto and candidato == desde):
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+        candidato = date(year, month, dia)
+    return candidato
+
+
+@register_cron("pack_cobranza", "10 * * * *")
+async def generar_cargos_suscripcion() -> None:
+    """Genera el cargo del período de cada suscripción activa vencida (ADR-0082).
+
+    Crea una `Cuota` (sin préstamo, con `suscripcion_id`) por el valor del período
+    y avanza `proximo_cargo` al siguiente ciclo. Idempotente por período: la próxima
+    corrida solo genera cuando el `proximo_cargo` vuelve a vencer.
+    """
+    hoy = await hoy_del_negocio()
+    for tenant_id in await _tenant_ids():
+        async with tenant_scope(tenant_id):
+            if not await debe_correr(tenant_id, CRON_CARGOS):
+                continue
+            async with get_session() as session:
+                subs = (
+                    await session.execute(
+                        select(Suscripcion).where(
+                            Suscripcion.tenant_id == tenant_id,
+                            Suscripcion.estado == "activa",
+                            Suscripcion.deleted_at.is_(None),
+                            Suscripcion.proximo_cargo.isnot(None),
+                            Suscripcion.proximo_cargo <= hoy,
+                        )
+                    )
+                ).scalars().all()
+                for sub in subs:
+                    generadas = (
+                        await session.execute(
+                            select(func.count())
+                            .select_from(Cuota)
+                            .where(Cuota.tenant_id == tenant_id, Cuota.suscripcion_id == sub.id)
+                        )
+                    ).scalar_one()
+                    session.add(
+                        Cuota(
+                            tenant_id=tenant_id,
+                            suscripcion_id=sub.id,
+                            prestamo_id=None,
+                            numero_cuota=int(generadas) + 1,
+                            valor_esperado=Decimal(sub.valor_periodo or 0),
+                            fecha_vencimiento=sub.proximo_cargo,
+                            estatus="pendiente",
+                        )
+                    )
+                    sub.proximo_cargo = fecha_cargo(int(sub.dia_facturacion or 1), sub.proximo_cargo)
+            await registrar(
+                tenant_id, CRON_CARGOS, acciones=len(subs),
+                resumen=f"{len(subs)} cargos generados",
+            )
+            log.info("cobranza_cargos_suscripcion", tenant_id=str(tenant_id), generadas=len(subs))

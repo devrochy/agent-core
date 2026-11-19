@@ -76,14 +76,23 @@ async def put_token(
 
 
 async def get_token(
-    connection_id: uuid.UUID, kind: str, subject_id: str, *, tenant_id: uuid.UUID | None = None
+    connection_id: uuid.UUID,
+    kind: str,
+    subject_id: str,
+    *,
+    tenant_id: uuid.UUID | None = None,
+    respect_expiry: bool = False,
 ) -> str | None:
-    """Descifra y devuelve el token, o None si no existe/fue revocado."""
+    """Descifra y devuelve el token, o None si no existe/fue revocado. Con `respect_expiry`, un token cuyo
+    `expires_at` ya pasó también es None (los de vida corta: el del usuario del alta, el de Instagram Login)."""
     tid = tenant_id if tenant_id is not None else get_current_tenant_id()
     async with get_session() as session:
         row = (
             await session.execute(
                 select(MetaToken).where(
+                    # Filtro explícito además de RLS y del AAD: el webhook elige con esta
+                    # lectura el secreto de cada grupo (ADR-0126).
+                    MetaToken.tenant_id == tid,
                     MetaToken.connection_id == connection_id,
                     MetaToken.kind == kind,
                     MetaToken.subject_id == subject_id,
@@ -92,6 +101,8 @@ async def get_token(
             )
         ).scalar_one_or_none()
     if row is None:
+        return None
+    if respect_expiry and row.expires_at is not None and row.expires_at <= datetime.now(row.expires_at.tzinfo):
         return None
     plaintext = unseal_parts(row.ciphertext, row.iv, row.auth_tag, row.key_id, aad=_aad(tid, connection_id, kind))
     return plaintext.decode()
@@ -149,3 +160,23 @@ async def revoke_token(
             )
             return
         row.revoked_at = datetime.now(UTC)
+
+
+async def revoke_all_for_connection(connection_id: uuid.UUID, *, tenant_id: uuid.UUID) -> int:
+    """Revoca (`revoked_at`) todos los tokens vigentes de una conexión: el borrado lógico
+    de la conexión (ADR-0122). No borra filas ni descifra nada. Devuelve cuántos revocó."""
+    from datetime import UTC
+
+    from sqlalchemy import update
+
+    async with get_session() as session:
+        result = await session.execute(
+            update(MetaToken)
+            .where(
+                MetaToken.tenant_id == tenant_id,
+                MetaToken.connection_id == connection_id,
+                MetaToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
+    return int(getattr(result, "rowcount", 0) or 0)

@@ -4,7 +4,8 @@ Contexto inmediato de la conversación: últimos N turnos, para armar el
 historial del LLM sin golpear Postgres en cada turno. Degrada con gracia:
 si Redis falla, el orchestrator reconstruye desde Postgres (Capa 2 de messages).
 
-Clave: wm:{conversation_id} -> LPUSH de JSON {role, content, tool_calls}
+Clave: wm:{tenant_id}:{conversation_id} (wm:{conversation_id} sin tenant en contexto)
+-> RPUSH de JSON {role, content, tool_calls}
 TTL: 24h (una conversación inactiva un día completo rearma desde Postgres).
 """
 
@@ -82,3 +83,27 @@ async def clear(conversation_id: uuid.UUID) -> None:
         await get_redis().delete(_key(conversation_id))
     except Exception:
         log.warning("working_memory_clear_failed", conversation_id=str(conversation_id))
+
+
+async def clear_many(conversation_ids: list[uuid.UUID]) -> int:
+    """Borra la memoria de trabajo de varias conversaciones del negocio en contexto.
+
+    La usa la purga de un cliente (todas sus conversaciones). Borra la clave con el negocio
+    (`wm:{tenant_id}:{conv}`) y la legada (`wm:{conv}`, solo id de conversación: no es de otro
+    negocio). Devuelve cuántas claves borró; si Redis falla lo registra y devuelve 0 (la
+    memoria de trabajo vence sola en 24 h).
+    """
+    from core.shared.tenant import get_current_tenant_id
+
+    tid = get_current_tenant_id()
+    claves = [f"wm:{c}" for c in conversation_ids]
+    if tid is not None:
+        claves += [f"wm:{tid}:{c}" for c in conversation_ids]
+    borradas = 0
+    try:
+        r = get_redis()
+        for i in range(0, len(claves), 500):
+            borradas += int(await r.unlink(*claves[i : i + 500]))
+    except Exception:
+        log.error("working_memory_clear_many_failed", conversations=len(conversation_ids), exc_info=True)
+    return borradas

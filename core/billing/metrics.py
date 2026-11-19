@@ -1,7 +1,8 @@
 """Medición de cuotas por tenant (ADR-0045).
 
 Las métricas se **derivan** de la tabla que ya es su fuente de verdad (no hay
-un contador paralelo): `customers`, `conversations`, `messages` y `usage_ledger`.
+un contador paralelo): `customers`, `conversations`, `messages`, `usage_ledger` y, desde
+HU-BILL-05 (D-35, ADR-0142), `agents`/`agent_instances` y `tenant_user`/`tenant_invitations`.
 Cada métrica se declara una sola vez acá; el panel y el enforcement la consumen.
 
 `count_metric()` corre dentro de `tenant_scope(tenant_id)` (RLS), así que sirve
@@ -17,10 +18,21 @@ from typing import Literal
 
 from sqlalchemy import func, select
 
-from core.db.models import Conversation, Customer, Message
+from core.billing.tipos_de_uso import EVAL
+from core.db.models import (
+    Admin,
+    AgentInstanceRecord,
+    AgentRecord,
+    ChannelConnection,
+    Conversation,
+    Customer,
+    Message,
+    TenantInvitation,
+    TenantUser,
+)
 from core.db.session import get_session
 from core.shared.tenant import tenant_scope
-from core.shared.test_mode import TEST_CHANNEL
+from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
 
 MetricScope = Literal["period", "lifetime"]
 
@@ -64,6 +76,23 @@ METRICS: tuple[Metric, ...] = (
         description="Imágenes entrantes procesadas (OCR/visión) en el período.",
     ),
     Metric(
+        key="agentes",
+        label="Agentes publicados",
+        unit="agentes",
+        scope="lifetime",
+        description=(
+            "Agentes del negocio con al menos una instancia en una conexión (D-35). "
+            "El Coordinador no cuenta."
+        ),
+    ),
+    Metric(
+        key="colaboradores",
+        label="Colaboradores",
+        unit="colaboradores",
+        scope="lifetime",
+        description="Cuentas activas con acceso al negocio sin el propietario, más invitaciones pendientes.",
+    ),
+    Metric(
         key="plugins",
         label="Plugins",
         unit="packs",
@@ -76,6 +105,16 @@ METRICS: tuple[Metric, ...] = (
         unit="mensajes",
         scope="period",
         description="Mensajes salientes enviados en el período.",
+    ),
+    Metric(
+        key="creditos",
+        label="Crédito mensual",
+        unit="créditos",
+        scope="period",
+        description=(
+            "Créditos consumidos en el mes del ciclo (1 crédito = COP 10, ADR-0144): IA del "
+            "usage_ledger más el fee de notas de voz, imágenes y plantillas."
+        ),
     ),
     Metric(
         key="costo_llm_usd",
@@ -170,17 +209,102 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
     if key == "conversaciones_ocr":
         return await _count_media(session, tenant_id, "image/%", period_start)
     if key == "mensajes":
+        # Las respuestas del playground (conversación `test`) no consumen la cuota.
+        de_prueba = select(Conversation.id).where(
+            Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
+        )
         query = select(func.count(Message.id)).where(
             Message.tenant_id == tenant_id,
             Message.direction == "outbound",
             Message.deleted_at.is_(None),
+            ~Message.conversation_id.in_(de_prueba),
         )
         if period_start is not None:
             query = query.where(Message.created_at >= period_start)
         return int((await session.execute(query)).scalar() or 0)
     if key == "costo_llm_usd":
         return await _count_cost(session, tenant_id, period_start)
+    if key == "creditos":
+        # El llamador pasa el inicio del MES de consumo (`periodos.ventana_mensual`), no el
+        # `period_start` crudo de la suscripción (ADR-0144). Décimas de crédito: float.
+        from core.billing.creditos import medir_creditos
+
+        return float((await medir_creditos(session, tenant_id, desde=period_start)).total)
+    if key == "agentes":
+        return await _count_agents(session, tenant_id)
+    if key == "colaboradores":
+        return await _count_collaborators(session, tenant_id)
     return 0
+
+
+async def _count_agents(session, tenant_id: uuid.UUID) -> int:
+    """Agentes publicados (D-35, ADR-0142, enmienda 2026-10-27): especialistas activos con al
+    menos una instancia viva en una conexión viva. Se cuentan agentes, no filas de
+    `agent_instances` (un agente en WhatsApp y en el chat web es uno). El especialista por defecto
+    cuenta como cualquiera (ADR-0192 §7: sin General que no cuente); el Coordinador (`kind = core`)
+    no, y el back-office (HU-AOS-37) es otra dimensión."""
+    instanciado = (
+        select(AgentInstanceRecord.id)
+        .join(
+            ChannelConnection,
+            (ChannelConnection.id == AgentInstanceRecord.connection_id)
+            & (ChannelConnection.tenant_id == AgentInstanceRecord.tenant_id),
+        )
+        .where(
+            AgentInstanceRecord.tenant_id == tenant_id,
+            AgentInstanceRecord.agent_id == AgentRecord.id,
+            AgentInstanceRecord.deleted_at.is_(None),
+            ChannelConnection.deleted_at.is_(None),
+        )
+        .exists()
+    )
+    query = select(func.count(AgentRecord.id)).where(
+        AgentRecord.tenant_id == tenant_id,
+        AgentRecord.kind == "specialist",
+        AgentRecord.status == "active",
+        AgentRecord.deleted_at.is_(None),
+        instanciado,
+    )
+    return int((await session.execute(query)).scalar() or 0)
+
+
+# Cuentas de plataforma (ADR-0134): un master o un tester vinculado no es un colaborador del
+# negocio. Mismo conjunto que `core.admin.roles.ROLES_DE_PLATAFORMA` (no se importa para no
+# acoplar billing con el paquete del panel).
+_ROLES_DE_PLATAFORMA = ("master", "tester")
+
+
+async def _count_collaborators(session, tenant_id: uuid.UUID) -> int:
+    """Colaboradores (D-35, ADR-0142): cuentas **activas** vinculadas al negocio con rol
+    `colaborador` (los propietarios no cuentan) más las invitaciones pendientes y vigentes a
+    colaborador, para que no se puedan mandar N invitaciones estando a uno del tope. Desactivar
+    una cuenta libera su cupo (decisión del dueño, 2026-10-19); reactivarla vuelve a medir el tope
+    (`collaborators_service.toggle_active`)."""
+    from sqlalchemy import or_
+
+    vinculados = (
+        await session.execute(
+            select(func.count(TenantUser.id))
+            .join(Admin, Admin.id == TenantUser.admin_id)
+            .where(
+                TenantUser.tenant_id == tenant_id,
+                TenantUser.role == "colaborador",
+                Admin.role.not_in(_ROLES_DE_PLATAFORMA),
+                Admin.active.is_(True),
+            )
+        )
+    ).scalar() or 0
+    pendientes = (
+        await session.execute(
+            select(func.count(TenantInvitation.id)).where(
+                TenantInvitation.tenant_id == tenant_id,
+                TenantInvitation.role == "colaborador",
+                TenantInvitation.estado == "pendiente",
+                or_(TenantInvitation.expires_at.is_(None), TenantInvitation.expires_at > func.now()),
+            )
+        )
+    ).scalar() or 0
+    return int(vinculados) + int(pendientes)
 
 
 async def _count_cost(session, tenant_id: uuid.UUID, period_start) -> float:
@@ -190,14 +314,17 @@ async def _count_cost(session, tenant_id: uuid.UUID, period_start) -> float:
 
     from core.db.models import UsageLedger
 
+    # El gate de pass^k lo paga la plataforma (HU-AOS-21): no consume la cuota del cliente.
     query = select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-        UsageLedger.tenant_id == tenant_id
+        UsageLedger.tenant_id == tenant_id, UsageLedger.kind != EVAL
     )
     # El playground gasta tokens reales, pero es una prueba del panel: no debe
     # consumir la cuota de costo del cliente. Se excluyen las filas atadas a una
     # conversación de prueba; las filas sin `conversation_id` se conservan
     # (`NOT IN` con NULL descartaría filas legítimas).
-    test_conversations = select(Conversation.id).where(Conversation.channel == TEST_CHANNEL)
+    test_conversations = select(Conversation.id).where(
+        Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
+    )
     query = query.where(
         or_(
             UsageLedger.conversation_id.is_(None),
@@ -216,6 +343,7 @@ async def _count_media(session, tenant_id: uuid.UUID, prefix: str, period_start:
         Message.direction == "inbound",
         Message.media_type.like(prefix),
         Message.deleted_at.is_(None),
+        no_es_prueba(tenant_id, Message.conversation_id),
     )
     if period_start is not None:
         query = query.where(Message.created_at >= period_start)

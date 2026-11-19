@@ -1,0 +1,136 @@
+"""Demo (cita) de punta a punta (HU-SH-02): sin doble reserva, confirmación con zona y
+enlace, aviso al equipo y datos de la cita para los avisos al cliente.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any
+from zoneinfo import ZoneInfo
+
+from sqlalchemy.exc import IntegrityError
+
+RESTRICCION_SIN_SOLAPE = "ex_pack_calendar_appointments_sin_solape"
+
+
+class HorarioOcupado(Exception):
+    """La base rechazó la cita: otra quedó en ese horario primero (dos reservas a la vez)."""
+
+
+def es_solape(exc: Exception) -> bool:
+    return isinstance(exc, IntegrityError) and RESTRICCION_SIN_SOLAPE in str(getattr(exc, "orig", exc))
+
+
+def es_bloqueo_mutuo(exc: Exception) -> bool:
+    """Postgres puede cortar con `deadlock detected` (40P01) dos inserts que chocan en la
+    restricción de exclusión en vez de esperar: el que pierde se reintenta y ahí ve el solape."""
+    return getattr(getattr(exc, "orig", None), "sqlstate", None) == "40P01"
+
+
+def enlace_de(appt_type: Any, config: Any) -> str:
+    """Enlace de la reunión: el del tipo de cita o, si no tiene, el general del negocio."""
+    return (getattr(appt_type, "enlace_reunion", None) or getattr(config, "enlace_reunion", "") or "").strip()
+
+
+def datos_de_cita(
+    titulo: str, inicio: datetime, zona: str, enlace: str, agenda: str = ""
+) -> dict[str, str]:
+    """Fecha, hora y zona en la hora del negocio (para mensajes y plantillas).
+
+    `agenda` (HU-CAL-08) es el nombre de la agenda y solo viene con varias agendas activas:
+    con una sola queda vacío y los textos no cambian.
+    """
+    from pack_calendar.skills import _long_date
+
+    local = inicio.astimezone(ZoneInfo(zona))
+    return {"titulo": titulo, "fecha": _long_date(local.date()), "hora": local.strftime("%H:%M"), "zona": zona, "enlace": enlace, "agenda": agenda}
+
+
+def texto_confirmacion(plantilla: str, datos: dict[str, str]) -> str:
+    """Confirmación al cliente con fecha, hora, zona y enlace (si hay)."""
+    from pack_calendar.skills import _KeepUnknown
+
+    enlace = f"\n🔗 Enlace de la reunión: {datos['enlace']}" if datos.get("enlace") else ""
+    return plantilla.format_map(_KeepUnknown({**datos, "enlace": enlace}))
+
+
+async def emitir_cambio(session, *, appointment_id: uuid.UUID, accion: str, titulo: str, inicio: datetime | None, evento_id: uuid.UUID) -> None:  # type: ignore[no-untyped-def]
+    """Aviso al equipo por el outbox (creada | reagendada | cancelada), en la MISMA
+    transacción que el historial de la cita."""
+    from core.events.outbox import emit_domain
+    from core.shared.events import ON_APPOINTMENT_CHANGED
+    from core.shared.tenant import get_current_tenant_id
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    await emit_domain(
+        session,
+        tenant_id=tenant_id,
+        topic=ON_APPOINTMENT_CHANGED,
+        dedupe_key=f"appt_changed:{evento_id}",
+        payload={
+            "appointment_id": str(appointment_id),
+            "accion": accion,
+            "titulo": titulo,
+            "inicio": inicio.isoformat() if inicio else None,
+        },
+    )
+
+
+async def avisar_al_equipo(appointment_id: str, accion: str, titulo: str, inicio: str | None) -> None:
+    """Push al colaborador asignado a la cita o, si no tiene, a los dueños del negocio."""
+    from core.db.session import get_session
+    from core.shared.tenant import get_current_tenant_id
+    from pack_calendar.models import Appointment
+
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        return
+    from sqlalchemy import select
+
+    from core.db.models import TenantUser
+
+    async with get_session() as session:
+        cita = await session.get(Appointment, uuid.UUID(appointment_id))
+        if cita is None or cita.tenant_id != tenant_id:
+            return
+        asignado = cita.asignado_admin_id
+        if asignado is not None:
+            # Si ya no es colaborador del negocio, el aviso va a los dueños (auditoría).
+            sigue = (
+                await session.execute(
+                    select(TenantUser.id).where(TenantUser.tenant_id == tenant_id, TenantUser.admin_id == asignado)
+                )
+            ).first()
+            if sigue is None:
+                asignado = None
+    cuando = ""
+    if inicio:
+        local = datetime.fromisoformat(inicio).astimezone(ZoneInfo(cita.timezone or "America/Bogota"))
+        cuando = f" para el {local:%d/%m} a las {local:%H:%M}"
+    verbo = {"programada": "nueva", "reprogramada": "reagendada", "cancelada": "cancelada"}.get(accion, accion)
+    titulo_push = f"Cita {verbo}: {titulo or cita.title}"
+    cuerpo = f"{cita.title}{cuando}."
+    data = {"kind": "cita", "appointment_id": appointment_id, "accion": accion}
+    from core.notifications.service import notify_standalone
+    from core.notifications.spec import NotificationSpec
+
+    # Centro de notificaciones (ADR-0167): va a la persona asignada (aunque no tenga la sección) y
+    # al equipo con acceso a las notificaciones de agenda; sin asignado, a los dueños.
+    await notify_standalone(
+        tenant_id,
+        NotificationSpec(
+            event_key=f"calendar.cita_{accion}",
+            category="agenda",
+            severity="warning" if accion == "cancelada" else "info",
+            title=titulo_push,
+            body=cuerpo,
+            dedupe_key=f"cita:{appointment_id}:{accion}:{inicio or ''}",
+            section="pack_calendar:notificaciones",
+            audience_admin_id=asignado,
+            data=data,
+            target={"entity": "cita", "id": appointment_id, "section": "pack_calendar"},
+        ),
+    )

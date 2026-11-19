@@ -1,0 +1,74 @@
+{
+  "nombre": "contratar-premium-mensual",
+  "semilla": 7,
+  "procedimientos": [
+    "pack_subscriptions.contratar_plan"
+  ],
+  "descripcion": "Gherkin 1 de HU-AOS-07 (contratar_plan, SPEC-43): el cliente simulado compra el Premium mensual con pago en línea. La inscripción queda pendiente de pago por el total del servidor y el link cobra ese total. Para medir pass^4 en vivo (con OK del dueño).",
+  "pasos": [
+    {
+      "nota": "el cliente simulado conversa hasta recibir el link",
+      "simulado": {
+        "objetivo": "Contratar el Plan Premium MENSUAL y pagarlo en línea. Tu objetivo se cumple cuando te mandan el link de pago.",
+        "datos": {
+          "nombre": "Ana Gómez",
+          "cedula": "{cliente.documento}",
+          "celular": "{cliente.celular}",
+          "correo": "ana+{cliente.id}@example.com",
+          "medio_de_pago": "pago en línea"
+        },
+        "max_turnos": 10
+      },
+      "espera_fin": [
+        "objetivo"
+      ]
+    },
+    {
+      "nota": "una inscripción pendiente de pago por el Premium mensual",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "pendiente_pago",
+          "valor_periodo": 600000
+        },
+        "guardar_como": "suscripcion"
+      }
+    },
+    {
+      "nota": "el primer cargo por el total",
+      "verifica": {
+        "tabla": "pack_subscriptions_charges",
+        "donde": {
+          "subscription_id": "{suscripcion.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "pendiente",
+          "monto": 600000,
+          "referencia": {
+            "$no_nulo": true
+          }
+        },
+        "guardar_como": "cargo"
+      }
+    },
+    {
+      "nota": "el link cobra el total del cargo",
+      "verifica": {
+        "tabla": "pack_payments_transactions",
+        "donde": {
+          "reference": "{cargo.referencia}"
+        },
+        "filas": 1,
+        "espera": {
+          "amount": 600000,
+          "provider": "simulado"
+        }
+      }
+    }
+  ]
+}

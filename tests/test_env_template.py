@@ -68,7 +68,7 @@ def test_llm_defaults_por_proveedor() -> None:
     """
     assert llm_defaults("anthropic")["reasoning_model"].startswith("claude")
     assert llm_defaults("openai")["reasoning_model"].startswith("gpt")
-    assert llm_defaults("deepseek")["reasoning_model"] == "deepseek-reasoner"
+    assert llm_defaults("deepseek")["reasoning_model"] == "deepseek-flash"
 
 
 def test_llm_defaults_proveedor_desconocido_cae_a_deepseek() -> None:
@@ -80,7 +80,7 @@ def test_env_template_declara_las_variables_criticas() -> None:
 
     for clave in (
         "COMPOSE_PROJECT_NAME", "DATABASE_URL", "REDIS_URL",
-        "LLM_MODEL_REASONING", "LLM_BASE_URL", "MASTER_ENCRYPTION_KEY",
-        "TOKEN_MASTER_KEYS", "TOKEN_ACTIVE_KEY_ID",
+        "LLM_MODEL_REASONING", "LLM_MODEL_FALLBACK", "LLM_BASE_URL", "MASTER_ENCRYPTION_KEY",
+        "TOKEN_MASTER_KEYS", "TOKEN_ACTIVE_KEY_ID", "LLM_THINKING_DEFAULT",
     ):
         assert f"{clave}=" in ENV_TEMPLATE

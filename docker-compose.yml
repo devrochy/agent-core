@@ -12,7 +12,7 @@ services:
     # pgvector + PostGIS en la misma base (ADR-0058). Ver docker/postgres/Dockerfile.
     build:
       context: ./docker/postgres
-    image: agent-core-postgres:pg16-pgvector-postgis
+    image: agent-core-postgres:pg17-pgvector-postgis
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agent_core}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agent_core}
@@ -65,6 +65,9 @@ services:
       - ./sdd:/app/sdd
       - ./packages:/app/packages
       - ./plugins:/app/plugins
+      # Artefactos por tenant (flow.json, playbooks, catalog.json) — ADR-0085:
+      # sin volumen, un redeploy los pierde.
+      - tenants-data:/app/tenants
     healthcheck:
       test:
         [
@@ -95,6 +98,9 @@ services:
       - ./sdd:/app/sdd
       - ./packages:/app/packages
       - ./plugins:/app/plugins
+      # Artefactos por tenant (flow.json, playbooks, catalog.json) — ADR-0085:
+      # sin volumen, un redeploy los pierde.
+      - tenants-data:/app/tenants
     depends_on:
       # Espera a core-api: es quien aplica las migraciones. Arrancar antes
       # significaría trabajar contra un esquema a medio migrar.
@@ -104,7 +110,7 @@ services:
   celery-beat:
     build: .
     entrypoint: ["/app/scripts/entrypoint.sh"]
-    command: celery -A core.tasks.celery_app:celery beat --loglevel=info
+    command: celery -A core.tasks.celery_app:celery beat --loglevel=info -S core.tasks.cron_scheduler:DbOverrideScheduler
     env_file: .env
     environment:
       AGENT_CORE_ROLE: beat
@@ -115,6 +121,9 @@ services:
       - ./sdd:/app/sdd
       - ./packages:/app/packages
       - ./plugins:/app/plugins
+      # Artefactos por tenant (flow.json, playbooks, catalog.json) — ADR-0085:
+      # sin volumen, un redeploy los pierde.
+      - tenants-data:/app/tenants
     depends_on:
       core-api:
         condition: service_healthy
@@ -137,11 +146,15 @@ services:
       - ./plugins:/app/plugins
     # Las credenciales de sesión viven en RAM; la copia durable y cifrada está
     # en `waweb_sessions.creds_encrypted`.
+    # `mode=1777`: la imagen corre como `app`; un tmpfs root:root 0755 impedía
+    # crear los directorios de sesión y el connector no emitía QR (2026-10-28).
     tmpfs:
-      - /tmp/waweb-sessions
+      - /tmp/waweb-sessions:mode=1777
     depends_on:
       core-api:
         condition: service_healthy
 
 volumes:
   pgdata:
+  # Artefactos de tenant (ADR-0085): persisten entre redeploys y se respaldan.
+  tenants-data:

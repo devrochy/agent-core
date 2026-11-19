@@ -1,0 +1,46 @@
+{
+  "nombre": "comprar-free",
+  "descripcion": "El cliente activa el plan Free por el procedimiento contratar_plan: la inscripción nace en prueba de 30 días, sin cobro ni link de pago (D-16).",
+  "pasos": [
+    {
+      "nota": "pide el Free con sus datos; confirma el resumen y el asistente inscribe",
+      "usuario": "Quiero activar el Plan Free. Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana+{cliente.id}@example.com.",
+      "hasta_herramienta": "sub_inscribir",
+      "insistir": "Sí, confirmo.",
+      "max_turnos": 4,
+      "espera": {
+        "sin_herramientas": [
+          "sub_link_pago"
+        ]
+      }
+    },
+    {
+      "nota": "suscripción en prueba, sin valor de período",
+      "verifica": {
+        "tabla": "pack_subscriptions_subscriptions",
+        "donde": {
+          "customer_id": "{cliente.id}"
+        },
+        "filas": 1,
+        "espera": {
+          "estado": "trialing",
+          "valor_periodo": 0,
+          "trial_termina": {
+            "$no_nulo": true
+          }
+        }
+      }
+    },
+    {
+      "nota": "se emitió subscription.activated",
+      "verifica": {
+        "tabla": "domain_events",
+        "donde": {
+          "topic": "subscription.activated",
+          "payload->>customer_id": "{cliente.id}"
+        },
+        "filas": 1
+      }
+    }
+  ]
+}

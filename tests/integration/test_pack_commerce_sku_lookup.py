@@ -218,13 +218,14 @@ async def test_agregar_item_pedido_acepta_sku_directo(fake_tool_context):
             ).scalar()
             order = Order(
                 conversation_id=uuid.uuid4(),
-                customer_id=uuid.uuid4(),
+                customer_id=fake_tool_context.customer_id,
                 status="abierto",
                 payment_method="efectivo_contraentrega",
                 payment_status="pendiente",
                 delivery_method="domicilio",
                 total=0,
                 order_seq=order_seq,
+                public_order_number=f"OC-{order_seq:04d}",
                 idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
             )
             session.add(order)

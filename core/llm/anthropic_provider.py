@@ -54,11 +54,14 @@ class AnthropicProvider(BaseLLMProvider):
     # ------------------------------------------------------------ serialización
     @staticmethod
     def _serialize_system(system_blocks: list[str]) -> list[dict[str, Any]]:
-        blocks = []
-        for text in system_blocks:
-            if not text:
-                continue
-            blocks.append({"type": "text", "text": text, "cache_control": {"type": "ephemeral"}})
+        """Una sola marca de caché, al final de lo fijo (adenda HU-AOS-35 de ADR-0117): por
+        convención del loop el último bloque es el dinámico, así que la marca va en el
+        penúltimo; con un solo bloque no hay prefijo fijo que marcar. La API acepta hasta 4
+        marcas: marcar cada bloque la rompía con 4 playbooks o más."""
+        textos = [t for t in system_blocks if t]
+        blocks: list[dict[str, Any]] = [{"type": "text", "text": t} for t in textos]
+        if len(blocks) >= 2:
+            blocks[-2]["cache_control"] = {"type": "ephemeral"}
         return blocks
 
     @staticmethod
@@ -153,6 +156,7 @@ class AnthropicProvider(BaseLLMProvider):
                 output_tokens=usage.get("output_tokens", 0),
                 cache_read_tokens=usage.get("cache_read_input_tokens", 0),
                 cache_write_tokens=usage.get("cache_creation_input_tokens", 0),
+                input_includes_cache=False,
             ),
             model=self.model,
             latency_ms=latency_ms,

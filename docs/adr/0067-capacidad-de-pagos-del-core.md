@@ -68,3 +68,98 @@ o que Wompi incorpore métodos que exijan parámetros por método.
 - `packages/pack-cobranza/pack_cobranza/pagos.py` (nuevo), `config.py`, `models.py`,
   migración `0011`, `api_gestor.py`, `module.py`.
 - `solvershub-apk`: tipos, API y acción "Cobro con QR" en el detalle de cuota.
+
+## Adenda (2026-10-10): el link vencido se reemplaza y el rechazo trae un código
+
+Revisada por el agente `arquitecto` antes de escribir código.
+
+**Hallazgo.** Al retirar `generar_link_pago` (adenda de ADR-0087), el vencimiento y el reemplazo
+del link quedaron en la tool. `WompiPaymentCapability.create_link`, el camino de
+`confirmar_pago_pedido`, de cobranza y de suscripciones, devolvía el link `pendiente` aunque ya
+hubiera vencido. Además, todo `PaymentCapabilityError` era igual para el consumidor. Commerce
+contestaba `monto_bajo_minimo` también a un pedido ya pagado o sin pasarela configurada.
+
+**Decisión:**
+1. **`create_link` no devuelve un link vencido.** El link vence a las `created_at +
+   link_expira_horas`, con 15 min de margen. Se calcula con la vigencia configurada hoy, no con la
+   que había al crear el link: si el negocio la cambia, durante esa ventana un link puede contarse
+   como vigente cuando Wompi ya lo expiró, o al revés. Un link vencido se reemplaza por uno nuevo,
+   también si era por otro monto (el saldo de una cuota después de un abono). La transacción vieja
+   queda con `deleted_at` (y `expirado` si estaba pendiente) para auditoría y para el webhook
+   tardío. El `update` exige que siga como se leyó; si otra llamada o un webhook la cambió, se
+   relee y se decide de nuevo. El link nuevo de Wompi queda sin usar y vence solo. Dos primeras
+   llamadas a la vez chocan con el índice único parcial (`pack_payments_0003`) y la segunda
+   devuelve el link de la primera. El Protocol `PaymentCapability` y `PaymentLink` no cambian.
+2. **Código en el rechazo.** `PaymentCapabilityError` ya admitía `code` (por `BusinessError`,
+   ADR-0088). `core/payments` publica el vocabulario y el consumidor ramifica por él sin importar
+   el pack de pagos (invariante nº5):
+
+   | Código | Cuándo |
+   |---|---|
+   | `monto_bajo_minimo` | La pasarela no cobra un monto tan bajo |
+   | `sin_pasarela` | El negocio no configuró la pasarela |
+   | `ya_pagado` | La referencia tiene un pago aprobado (en cualquier transacción, también una reemplazada) |
+   | `en_revision` | Llegó un pago por otro monto y lo revisa el negocio |
+   | `monto_no_coincide` | La referencia tiene un link **vigente** por otro monto |
+   | `no_disponible` | La pasarela rechazó o falló al crear el link (también 401 y 5xx: se loguea como error) |
+
+   Sin código, el consumidor no supone el motivo.
+3. **Commerce** (`confirmar_pago_pedido`) contesta según el código: `monto_bajo_minimo` igual que
+   antes (ADR-0087 §4); `ya_pagado` sin ofrecer otro medio de pago; `en_revision` y
+   `monto_no_coincide` con `escalate`, que el core aplica sin depender del modelo; el resto como
+   pago en línea no disponible por ahora.
+
+**Seguimiento (fuera de esta adenda).** Cobranza y suscripciones siguen tratando todo rechazo como
+`monto_bajo_minimo`. Suscripciones devuelve `cargo.link_url` guardado sin llamar a `create_link`
+(`_link_de_cargo`, `sub_link_pago`), así que todavía puede entregar un link vencido. Como
+`create_link` es idempotente, basta con quitar ese atajo.
+
+## Adenda (2026-10-25): el mínimo por cobro lo declara la capacidad, no el consumidor
+
+**Hallazgo.** `pack_commerce` guardaba su propia cifra (`pago_en_linea_monto_minimo`, 150.000 COP) para
+rechazar un pedido en línea antes de generar el link. Esa cifra salió de un 422 del **sandbox** de Wompi;
+en producción el mínimo publicado es 1.500 COP. Como el default valía igual en producción, un plan de
+80.000 pagado en línea salía rechazado salvo que cada negocio lo bajara a mano, y el playbook de ventas
+repetía el 150.000 como si fuera el mínimo real.
+
+**Decisión.**
+1. **Operación opcional `monto_minimo()`** en la capacidad, con el mismo molde que `procesar_evento`
+   (se invoca con `getattr`): devuelve el mínimo por link del ambiente del negocio, o `None` si no lo
+   sabe. `core.payments.monto_minimo(capacidad)` la expone a los packs sin importar `pack_payments`
+   (invariante nº5). El Protocol `PaymentCapability` no cambia.
+2. **`WompiPaymentCapability.monto_minimo()`** devuelve 150.000 con `sandbox` y 1.500 en producción
+   (`min_amount_cop`).
+3. **`pack_commerce`**: `pago_en_linea_monto_minimo` pasa a `None` por defecto. Vacío, el gate de
+   `crear_pedido` usa el mínimo de la pasarela; un valor explícito (incluido 0, que apaga el gate) manda
+   sobre el de la pasarela. Sin pasarela que lo declare queda 150.000, la política anterior.
+4. **Playbook de ventas** (`pack_commerce` 2.5.0): ya no cita una cifra; el modelo se apoya en el error
+   de `crear_pedido` y nunca nombra un mínimo.
+
+Fuera de esta adenda: el cobro de la plataforma (`core/billing/providers/wompi.py`, `MIN_AMOUNT_COP`) y
+el override de `solvershub-comercial`, que tienen su propio texto.
+
+## Adenda (2026-10-25): los datos de transferencia del negocio son una capacidad del core
+
+**Hallazgo.** Cuando un cobro de suscripción no puede tener link (monto bajo el mínimo de la pasarela,
+negocio sin pasarela o link caído, HU-SUB-13), el aviso al cliente salía igual con «págalo aquí:» y el
+link vacío; el fallo solo quedaba en el log. Las cuentas de transferencia existen (`transfer_accounts`,
+configuración de `pack_commerce`), pero `pack_subscriptions` no puede importar ese pack (invariante nº5).
+
+**Decisión (opción A del dueño, HU-SUB-24).**
+1. **`core.payments.transferencia`**: un `TransferDetailsProvider` (`cuentas_de_transferencia()`) y un
+   registro filtrado por pack habilitado, con el mismo molde que `payment_registry`. Es independiente
+   del Protocol `PaymentCapability`, que no cambia: ofrecer cuentas no exige cobrar en línea.
+2. **`formatear_cuentas` y `datos_de_transferencia(enabled)`** arman el bloque «Datos para tu
+   transferencia»; son la única fuente del texto. El chat de ventas (`_transfer_safe_append`) y los avisos
+   de cobro imprimen lo mismo. Un proveedor que falla cuenta como «sin datos».
+3. **`pack_commerce`** registra sus cuentas al activarse; **`pack_subscriptions`** las consulta.
+4. **Avisos de cobro** (cargo nuevo, recordatorio, pausa por mora): un cargo sin link lleva las cuentas en
+   lugar del link (`cargo.datos_transferencia`, y `cargo.forma_de_pago` = link o cuentas, para plantillas de
+   Meta); tiene textos propios de respaldo. Un cargo sin link y sin cuentas **no avisa al cliente** (no le
+   promete un link inexistente), conserva su fila sin link para el panel y alerta al dueño.
+5. Las cuentas son datos del negocio que se imprimen tal cual, nunca instrucciones ni texto del modelo
+   (invariante nº7).
+
+Fuera de esta adenda: el reenvío del link desde el panel para un cargo sin link, y registrar el pago por
+transferencia (HU-SUB-26, repo solvershub-docs).
+

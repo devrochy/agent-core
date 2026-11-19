@@ -1,6 +1,7 @@
 # ADR-0075 — Playground "Probar asistente": conversación de prueba sin canal
 
 - **Estado:** aceptado
+- **Nota de estado:** ADR-0191 (propuesto, 2026-11-12): el Centro de pruebas prueba por una conexión real del negocio y su release; la conexión interna `playground` sale del turno.
 - **Fecha:** 2026-09-27
 
 ## Contexto

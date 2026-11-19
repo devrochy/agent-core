@@ -42,11 +42,11 @@ async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) 
 
 
 async def _setup_connected_tenant():
+    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.gateway import meta_token_store
     from core.gateway.meta_onboarding import TOKEN_KIND
-    from core.onboarding import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = _uniq("salud-admin")
@@ -60,7 +60,7 @@ async def _setup_connected_tenant():
     async with tenant_scope(tid):
         async with get_session() as session:
             connection = MetaConnection(
-                tenant_id=tid, channel="whatsapp", meta_app_id="app-embedded-signup",
+                tenant_id=tid, channel="whatsapp", origin="embedded_signup", meta_app_id="app-embedded-signup",
                 status="connected", business_id="biz-salud",
             )
             session.add(connection)
@@ -110,7 +110,7 @@ async def test_desuscribir_waba_pasa_a_rojo_y_el_boton_repara(app_client, monkey
             return {"data": {"is_valid": True, "expires_at": 0}}
         raise AssertionError(f"path no esperado: {method} {path}")
 
-    async def _fake_debug_token(token, app_id, app_secret, version):
+    async def _fake_debug_token(token, app_id, app_secret, version, **_kwargs):
         from datetime import UTC, datetime
 
         from core.gateway.meta_preflight import PreflightCheck

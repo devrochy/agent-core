@@ -10,19 +10,35 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from fastapi import APIRouter
 
-from core.mcp.types import BaseModule, GuardrailResult
+import pack_calendar.jobs  # noqa: F401  # registra el @register_cron (HU-SH-02)
+from core.mcp.types import BaseModule, GuardrailResult, config_de_agente
 from core.shared.logger import get_logger
+from pack_calendar import google_api
+
+# Registra las citas en la línea de tiempo del cliente (ADR-0056, HU-CRM-04).
+from pack_calendar import providers as _lead_provider  # noqa: F401
 from pack_calendar.admin import router as calendar_admin_router
 from pack_calendar.admin_api import router as calendar_admin_api_router
 from pack_calendar.config import CalendarConfig
 from pack_calendar.skills import CalendarSkill
 
 if TYPE_CHECKING:
+    import uuid
+
     from core.mcp.host import MCPHost
+    from core.primeros_pasos.contrato import ContenidoCargado
+    from core.qa.contrato_datos import ContextoDeNegocio, FormaDeDatos, RegistroSembrado
+    from core.qa.contrato_importacion import (
+        ContextoDeImportacion,
+        PlantillaDeImportacion,
+        ResultadoDeImportacion,
+    )
 
 PLUGIN_ID = "pack_calendar"
 
@@ -31,52 +47,398 @@ log = get_logger(__name__)
 # OAuth: conserva la URL vieja (ver docstring).
 
 
-# Afirmaciones del LLM sobre acciones de citas que SOLO son válidas si la tool
-# correspondiente corrió en el turno (anti-alucinación: el modelo a veces "dice"
-# que agendó/canceló/envió el correo sin llamar la tool). Mismo mecanismo que el
+# Afirmaciones del LLM sobre acciones de citas que SOLO son válidas con evidencia
+# real del turno (anti-alucinación: el modelo a veces "dice" que agendó/canceló/
+# envió el correo sin que haya pasado). Mismo mecanismo que el
 # `crm_completion_check` de pack-commerce.
+#
+# HU-CAL-05 (D-SPEC-24-8): cada claim separa la AFIRMACIÓN ("quedó agendada",
+# "moví tu demo") de la NEGACIÓN ("no pude agendarla"). Una afirmación exige el
+# `status` de éxito de la tool en este turno; una negación, que la acción se haya
+# intentado. Los verbos van en pasado o presente afirmativo: "¿te agendo la
+# demo?", "¿querés que cancele la cita?" o "quedaría agendada" son preguntas o
+# propuestas, no afirmaciones (en la prueba real disparaban reintentos y
+# escalamientos).
 # _TOOL_NAME_KEY: literal "_tool_name" (los packs no importan de core.orchestrator).
-_COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
-    "agendada": (
-        re.compile(
-            r"qued\w*\s+(?:tu\s+)?(?:demo|cita\w*)?\s*agendad\w*|"
-            r"(?:ya\s+)?te\s+agend\w+\s+(?:la\s+)?(?:demo|cita)",
+_QUEDO = r"qued(?:ó|o|a|an|aron)\b"
+
+
+# "Disponibilidad" genérica: sin un dato de agenda cerca puede ser stock o cupo de un producto.
+_DISPONIBLE_GENERICO = (
+    r"(?:\b(?:est[áa]|queda|quedan)\s+libres?\b|"
+    r"\b(?:hay|tengo|tenemos)\s+(?:disponibilidad|cupos?|espacio)\b)"
+)
+# Dato de agenda: una hora, un día, una fecha o la palabra de la cita.
+_AGENDA = (
+    r"(?:\b(?:a\s+las?|desde\s+las?|entre\s+las?)\s+\d|\b\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.\s?m\.|p\.\s?m\.|hs?)\b|"
+    r"\b\d{1,2}:\d{2}\b|\b(?:horas?|horarios?|cita|citas|demo|demos|reuni[oó]n|agenda|turno|turnos|"
+    r"ma[ñn]ana|tarde|semana|fecha|lunes|martes|mi[ée]rcoles|jueves|viernes|s[áa]bado|domingo)\b)"
+)
+# Los dos en la misma oración (acotado: sin backtracking largo).
+_MISMA_ORACION = r"[^.!?\n]{0,120}?"
+# Lo que se cancela en otros módulos (suscripciones, pedidos, cobros): «tu suscripción quedó
+# cancelada» no habla de una cita y no exige `cancel_calendar_event` (D-76, 2026-11-16).
+_NO_ES_CITA = (
+    r"\b(?:suscripci[oó]n|suscripciones|plan|planes|membres[ií]a|pedido|pedidos|orden|[oó]rdenes|"
+    r"compra|compras|pago|pagos|cobro|cobros|factura|facturas|promesa|promesas|renovaci[oó]n)\b"
+)
+# El resto de la oración antes del verbo, sin pasar por un sujeto de otro módulo.
+_ANTES_SIN_OTRO_SUJETO = rf"(?:^|(?<=[.!?\n]))(?:(?!{_NO_ES_CITA})[^.!?\n]){{0,160}}?"
+
+
+# Un paso futuro o condicionado no es una afirmación: "cuando confirmes el resumen, la cita queda
+# agendada" o "ahí queda agendada" explican qué pasará, no que ya pasó. Con el motor de
+# procedimientos el asistente describe la confirmación antes de que exista la cita, y la regla de
+# "quedó/queda agendada" lo escalaba (pass^4 de los procedimientos, 2026-10-23). "Si" no cuenta:
+# "si todo está bien, tu cita quedó agendada" sí afirma.
+_PROSPECTIVO = re.compile(
+    r"\b(?:cuando|una\s+vez(?:\s+que)?|en\s+cuanto|apenas|luego\s+de|despu[eé]s\s+de|"
+    r"al\s+(?:confirmar|aceptar|elegir)|para\s+que|ah[ií]|all[ií])\b",
+    re.IGNORECASE,
+)
+_ORACION = re.compile(r"[^.!?\n]+[.!?\n]?")
+# Solo las frases con "quedó/queda": el resto de los verbos ("moví", "cancelé") ya es pasado.
+_CON_QUEDAR = frozenset({"agendada", "reagendada", "cancelada"})
+
+
+# Una promesa de consultar ("si me dices el día, reviso los horarios libres") no afirma que un
+# horario esté libre: anuncia que se va a mirar (pass^4 de los procedimientos, 2026-10-23). Solo
+# verbos en presente, futuro o infinitivo: "revisé los horarios libres" sí afirma haberlo hecho.
+_PROMETE_CONSULTAR = re.compile(
+    r"\b(?:revis(?:o|amos|ar|ar[eé]|aremos)|consult(?:o|amos|ar|ar[eé]|aremos)|"
+    r"verific(?:o|amos|ar|ar[eé]|aremos)|busc(?:o|amos|ar|ar[eé]|aremos)|mir(?:o|amos|ar|ar[eé])|"
+    r"(?:voy\s+a|puedo|d[eé]jame|permíteme)\s+ver)\b",
+    re.IGNORECASE,
+)
+# Con una hora concreta en la oración ya no es una promesa: dice cuál está libre.
+_HORA = re.compile(r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\s*(?:am|pm|a\.\s?m\.|p\.\s?m\.|hs?)\b", re.IGNORECASE)
+
+
+def _es_paso_futuro(oracion: str, inicio: int) -> bool:
+    return bool(_PROSPECTIVO.search(oracion[:inicio]))
+
+
+def _es_promesa_de_consultar(oracion: str, inicio: int) -> bool:
+    return bool(_PROMETE_CONSULTAR.search(oracion[:inicio])) and not _HORA.search(oracion)
+
+
+def _sin_oraciones_exentas(text: str, affirm: re.Pattern[str], exenta: Callable[[str, int], bool]) -> str:
+    """Quita las oraciones donde la afirmación aparece dentro de un paso futuro o una promesa."""
+    conservadas: list[str] = []
+    for oracion in _ORACION.findall(text):
+        coincidencia = affirm.search(oracion)
+        if coincidencia and exenta(oracion, coincidencia.start()):
+            continue
+        conservadas.append(oracion)
+    return "".join(conservadas)
+
+
+@dataclass(frozen=True)
+class _Claim:
+    tools: frozenset[str]
+    affirm: re.Pattern[str]
+    deny: re.Pattern[str] | None = None
+
+
+_CLAIMS: dict[str, _Claim] = {
+    "agendada": _Claim(
+        tools=frozenset({"create_calendar_event"}),
+        affirm=re.compile(
+            rf"\b{_QUEDO}\s+(?:tu\s+|la\s+)?(?:demo|cita\w*)?\s*agendad\w*|"
+            r"\b(?:te\s+)?agendé\s+(?:la\s+|tu\s+)?(?:demo|cita)",
             re.IGNORECASE,
         ),
-        {"create_calendar_event"},
-    ),
-    "reagendada": (
-        re.compile(r"qued\w*\s+(?:re)agendad\w*|reprogramad\w*|mov\w+\s+(?:la\s+)?cita", re.IGNORECASE),
-        {"update_calendar_event"},
-    ),
-    "cancelada": (
-        re.compile(r"qued\w*\s+cancelad\w*|cancel\w+\s+(?:la\s+)?cita|qued\w*\s+anulad\w*", re.IGNORECASE),
-        {"cancel_calendar_event"},
-    ),
-    "correo_enviado": (
-        re.compile(
-            r"envi\w*\s+(?:la\s+)?(?:confirmaci[oó]n|el\s+correo|un\s+correo)|"
-            r"te\s+envi\w*\s+la\s+confirmaci[oó]n",
+        deny=re.compile(
+            r"no\s+pud\w*\s+(?:agend\w*(?:la|lo)\b|agendar\s+(?:la|tu|esa)\s+(?:cita|demo))|"
+            rf"no\s+{_QUEDO}\s+(?:tu\s+|la\s+)?(?:demo|cita\w*)?\s*agendad\w*",
             re.IGNORECASE,
         ),
-        {"send_email"},
     ),
-    "listado": (
-        re.compile(
+    "reagendada": _Claim(
+        tools=frozenset({"update_calendar_event"}),
+        affirm=re.compile(
+            rf"\b{_QUEDO}\s+reagendad\w*|\b(?:{_QUEDO}|fue|fueron)\s+reprogramad\w*|"
+            r"\bmov[íi]\w*\s+(?:tu\s+|la\s+|esa\s+)?(?:demo|cita)|"
+            rf"\b{_QUEDO}\s+movid\w*|\b(?:ya\s+)?(?:te\s+)?la\s+mov[íi]\b",
+            re.IGNORECASE,
+        ),
+        deny=re.compile(
+            r"no\s+pud\w*\s+(?:reagend\w*|reprogram\w*|mover\w*|mov[íi]\w*)|"
+            r"no\s+(?:la\s+)?(?:encontr|hall)\w+.{0,60}(?:reagend\w*|mover|mov[íi]\w*)|"
+            rf"no\s+{_QUEDO}\s+reagendad\w*",
+            re.IGNORECASE,
+        ),
+    ),
+    "cancelada": _Claim(
+        tools=frozenset({"cancel_calendar_event"}),
+        affirm=re.compile(
+            rf"{_ANTES_SIN_OTRO_SUJETO}\b{_QUEDO}\s+(?:cancelad|anulad)\w*|"
+            rf"{_ANTES_SIN_OTRO_SUJETO}\b(?:fue|fueron)\s+cancelad\w*|"
+            r"\bcancel(?:é|ó|amos)\s+(?:la\s+|tu\s+|esa\s+)?(?:cita|demo)",
+            re.IGNORECASE | re.MULTILINE,
+        ),
+        deny=re.compile(
+            r"no\s+pud\w*\s+(?:cancel\w*(?:la|lo)\b|cancelar\s+(?:la|tu|esa)\s+(?:cita|demo))|"
+            r"no\s+(?:la\s+)?(?:encontr|hall|figur|aparec)\w+.{0,60}cancel\w*|"
+            rf"{_ANTES_SIN_OTRO_SUJETO}no\s+{_QUEDO}\s+cancelad\w*",
+            re.IGNORECASE,
+        ),
+    ),
+    "correo_enviado": _Claim(
+        tools=frozenset({"send_email"}),
+        affirm=re.compile(
+            r"\b(?:te\s+)?(?:envié|enviamos|envió|se\s+envió|mandé|mandamos)\s+"
+            r"(?:la\s+|el\s+|un\s+)?(?:confirmaci[oó]n|correo|email|mail)|"
+            r"\b(?:te\s+)?(?:va\s+a\s+llegar|llegar[áa]|lleg[óo])\s+"
+            r"(?:la\s+|el\s+|un\s+)?(?:confirmaci[oó]n|correo|email|mail)",
+            re.IGNORECASE,
+        ),
+    ),
+    # E2E HU-CAL-06: "A las 3:00 pm está libre" sin consultar. Afirmar que un
+    # horario está libre u ocupado exige la consulta (o el intento de agendar/mover,
+    # que valida el horario en el servidor).
+    "disponibilidad": _Claim(
+        tools=frozenset({"check_availability", "find_next_available"}),
+        # Acotado a horarios: "el plan Basic está disponible" es venta, no agenda. Las formas
+        # genéricas ("tenemos disponibilidad", "hay cupos", "queda libre") solo cuentan con un
+        # dato de agenda en la misma oración: en un negocio que también vende, "¡Sí, tenemos
+        # disponibilidad! La hamburguesa cuesta…" es inventario y escalaba el pedido (pass^4 de
+        # los procedimientos, 2026-10-18).
+        affirm=re.compile(
+            r"\bhorarios?\s+(?:libres?|disponibles?)\b|"
+            r"\b(?:ese|este|el)\s+horario\s+(?:ya\s+)?(?:est[áa]|queda)\s+"
+            r"(?:ocupad|tomad|disponible|libre)\w*|"
+            rf"{_AGENDA}{_MISMA_ORACION}{_DISPONIBLE_GENERICO}|"
+            rf"{_DISPONIBLE_GENERICO}{_MISMA_ORACION}{_AGENDA}",
+            re.IGNORECASE,
+        ),
+    ),
+    "listado": _Claim(
+        tools=frozenset({"list_client_appointments"}),
+        affirm=re.compile(
             r"no\s+ten\w*\s+(?:ninguna\s+|ningunas\s+)?citas?\s+agendadas|"
-            r"ten\w*\s+\d+\s+(?:citas?|demos?)\s+agendadas",
+            r"ten\w*\s+\d+\s+(?:citas?|demos?)\s+agendadas|"
+            r"no\s+(?:me\s+)?(?:aparece|figura|encontr\w+).{0,50}(?:citas?|demo)|"
+            # E2E HU-CAL-06: enumeró citas de memoria sin listar.
+            r"\b(?:estas|esta)\s+(?:son|es)\s+tus\s+(?:citas|demos)\b|"
+            r"\btus\s+(?:citas|demos)\s+(?:agendadas|activas|programadas)|"
+            r"\b(?:es\s+)?la\s+[úu]nica\s+(?:cita\s+|demo\s+)?(?:activa|agendada|programada)|"
+            r"\bten[ée]s\s+(?:una\s+sola|solo\s+una|s[óo]lo\s+\d+|\d+)\s+(?:citas?|demos?)",
             re.IGNORECASE,
         ),
-        {"list_client_appointments"},
+    ),
+    # Afirmar que el cliente YA tiene una cita (sin crearla en este turno) exige
+    # verificarlo con list_client_appointments (corrección post-prueba 2026-10-05:
+    # el asistente afirmó "Tenés tu demo agendada..." sin listar y se contradijo).
+    "cita_existente": _Claim(
+        tools=frozenset({"list_client_appointments"}),
+        affirm=re.compile(
+            r"ten[ée]s\s+(?:una\s+|tu\s+)?(?:demo|cita)\s+agendad|"
+            r"ya\s+ten[ée]s\s+(?:una\s+|tu\s+)?(?:demo|cita)|"
+            r"figura\s+agendad|aparece\s+agendad|"
+            # E2E HU-CAL-06: describir una cita ("tu demo está agendada para el
+            # jueves") también es afirmar su estado.
+            r"\btu\s+(?:demo|cita)\s+(?:est[áa]|sigue)\s+(?:agendad|programad|para\s+el)|"
+            r"\btu\s+(?:demo|cita)\s+es\s+(?:el|este|esta|ma[ñn]ana|hoy)\b",
+            re.IGNORECASE,
+        ),
     ),
 }
 
+# Vista compatible (etiqueta → patrón que detecta el claim, tools): la usan la
+# config por tenant (deshabilitar/reemplazar) y el DSL de claims custom.
+_COMPLETION_CLAIMS: dict[str, tuple[re.Pattern[str], set[str]]] = {
+    label: (
+        re.compile(
+            "|".join(f"(?:{p.pattern})" for p in (claim.affirm, claim.deny) if p is not None),
+            re.IGNORECASE,
+        ),
+        set(claim.tools),
+    )
+    for label, claim in _CLAIMS.items()
+}
+
+# Acciones cuyo resultado trae `email_sent` (correo determinista, HU-CAL-02).
+_EMAILING_TOOLS = frozenset({"create_calendar_event", "update_calendar_event", "cancel_calendar_event"})
+_DONT_MENTION = " Reescribí tu respuesta para el cliente sin mencionar esta instrucción."
+# Una pregunta en español va entre "¿" y "?": se descarta antes de buscar afirmaciones.
+_QUESTION = re.compile(r"¿[^¿?]*\?")
+
+
+def _of(results: list[dict[str, Any]], *names: str) -> list[dict[str, Any]]:
+    return [r for r in results if str(r.get("_tool_name") or "") in names]
+
+
+def _listed_ok(results: list[dict[str, Any]]) -> bool:
+    return any(r.get("_ok") for r in _of(results, "list_client_appointments"))
+
+
+def _affirmation_backed(label: str, results: list[dict[str, Any]]) -> bool:
+    """Evidencia REAL de una afirmación en los resultados del turno actual."""
+    if label == "agendada":
+        creates = _of(results, "create_calendar_event")
+        return any(r.get("status") == "created" for r in creates) or (not creates and _listed_ok(results))
+    if label == "reagendada":
+        updates = _of(results, "update_calendar_event")
+        return any(r.get("status") == "updated" for r in updates) or (not updates and _listed_ok(results))
+    if label == "cancelada":
+        return any(r.get("status") == "cancelled" for r in _of(results, "cancel_calendar_event"))
+    if label == "correo_enviado":
+        return any(r.get("_ok") for r in _of(results, "send_email")) or any(
+            r.get("email_sent") is True for r in _of(results, *_EMAILING_TOOLS)
+        )
+    if label == "disponibilidad":
+        return any(r.get("_ok") for r in _of(results, "check_availability", "find_next_available")) or bool(
+            _of(results, "create_calendar_event", "update_calendar_event")
+        )
+    if label == "cita_existente":
+        # Describir la cita que se acaba de crear o mover en este turno está respaldado.
+        return _listed_ok(results) or any(
+            r.get("status") in ("created", "updated")
+            for r in _of(results, "create_calendar_event", "update_calendar_event")
+        )
+    return _listed_ok(results)  # listado
+
+
+def _denial_backed(label: str, results: list[dict[str, Any]]) -> bool:
+    """Decir "no pude…" exige haberlo intentado en el turno (o, para mover o
+    cancelar, haber verificado con el listado que la cita no está)."""
+    claim = _CLAIMS[label]
+    if _of(results, *claim.tools):
+        return True
+    return label in ("reagendada", "cancelada") and _listed_ok(results)
+
+
+def _builtin_verdict(label: str, text: str, results: list[dict[str, Any]]) -> GuardrailResult | None:
+    claim = _CLAIMS[label]
+    tools = ", ".join(sorted(claim.tools))
+    if claim.deny is not None and claim.deny.search(text) and not _denial_backed(label, results):
+        return GuardrailResult(
+            passed=False,
+            reason=f"Negación de '{label}' sin haberlo intentado en este turno",
+            retry_instruction=(
+                f"Tu respuesta dice que no se pudo completar '{label}', pero no lo intentaste en "
+                f"este turno. Llamá la herramienta correspondiente ({tools}) y contá lo que devuelva."
+                + _DONT_MENTION
+            ),
+        )
+    affirm_text = claim.deny.sub(" ", text) if claim.deny is not None else text
+    if label in _CON_QUEDAR:
+        affirm_text = _sin_oraciones_exentas(affirm_text, claim.affirm, _es_paso_futuro)
+    elif label == "disponibilidad":
+        affirm_text = _sin_oraciones_exentas(affirm_text, claim.affirm, _es_promesa_de_consultar)
+    if not claim.affirm.search(affirm_text) or _affirmation_backed(label, results):
+        return None
+
+    if label == "correo_enviado":
+        unsent = [r for r in _of(results, *_EMAILING_TOOLS) if r.get("email_sent") is False]
+        if unsent:
+            reason = str(unsent[-1].get("email_reason") or "error_envio")
+            retry = (
+                f"El correo de confirmación no se pudo enviar (motivo: {reason}). NO digas que "
+                "lo enviaste: contá lo que sí se hizo y que el correo no salió."
+            )
+        else:
+            retry = (
+                "Tu respuesta dice que se envió un correo, pero en este turno no se envió ninguno. "
+                "No lo afirmes: el correo lo envía el sistema solo al agendar, reagendar o "
+                "cancelar una cita."
+            )
+    elif attempted := _of(results, *claim.tools):
+        last = attempted[-1]
+        detail = str(last.get("error") or last.get("message") or last.get("reason") or "").strip()
+        retry = (
+            f"La herramienta no completó '{label}': devolvió \"{detail[:200]}\". "
+            "NO afirmes que se completó: seguí esa instrucción (por ejemplo, "
+            "pedirle al cliente el dato que falta) y recién después confirmá."
+        )
+    elif label == "disponibilidad":
+        retry = (
+            "Tu respuesta afirma qué horarios están libres u ocupados pero no consultaste la "
+            "disponibilidad en este turno. Llamá check_availability con la fecha (o "
+            "find_next_available si no hay fecha) y ofrecé solo los horarios que devuelva."
+        )
+    else:
+        retry = (
+            f"Tu respuesta afirma el resultado de '{label}' pero no llamaste la "
+            f"herramienta correspondiente ({tools}) en este turno. Llamala ahora mismo y "
+            "contá lo que devuelva, o si no podés completarla de verdad, decilo sin "
+            "prometer ni dar por fallido algo que no intentaste."
+        )
+    return GuardrailResult(
+        passed=False,
+        reason=f"Afirmación de '{label}' sin evidencia de la tool en este turno",
+        retry_instruction=retry + _DONT_MENTION,
+    )
+
+
+# Tope de líneas de claims custom (mismo criterio que pack-commerce: este
+# guardrail corre en CADA turno, una config enorme degradaría la latencia).
+_MAX_CUSTOM_COMPLETION_CLAIM_LINES = 100
+
+
+def _parse_custom_completion_claims(raw: str) -> dict[str, tuple[re.Pattern[str], set[str]]]:
+    """Parsea `CalendarConfig.completion_claims_custom` (ADR-0025/#157):
+    `etiqueta: frase uno | frase dos => tool_uno, tool_dos` por línea. Las
+    frases se escapan (`re.escape`), nunca regex crudo (anti-ReDoS). Una línea
+    mal formada se ignora con warning, nunca rompe el guardrail (fail-open).
+    """
+    result: dict[str, tuple[re.Pattern[str], set[str]]] = {}
+    for lineno, raw_line in enumerate(raw.splitlines(), start=1):
+        if lineno > _MAX_CUSTOM_COMPLETION_CLAIM_LINES:
+            log.warning("calendar_claims_custom_truncado", limite=_MAX_CUSTOM_COMPLETION_CLAIM_LINES)
+            break
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if ":" not in line or "=>" not in line:
+            log.warning("calendar_claim_custom_malformado", line=lineno)
+            continue
+        label, _, rest = line.partition(":")
+        phrases_part, _, tools_part = rest.partition("=>")
+        label = label.strip()
+        phrases = [p.strip() for p in phrases_part.split("|") if p.strip()]
+        tools = {t.strip() for t in tools_part.split(",") if t.strip()}
+        if not label or not phrases or not tools:
+            log.warning("calendar_claim_custom_incompleto", line=lineno)
+            continue
+        result[label] = (
+            re.compile("|".join(re.escape(p) for p in phrases), re.IGNORECASE),
+            tools,
+        )
+    return result
+
 
 class GoogleCalendarModule(BaseModule):
+    tipo = "especialidad"  # ADR-0190 §1
+    grupos_de_acciones: ClassVar[dict[str, str]] = {
+        "create_calendar_event": "citas",
+        "update_calendar_event": "citas",
+        "cancel_calendar_event": "citas",
+        "list_client_appointments": "citas",
+        "check_availability": "disponibilidad",
+        "find_next_available": "disponibilidad",
+        "list_appointment_types": "disponibilidad",
+        "list_calendars": "disponibilidad",
+    }
+    grupos_de_procedimientos: ClassVar[dict[str, str]] = {
+        "pack_calendar.agendar_cita": "agenda",
+    }
+    etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {"agenda": "Agenda"}
+    # Lo que es de CADA agente de este tipo; el resto de `CalendarConfig` es del negocio (SPEC-44, design.md §2).
+    config_agente = config_de_agente(CalendarConfig, ("multi_agenda_modo", "slot_minutes", "appointments_cancelled_summary", "confirmacion_texto", "completion_claims_disabled", "completion_claims_custom",), "ConfigDeAgenteDeAgenda")
     id = PLUGIN_ID
-    name = "Google Calendar"
-    version = "2.0.0"
-    description = "Agendamiento de citas con OAuth2 de Google"
+    name = "Calendario y citas"
+    version = "2.5.0"
+    description = "Agendamiento con agenda interna (sin Google) o Google Calendar (ADR-0084)"
+    display_name = "Agenda"
+    category = "Agenda"
+    min_plan = "free"
+    required_connections: ClassVar[list[str]] = ["google_calendar"]
+    # Salida a red de las tools y del panel (ADR-0052): solo las APIs de Google.
+    network_allowlist: ClassVar[tuple[str, ...]] = google_api.NETWORK
+    action_summary: ClassVar[list[str]] = ["Consultar disponibilidad", "Agendar citas", "Recordatorios"]
+    setup_guide = "Define tu horario de atención y los tipos de cita (o conecta Google Calendar)."
     requires_config = True
     config_schema = CalendarConfig
     # Submenú al habilitar el pack (ADR-0061/0063).
@@ -84,8 +446,12 @@ class GoogleCalendarModule(BaseModule):
         {"label": "Conexión", "path": "/calendar/", "section": "Configuración", "section_key": "pack_calendar:conexion"},
         {"label": "Horarios y calendario", "path": "/calendar/configuracion", "section": "Configuración", "section_key": "pack_calendar:configuracion"},
         {"label": "Tipos de cita", "path": "/calendar/tipos", "section": "Configuración", "section_key": "pack_calendar:tipos"},
+        {"label": "Bloqueos", "path": "/calendar/bloqueos", "section": "Configuración", "section_key": "pack_calendar:bloqueos"},
         {"label": "Citas", "path": "/calendar/citas", "section": "Operación", "section_key": "pack_calendar:citas"},
     ]
+    # Sub-sección de permiso sin pantalla: quien la tenga recibe copia de los
+    # correos de agendamiento/reagenda/cancelación (HU-CAL-02).
+    section_keys: ClassVar[list[str]] = ["pack_calendar:notificaciones"]
     admin_router = calendar_admin_router
 
     def admin_api_routes(self) -> list[object]:
@@ -100,7 +466,119 @@ class GoogleCalendarModule(BaseModule):
 
             raise PluginConfigError(PLUGIN_ID, "Config inválida o ausente")
         host.register_skill(CalendarSkill())
-        host.register_guardrail("calendar_completion_check", self._completion_guardrail, priority=6)
+        host.register_guardrail(
+            "calendar_completion_check",
+            self._completion_guardrail,
+            priority=6,
+            etiqueta="Citas confirmadas",
+            explicacion="Evita que el asistente diga que agendó, movió o canceló una cita si la acción no se hizo.",
+        )
+        # HU-SH-02: el equipo se entera de cada cita nueva, reagendada o cancelada.
+        from core.shared.events import ON_APPOINTMENT_CHANGED
+
+        host.subscribe(ON_APPOINTMENT_CHANGED, _on_cita_cambiada)
+        # HU-AOS-08: procedimiento `agendar_cita` y sus resolvers (solo los usa el motor).
+        from pack_calendar.procedimientos import registrar
+
+        registrar(host, PLUGIN_ID)
+
+    async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
+        """Datos de ejemplo de la agenda (ADR-0083): tipos de cita, citas y bloqueos.
+        Idempotente (ver `pack_calendar.seed`)."""
+        from pack_calendar.seed import sembrar_agenda
+
+        return await sembrar_agenda(tenant_id, data)
+
+    def formas_de_datos_de_prueba(self) -> list[FormaDeDatos]:
+        """Datos de prueba del agente (HU-QA-10, ADR-0146)."""
+        from pack_calendar.datos_de_prueba import formas
+
+        return formas()
+
+    async def sembrar_datos_de_prueba(
+        self, tenant_id: uuid.UUID, modo: str, datos: Any, contexto: ContextoDeNegocio
+    ) -> list[RegistroSembrado]:
+        from pack_calendar.datos_de_prueba import sembrar
+
+        return await sembrar(tenant_id, modo, datos, contexto)
+
+    async def retirar_datos_de_prueba(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> int:
+        from pack_calendar.datos_de_prueba import retirar
+
+        return await retirar(tenant_id, registros)
+
+    async def describir_registros(self, tenant_id: uuid.UUID, registros: list[RegistroSembrado]) -> list[Any]:
+        """Lo sembrado o importado en palabras, para «Lo cargado» del asistente (HU-QA-16)."""
+        from pack_calendar.datos_de_prueba import describir
+
+        return await describir(tenant_id, registros)
+
+    def plantillas_de_importacion(self) -> list[PlantillaDeImportacion]:
+        """Importar tipos de cita desde un CSV (HU-QA-12, ADR-0180)."""
+        from pack_calendar.importacion import plantillas
+
+        return plantillas()
+
+    async def importar_filas(
+        self,
+        tenant_id: uuid.UUID,
+        plantilla_id: str,
+        filas: list[Any],
+        contexto: ContextoDeImportacion,
+        *,
+        simular: bool,
+    ) -> ResultadoDeImportacion:
+        from pack_calendar.importacion import importar
+
+        return await importar(tenant_id, plantilla_id, filas, contexto, simular=simular)
+
+    async def contenido_cargado(self, tenant_id: uuid.UUID) -> ContenidoCargado:
+        """Tipos de cita activos (los servicios que se agendan) para el paso «catálogo o
+        servicios» de los primeros pasos (HU-SH-06, ADR-0124). Solo lee."""
+        from sqlalchemy import func, select
+
+        from core.db.session import get_session
+        from core.primeros_pasos.contrato import ContenidoCargado
+        from core.shared.tenant import tenant_scope
+        from pack_calendar.models import AppointmentType
+
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                cantidad, primero = (
+                    await session.execute(
+                        select(func.count(AppointmentType.id), func.min(AppointmentType.created_at)).where(
+                            AppointmentType.tenant_id == tenant_id,
+                            AppointmentType.active.is_(True),
+                            AppointmentType.deleted_at.is_(None),
+                        )
+                    )
+                ).one()
+        return ContenidoCargado(
+            tipo="servicios", cantidad=int(cantidad or 0), primero_en=primero, seccion="pack_calendar:tipos"
+        )
+
+    async def _resolved_completion_claims(self) -> dict[str, tuple[re.Pattern[str], set[str]]]:
+        """Combina `_COMPLETION_CLAIMS` (incorporados) con la config de ESTE
+        tenant (ADR-0025/#157): quita los deshabilitados
+        (`completion_claims_disabled`), agrega/reemplaza los custom
+        (`completion_claims_custom`). Fail-open ante config ausente/inválida.
+        """
+        from core.plugin_manager import plugin_manager
+
+        claims = dict(_COMPLETION_CLAIMS)
+        try:
+            config = await plugin_manager.load_config(PLUGIN_ID)
+        except Exception:
+            config = None
+        if config is None:
+            return claims
+        disabled = {
+            n.strip() for n in (config.completion_claims_disabled or "").split(",") if n.strip()
+        }
+        for name in disabled:
+            claims.pop(name, None)
+        claims.update(_parse_custom_completion_claims(config.completion_claims_custom or ""))
+        return claims
 
     async def _completion_guardrail(
         self, response_text: str, tool_results: list[dict[str, Any]]
@@ -109,23 +587,40 @@ class GoogleCalendarModule(BaseModule):
 
         Si el LLM dice que agendó/reagendó/canceló una cita, envió el correo de
         confirmación, o enumera las citas del cliente, la tool que respalda esa
-        afirmación DEBE haber corrido en este turno; si no, se reintenta con la
-        instrucción correctiva (y si sigue fallando, el orchestrator escala) --
-        así el cliente nunca recibe una confirmación falsa.
+        afirmación DEBE haber corrido en este turno **y con éxito**; si no, se
+        reintenta con la instrucción correctiva (y si sigue fallando, el
+        orchestrator escala o responde neutral según `guardrail_fail_action`,
+        ADR-0092) -- así el cliente nunca recibe una confirmación falsa.
+        Los claims son los incorporados + los configurados/desactivados por el
+        tenant (ADR-0025/#157).
+
+        Solo cuentan los resultados del turno ACTUAL (`_current_turn`, HU-COM-02).
+        HU-CAL-05: la evidencia es el `status` real (`created`, `updated`,
+        `cancelled`, `email_sent`), no la mera ausencia de error: un create
+        `rejected` o un cancel `not_found` no respaldan "quedó agendada/cancelada".
         """
-        called_tools = {
-            str(result.get("_tool_name") or "") for result in tool_results if isinstance(result, dict)
-        }
-        for label, (pattern, required_tools) in _COMPLETION_CLAIMS.items():
-            if pattern.search(response_text) and not (called_tools & required_tools):
+        current = [r for r in tool_results if isinstance(r, dict) and r.get("_current_turn")]
+        # Las preguntas ("¿Querés que revise tus citas agendadas?") no afirman nada.
+        statements = _QUESTION.sub(" ", response_text)
+        claims = await self._resolved_completion_claims()
+        for label, claim in claims.items():
+            if label in _COMPLETION_CLAIMS and claim is _COMPLETION_CLAIMS[label]:
+                verdict = _builtin_verdict(label, statements, current)
+                if verdict is not None:
+                    return verdict
+                continue
+            # Claim propio del tenant (DSL, ADR-0025/#157): basta con que la tool
+            # haya corrido con éxito en este turno.
+            pattern, required_tools = claim
+            called = {str(r.get("_tool_name") or "") for r in current if r.get("_ok")}
+            if pattern.search(response_text) and not (called & required_tools):
                 return GuardrailResult(
                     passed=False,
                     reason=f"Afirmación de '{label}' sin la tool correspondiente en este turno",
                     retry_instruction=(
-                        f"Dijiste que se completó '{label}' pero no llamaste la herramienta "
-                        f"correspondiente ({', '.join(sorted(required_tools))}) en este turno. "
-                        "Llamala ahora mismo, o si no podés completarla de verdad, decilo "
-                        "explícitamente en vez de prometer algo que no vas a cumplir."
+                        f"Tu respuesta afirma el resultado de '{label}' pero no llamaste la "
+                        f"herramienta correspondiente ({', '.join(sorted(required_tools))}) en este "
+                        "turno. Llamala ahora mismo y contá lo que devuelva." + _DONT_MENTION
                     ),
                 )
         return GuardrailResult(passed=True)
@@ -133,3 +628,15 @@ class GoogleCalendarModule(BaseModule):
     def extra_admin_routers(self) -> list[APIRouter]:
         """Router OAuth con la URL vieja (redirect URI de Google Console)."""
         return []
+
+
+async def _on_cita_cambiada(**payload: Any) -> None:
+    """Outbox → push al asignado de la cita (o a los dueños)."""
+    from pack_calendar.demo import avisar_al_equipo
+
+    await avisar_al_equipo(
+        str(payload.get("appointment_id")),
+        str(payload.get("accion") or ""),
+        str(payload.get("titulo") or ""),
+        payload.get("inicio"),
+    )

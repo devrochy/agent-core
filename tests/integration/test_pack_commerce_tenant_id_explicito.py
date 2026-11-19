@@ -19,6 +19,7 @@ import pytest
 from conftest import TEST_ALPHA_ID, TEST_BETA_ID
 
 pytestmark = [
+    pytest.mark.aislamiento,  # subconjunto de las PRs a develop (ADR-0120)
     pytest.mark.asyncio(loop_scope="session"),
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
@@ -73,6 +74,7 @@ async def _make_order(session, *, tenant_id, customer_id, order_seq: int):
         delivery_method="domicilio",
         total=100_000,
         order_seq=order_seq,
+        public_order_number=f"OC-{order_seq:04d}",
         idempotency_key=f"test:{uuid.uuid4().hex[:8]}",
     )
     session.add(order)

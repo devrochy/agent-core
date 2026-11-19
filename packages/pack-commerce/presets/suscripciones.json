@@ -1,0 +1,6 @@
+{
+  "config": {
+    "order_prefix": "OC",
+    "scoring_mode": "auto"
+  }
+}

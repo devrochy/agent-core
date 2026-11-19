@@ -1,0 +1,42 @@
+name: Imagen Postgres del CI
+
+# Publica en GHCR la misma imagen de Postgres que usa producción (pgvector +
+# PostGIS, docker/postgres/Dockerfile) para que el CI la use como service: así el
+# CI prueba pg17 + PostGIS como en Coolify y no instala PostGIS en cada corrida.
+# Correrla a mano (workflow_dispatch) cuando cambie la imagen base. La primera
+# publicación se hace a mano (ver docs/WORKFLOW.md, sección CI).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, develop]
+    paths: ["docker/postgres/**"]
+
+jobs:
+  publicar:
+    runs-on: [self-hosted, linux, x64]
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGEN: ghcr.io/${{ github.repository_owner }}/solvershub-postgres:pg17-postgis
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Construir y publicar
+        # Config de Docker propia del job: el token no queda en ~/.docker del host,
+        # que comparten los demás runners de la máquina.
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          docker build --pull --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" -t "$IMAGEN" docker/postgres
+          docker push "$IMAGEN"
+      - name: Logout
+        if: always()
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker
+        run: docker logout ghcr.io; rm -rf "$DOCKER_CONFIG"

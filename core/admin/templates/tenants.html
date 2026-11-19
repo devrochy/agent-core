@@ -54,9 +54,15 @@
                       data-bs-target="#plan-modal"
                       data-tid="{{ t.id }}" data-name="{{ t.name }}"
                       data-plan="{{ t.plan_name }}">Plan</button>
+              {% if t.status == 'suspended' %}
               <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal"
                       data-bs-target="#purge-modal"
                       data-slug="{{ t.slug }}" data-name="{{ t.name }}">Eliminar</button>
+              {% else %}
+              <span class="d-inline-block" tabindex="0" title="Desactívalo primero para poder eliminarlo">
+                <button class="btn btn-sm btn-outline-danger" disabled>Eliminar</button>
+              </span>
+              {% endif %}
             </td>
           </tr>
           {% endfor %}

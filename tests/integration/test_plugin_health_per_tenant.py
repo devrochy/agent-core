@@ -142,10 +142,45 @@ async def test_tool_rota_solo_afecta_al_tenant_que_fallo(_registered_failing_too
         await plugin_manager.reactivate_for_tenant(T1, "pack_commerce")
 
 
+@pytest.mark.aislamiento
+async def test_tool_rota_en_la_prueba_del_panel_no_apaga_el_pack(_registered_failing_tool):
+    """Un fallo durante la prueba del panel (canal `test`) no apaga el pack del negocio:
+    el turno responde con el error y las conversaciones reales siguen con el pack."""
+    from core.db.models import Conversation, Customer
+    from core.db.session import get_session
+    from core.llm.types import LLMToolCall
+    from core.orchestrator.loop import _execute_tool_safely
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+    from core.shared.test_mode import TEST_CHANNEL
+
+    tool_call = LLMToolCall(id=f"call_{uuid.uuid4().hex[:8]}", name="tool_de_prueba_rota", arguments={})
+
+    async with tenant_scope(T1):
+        async with get_session() as session:
+            customer = Customer(
+                tenant_id=T1,
+                channel=TEST_CHANNEL,
+                external_id=f"test:panel-{uuid.uuid4().hex[:8]}",
+            )
+            session.add(customer)
+            await session.flush()
+            conversation = Conversation(
+                tenant_id=T1, customer_id=customer.id, channel=TEST_CHANNEL, state={"panel": True}
+            )
+            session.add(conversation)
+            await session.flush()
+
+        result = await _execute_tool_safely(conversation, customer, tool_call)
+
+        assert "error" in result, result
+        assert await plugin_manager.is_disabled_for_tenant(T1, "pack_commerce") is False
+
+
 async def test_plugins_page_no_muestra_error_reactivado(app_client):
     """Regresión UI (ADR-0024): una fila de salud con `deleted_at` (reactivada)
     NO debe seguir mostrándose como error en /admin/plugins."""
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 

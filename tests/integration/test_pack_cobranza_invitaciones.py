@@ -26,7 +26,7 @@ PW = "password123"
 
 
 async def _tenant_cobranza(nombre: str, slug: str, owner_email: str):
-    from core.onboarding import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     return await onboard_tenant(
         name=nombre,
@@ -93,7 +93,9 @@ async def test_flujo_invitacion_aceptada(app_client) -> None:
     assert r3.status_code == 200, r3.text
 
     # Ya es miembro: el login unificado emite tokens del negocio (rol gestor).
-    r4 = await app_client.post(f"{PACK_AUTH}/login", json={"usuario": invitee, "password": PW})
+    r4 = await app_client.post(
+        f"{PACK_AUTH}/login", json={"usuario": invitee, "password": PW, "imei": "IMEI-INV"}
+    )
     assert r4.status_code == 200, r4.text
     sesion = r4.json()
     assert sesion["tenantSlug"] == slug

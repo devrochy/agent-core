@@ -1,0 +1,36 @@
+{
+  "_doc": "SPEC-48, HU-AI-01: comprobantes simulados (lo que la visión copiaría) y el resultado esperado de evaluar_comprobante. Sin datos de personas reales. Pedido: total 85000 COP, creado 2026-11-17T10:00.",
+  "pedido": {"total": 85000, "creado": "2026-11-17T10:00:00", "moneda": "COP"},
+  "cuentas": [
+    {"entity": "Bancolombia", "accountType": "Ahorros", "accountNumber": "123-456789-01", "holderName": "Tienda Demo", "holderDocument": "900000000"},
+    {"entity": "Nequi", "accountType": "", "accountNumber": "3001234567", "holderName": "Tienda Demo", "holderDocument": ""}
+  ],
+  "casos": [
+    {"id": "coincidencia_fuerte_bancolombia", "esperado": "pagado",
+     "extraido": {"monto": 85000, "fecha": "2026-11-17T10:12", "estado": "exitoso", "cuenta_destino": "*****8901", "banco": "Bancolombia", "confianza": 0.95}},
+    {"id": "coincidencia_fuerte_nequi_numero_completo", "esperado": "pagado",
+     "extraido": {"monto": 85000, "fecha": "2026-11-17", "estado": "exitoso", "cuenta_destino": "300 123 4567", "banco": "Nequi", "confianza": 0.9}},
+    {"id": "parcial_sin_cuenta", "esperado": "en_revision",
+     "extraido": {"monto": 85000, "fecha": "2026-11-17", "estado": "exitoso", "confianza": 0.9}},
+    {"id": "monto_menor", "esperado": "rechazado",
+     "extraido": {"monto": 80000, "fecha": "2026-11-17", "estado": "exitoso", "cuenta_destino": "8901", "banco": "Bancolombia", "confianza": 0.9}},
+    {"id": "monto_mayor", "esperado": "en_revision",
+     "extraido": {"monto": 90000, "fecha": "2026-11-17", "estado": "exitoso", "cuenta_destino": "8901", "banco": "Bancolombia", "confianza": 0.9}},
+    {"id": "ilegible", "esperado": "en_revision",
+     "extraido": {"confianza": 0.1}},
+    {"id": "otra_cuenta_mismos_4", "esperado": "en_revision",
+     "extraido": {"monto": 85000, "fecha": "2026-11-17", "estado": "exitoso", "cuenta_destino": "999-999998901", "banco": "Bancolombia", "confianza": 0.9}},
+    {"id": "otra_entidad", "esperado": "en_revision",
+     "extraido": {"monto": 85000, "fecha": "2026-11-17", "estado": "exitoso", "cuenta_destino": "****8901", "banco": "Davivienda", "confianza": 0.9}},
+    {"id": "fecha_anterior", "esperado": "en_revision",
+     "extraido": {"monto": 85000, "fecha": "2026-11-16", "estado": "exitoso", "cuenta_destino": "8901", "banco": "Bancolombia", "confianza": 0.9}},
+    {"id": "pendiente", "esperado": "en_revision",
+     "extraido": {"monto": 85000, "fecha": "2026-11-17", "estado": "pendiente", "cuenta_destino": "8901", "banco": "Bancolombia", "confianza": 0.9}},
+    {"id": "fallida", "esperado": "rechazado",
+     "extraido": {"monto": 85000, "fecha": "2026-11-17", "estado": "rechazado", "cuenta_destino": "8901", "banco": "Bancolombia", "confianza": 0.9}},
+    {"id": "duplicado", "esperado": "en_revision", "duplicado": true,
+     "extraido": {"monto": 85000, "fecha": "2026-11-17", "estado": "exitoso", "cuenta_destino": "8901", "banco": "Bancolombia", "confianza": 0.95}},
+    {"id": "lectura_dudosa", "esperado": "en_revision",
+     "extraido": {"monto": 85000, "fecha": "2026-11-17", "estado": "exitoso", "cuenta_destino": "8901", "banco": "Bancolombia", "confianza": 0.4}}
+  ]
+}

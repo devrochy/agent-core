@@ -21,6 +21,8 @@ EXPECTED_TOOLS = {
     "get_conversation_usage",
     "set_conversation_note",
     "send_email",
+    "enviar_plantilla_opciones",
+    "pedir_telefono",
 }
 
 
@@ -37,7 +39,7 @@ def make_spec(playbooks: list[dict[str, str]]) -> AgentSpec:
             "maxLength": 500,
             "forbiddenPhrases": [],
         },
-        model={"primary": "deepseek-chat", "temperature": 0.3},
+        model={"primary": "deepseek-flash", "temperature": 0.3},
         memory={"shortTermTurns": 30},
         playbooks=playbooks,
         tools=[],
@@ -213,6 +215,9 @@ def test_calendar_skill_sin_estado_por_tenant() -> None:
         "update_calendar_event",
         "cancel_calendar_event",
         "list_client_appointments",
+        "list_appointment_types",
+        "find_next_available",
+        "list_calendars",  # HU-CAL-08: solo se ofrece con varias agendas
     }
 
 @pytest.mark.asyncio
