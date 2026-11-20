@@ -308,7 +308,7 @@ async def _resolver_disparo(r: Any, conversation_id_str: str, payload: dict[str,
             conversation_id=conversation_id_str,
             tenant_id=tenant_id,
             intento=intentos,
-            error=error[:200],
+            error=type(result).__name__,  # el texto completo va solo a la DLQ (filtrada por negocio)
             exc_info=result,
         )
         if intentos < MAX_DELIVERIES:
@@ -400,7 +400,7 @@ async def _campos_para_dlq(conversation_id: uuid.UUID, payload: dict[str, Any]) 
         campos["connection_id"] = str(connection.id)
     else:
         campos["provider"] = "web" if channel == "web" else "meta"
-    if customer is not None:
+    if customer is not None and str(customer.tenant_id) == tenant_id:
         campos["customer_external_id"] = customer.external_id or ""
         campos["customer_name"] = customer.name or ""
     return campos
