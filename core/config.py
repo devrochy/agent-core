@@ -295,6 +295,22 @@ class Settings(BaseSettings):
     inbound_reclaim_idle_ms: int = Field(default=300_000, alias="INBOUND_RECLAIM_IDLE_MS")
     claim_stale_seconds: int = Field(default=600, alias="CLAIM_STALE_SECONDS")
 
+    # --- Salientes atascadas (H3) ---
+    # El barrido (`core/tasks/outbound_sweeper.py`, cada 5 min) reencola el primer outbound
+    # `queued` de una conversación que lleva más de `outbound_sweep_minutos` sin tarea viva (sin
+    # claim ni reintento programado). Tras `outbound_sweep_max_reencolados` reencolados sin que
+    # avance, lo marca `failed` y escala la conversación a una persona.
+    outbound_sweep_minutos: int = Field(default=10, ge=2, le=1440, alias="OUTBOUND_SWEEP_MINUTOS")
+    outbound_sweep_max_reencolados: int = Field(
+        default=3, ge=1, le=50, alias="OUTBOUND_SWEEP_MAX_REENCOLADOS"
+    )
+    # Celery con broker Redis reentrega una tarea sin ack pasado este plazo. Tiene que superar
+    # `task_time_limit` (300 s) y el countdown más largo de la salida (QUOTA: 3600 s); si no, la
+    # misma tarea se reentrega mientras espera y corre dos veces.
+    celery_visibility_timeout_s: int = Field(
+        default=4200, ge=600, alias="CELERY_VISIBILITY_TIMEOUT_S"
+    )
+
     # --- Retención de los streams de entrada (ADR-0053, docs/MULTITENANT.md) ---
     # Llevan texto y teléfono de los clientes. Lo procesado se borra al ackear (XDEL);
     # como red, el consumer recorta lo ackeado más viejo que `inbound_stream_retention_hours`

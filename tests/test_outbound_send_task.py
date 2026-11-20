@@ -10,6 +10,7 @@ import pytest
 
 from core.gateway.meta_errors import REENGAGEMENT_WINDOW_CODE, GraphError
 from core.tasks.outbound_send import MAX_ATTEMPTS, decide_retry
+from core.tasks.outbound_send import _claim_outbound as _CLAIM_REAL  # el fixture lo reemplaza
 
 
 def _rate_limit_error(retry_after_ms: int) -> GraphError:
@@ -90,6 +91,10 @@ async def test_send_one_no_op_si_mensaje_no_esta_en_queued(monkeypatch):
     assert result is None
 
 
+async def _sin_envio_previo(*a, **k):
+    return None
+
+
 def _send_one_fixture(
     monkeypatch, *, earliest=True, claim=True, adapter=None, channel="whatsapp", sender_type="agent", window=None
 ):
@@ -159,6 +164,7 @@ def _send_one_fixture(
     monkeypatch.setattr(mod, "_is_earliest_queued", fake_earliest)
     monkeypatch.setattr(mod, "_claim_outbound", fake_claim)
     monkeypatch.setattr(mod, "_release_claim", fake_release)
+    monkeypatch.setattr(mod, "_envio_sin_registrar", _sin_envio_previo)
     monkeypatch.setattr(mod, "_enqueue_next", fake_next)
     monkeypatch.setattr(mod, "resolve_credentials", fake_credentials)
     monkeypatch.setattr(mod, "outbound_adapter_for", lambda provider, channel=None: adapter)
@@ -555,3 +561,168 @@ async def test_send_one_audio_tts_sin_sintesis_cae_a_texto(monkeypatch):
     assert enviados["texto"] == ("whatsapp:+573001234567", "hola en voz")
     assert msg.media_type is None
     assert msg.status == "sent"
+
+
+# ---------------------------------------------------------------- H3: salientes atascadas
+
+
+@pytest.mark.asyncio
+async def test_claim_con_redis_caido_no_envia_y_reintenta(monkeypatch):
+    """Falla cerrado: si Redis no responde al tomar el claim, no se llama al proveedor y la tarea
+    recibe un error TRANSIENT (reintenta después), no un no-op que dejaría la fila huérfana."""
+    from types import SimpleNamespace
+
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+    from core.tasks.outbound_send import _send_one
+
+    async def _no_enviar(*a, **k):
+        raise AssertionError("con Redis caído no se envía")
+
+    adapter = SimpleNamespace(send_text=_no_enviar, send_image=_no_enviar)
+    msg, tenant_id, calls = _send_one_fixture(monkeypatch, adapter=adapter)
+
+    class RedisCaido:
+        async def set(self, *a, **k):
+            raise ConnectionError("redis caído")
+
+    import core.memory.working as working
+
+    monkeypatch.setattr(mod, "_claim_outbound", _CLAIM_REAL)
+    monkeypatch.setattr(working, "get_redis", lambda: RedisCaido())
+
+    result = await _send_one(msg.id, tenant_id)
+    assert isinstance(result, GraphError)
+    assert result.category == "TRANSIENT"
+    assert decide_retry(result, attempts_made=0).action == "retry"
+    assert msg.status == "queued"
+    assert calls["release"] == 0  # no tomó el claim: no hay nada que liberar
+
+
+@pytest.mark.asyncio
+async def test_excepcion_al_preparar_libera_el_claim_y_reintenta(monkeypatch):
+    """Si `resolve_credentials` (o la base) revienta entre el claim y el envío, se libera el
+    claim y se devuelve TRANSIENT: antes la excepción dejaba la fila `queued` sin tarea."""
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+    from core.tasks.outbound_send import _send_one
+
+    msg, tenant_id, calls = _send_one_fixture(monkeypatch)
+
+    async def boom(*a, **k):
+        raise RuntimeError("base caída")
+
+    monkeypatch.setattr(mod, "resolve_credentials", boom)
+
+    result = await _send_one(msg.id, tenant_id)
+    assert isinstance(result, GraphError) and result.category == "TRANSIENT"
+    assert calls["release"] == 1
+    assert calls["next"] == []
+
+
+@pytest.mark.asyncio
+async def test_si_falla_el_update_a_sent_recuerda_el_envio_y_no_encadena(monkeypatch):
+    """El proveedor aceptó pero la base falló al marcar `sent`: queda la marca en Redis para no
+    repetir el envío, y la cadena no avanza (el barrido la retoma)."""
+    import core.tasks.outbound_send as mod
+    from core.tasks.outbound_send import _send_one
+
+    msg, tenant_id, calls = _send_one_fixture(monkeypatch)
+    recordados = []
+
+    async def registrar_falla(*a, **k):
+        return False
+
+    async def recordar(*a):
+        recordados.append(a)
+
+    monkeypatch.setattr(mod, "_registrar_enviado", registrar_falla)
+    monkeypatch.setattr(mod, "_recordar_enviado", recordar)
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert calls["release"] == 1
+    assert calls["next"] == []
+
+
+@pytest.mark.asyncio
+async def test_registrar_enviado_con_la_base_caida_deja_la_marca(monkeypatch):
+    import uuid
+
+    import core.tasks.outbound_send as mod
+
+    class SesionCaida:
+        async def __aenter__(self):
+            raise RuntimeError("base caída")
+
+        async def __aexit__(self, *a):
+            return False
+
+    recordados = []
+
+    async def recordar(*a):
+        recordados.append(a)
+
+    monkeypatch.setattr(mod, "get_session", lambda: SesionCaida())
+    monkeypatch.setattr(mod, "_recordar_enviado", recordar)
+    tid, mid = uuid.uuid4(), uuid.uuid4()
+
+    assert await mod._registrar_enviado(tid, mid, "wamid-9") is False
+    assert recordados == [(tid, mid, "wamid-9")]
+
+
+@pytest.mark.asyncio
+async def test_con_envio_previo_sin_registrar_solo_registra_y_encadena(monkeypatch):
+    """Si un intento anterior ya envió pero no registró, el siguiente no vuelve a llamar al
+    proveedor: marca `sent` con el wamid guardado y encadena el siguiente."""
+    from types import SimpleNamespace
+
+    import core.tasks.outbound_send as mod
+    from core.tasks.outbound_send import _send_one
+
+    async def _no_enviar(*a, **k):
+        raise AssertionError("ya salió: no se reenvía")
+
+    adapter = SimpleNamespace(send_text=_no_enviar, send_image=_no_enviar)
+    msg, tenant_id, calls = _send_one_fixture(monkeypatch, adapter=adapter)
+
+    async def previo(*a, **k):
+        return "wamid-previo"
+
+    monkeypatch.setattr(mod, "_envio_sin_registrar", previo)
+
+    assert await _send_one(msg.id, tenant_id) is None
+    assert msg.status == "sent"
+    assert msg.external_message_id == "wamid-previo"
+    assert len(calls["next"]) == 1
+
+
+def test_el_reintento_deja_la_marca_de_programado(monkeypatch):
+    """Antes de `self.retry` la tarea marca el mensaje como programado (TTL = countdown + margen),
+    para que el barrido no lo reencole mientras espera."""
+    import uuid
+
+    import core.tasks.outbound_send as mod
+    from core.gateway.meta_errors import GraphError
+
+    marcas = []
+
+    async def error(*a, **k):
+        return GraphError("cupo", category="QUOTA")
+
+    async def marcar(tid, mid, segundos):
+        marcas.append((tid, mid, segundos))
+
+    monkeypatch.setattr(mod, "_send_one", error)
+    monkeypatch.setattr(mod, "_marcar_programado", marcar)
+
+    class Reintento(Exception):
+        pass
+
+    def fake_retry(**k):
+        return Reintento()
+
+    monkeypatch.setattr(mod.outbound_send_task, "retry", fake_retry)
+    tid, mid = uuid.uuid4(), uuid.uuid4()
+    with pytest.raises(Reintento):
+        mod.outbound_send_task.run(str(mid), str(tid))
+    assert marcas == [(tid, mid, 3600.0)]
