@@ -46,6 +46,17 @@ purga del negocio la barra aunque ya no existan sus conversaciones. Al disparar,
 diferido los anota en `core_decisions.inbound_message_ids`; el reencolado por
 `TurnQueueTimeout` los vuelve a empujar desde el payload, como el texto. Sin orden garantizado
 si llega un mensaje entre el claim y el reencolado (igual que el texto).
+
+Turno que falla (H2, mensajes perdidos con Twilio, 2026-11-20): antes `_fire_conversation`
+tragaba toda excepción y un `TurnTimeout` se descartaba; como el payload ya se había leído y
+borrado en el claim, el mensaje se perdía sin rastro. Ahora el payload se RESTAURA (se reencola
+con `schedule_debounce`, igual que el camino de `TurnQueueTimeout`) en vez de borrarse al final:
+borrar tarde perdería los mensajes que lleguen durante el turno (la clase de bug de `yopoldo`).
+Cada fallo, `TurnTimeout` incluido, suma un intento (`debounce:intentos:{tenant}:{conv}`); al
+llegar a `MAX_DELIVERIES` (el mismo tope del consumer) el turno va a la DLQ del stream de entrada
+con la forma de un entrante, para que `POST /admin/dlq/{id}/retry` lo reprocese, y se avisa al
+equipo. La recuperación de huérfanos corre además cada `ORPHAN_SWEEP_EVERY_S`, con guardas para
+no duplicar un turno en curso ni re-disparar para siempre el mismo mensaje.
 """
 
 from __future__ import annotations
@@ -55,8 +66,10 @@ import json
 import time
 import uuid
 from collections.abc import Awaitable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from core.config import get_settings
 from core.kernel.decisions import anotar_entrada, en_turno
 from core.memory.working import get_redis
 from core.orchestrator.turn_gate import TurnQueueTimeout, run_turn
@@ -79,6 +92,21 @@ MAX_ACCUMULATED_MESSAGES = 20
 # disparo del turno no deje la clave viva para siempre. Se refresca en
 # cada mensaje nuevo, igual que el timer del ZADD.
 PENDING_KEY_TTL_S = 300
+# Reintentos del turno diferido (H2). Las claves llevan el negocio primero para que la purga
+# las barra (`core.tenants._es_del_tenant`).
+ATTEMPTS_KEY = "debounce:intentos:{tenant_id}:{conversation_id}"
+ATTEMPTS_TTL_S = 3600
+# Espera antes de reintentar un turno fallido: crece con el intento (5 s, 10 s).
+RETRY_DELAY_MS = 5_000
+# Turno diferido en curso: el barrido periódico de huérfanos no lo vuelve a disparar.
+IN_FLIGHT_KEY = "debounce:en_curso:{tenant_id}:{conversation_id}"
+# Mensaje ya recuperado por el barrido periódico: no se recupera dos veces (un mensaje que una
+# política deja sin respuesta a propósito no se re-dispara cada ciclo).
+RECOVERED_KEY = "debounce:recuperado:{tenant_id}:{message_id}"
+# Barrido periódico de huérfanos (además del de arranque) y su ventana: más viejo que lo que
+# puede durar un turno (para no pisar uno en curso) y más nuevo que una hora.
+ORPHAN_SWEEP_EVERY_S = 300
+ORPHAN_MAX_AGE_S = 3600
 
 
 async def schedule_debounce(conversation_id: uuid.UUID, delay_ms: int, payload: dict[str, Any]) -> None:
@@ -137,12 +165,20 @@ def _tenant_del_payload(raw_payload: Any) -> str | None:
 
 
 async def poll_debounce_loop() -> None:
-    """Bucle infinito: corre como task de fondo del proceso principal."""
+    """Bucle infinito: corre como task de fondo del proceso principal.
+
+    Cada `ORPHAN_SWEEP_EVERY_S` barre también los huérfanos (el barrido de arranque lo hace
+    `core.main`; este cubre el turno que se perdió con la API ya corriendo).
+    """
+    last_sweep = time.monotonic()
     while True:
         try:
             await poll_debounce_once()
         except Exception:
             log.exception("debounce_poll_failed")
+        if time.monotonic() - last_sweep >= ORPHAN_SWEEP_EVERY_S:
+            last_sweep = time.monotonic()
+            await recover_orphaned_conversations(periodico=True)
         await asyncio.sleep(POLL_INTERVAL_S)
 
 
@@ -193,42 +229,202 @@ async def poll_debounce_once() -> None:
             payload["inbound_message_ids"] = inbound_ids
         conversation_id = uuid.UUID(conversation_id_str)
         tenant_id = payload.get("tenant_id")
+        if tenant_id:
+            await r.set(
+                IN_FLIGHT_KEY.format(tenant_id=tenant_id, conversation_id=conversation_id_str),
+                "1",
+                ex=_in_flight_ttl_s(),
+            )
         # Gate de turnos (global + por tenant) y disparo concurrente.
         fires.append(run_turn(tenant_id, _fire_conversation(conversation_id, payload)))
         scheduled.append((conversation_id_str, payload))
-    if fires:
-        results = await asyncio.gather(*fires, return_exceptions=True)
-        for (conversation_id_str, payload), result in zip(scheduled, results, strict=False):
-            if isinstance(result, TurnQueueTimeout):
-                # Cupo del tenant saturado (HU-ARCH-27): se reprograma el turno
-                # (delay 0) en vez de perderlo. Nada se procesó todavía.
-                log.warning("debounce_requeued_queue_timeout", conversation_id=conversation_id_str)
-                await schedule_debounce(uuid.UUID(conversation_id_str), 0, dict(payload))
+    if not fires:
+        return
+    tasks = [asyncio.ensure_future(fire) for fire in fires]
+    try:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        # Apagado del proceso con turnos en vuelo: los que no terminaron bien se restauran sin
+        # contar intento (los que sí terminaron no se repiten).
+        for (conversation_id_str, payload), task in zip(scheduled, tasks, strict=True):
+            if task.done() and not task.cancelled() and task.exception() is None:
+                continue
+            await _restaurar(conversation_id_str, payload, motivo="cancelado")
+        raise
+    for (conversation_id_str, payload), result in zip(scheduled, results, strict=False):
+        try:
+            await _resolver_disparo(r, conversation_id_str, payload, result)
+        except Exception:
+            log.exception("debounce_resultado_sin_resolver", conversation_id=conversation_id_str)
+
+
+def _in_flight_ttl_s() -> int:
+    """Lo más que puede durar un turno diferido: espera del cupo + presupuesto del turno + margen."""
+    settings = get_settings()
+    return settings.turn_queue_timeout_s + settings.turn_timeout_s + 60
+
+
+async def _restaurar(conversation_id_str: str, payload: dict[str, Any], *, motivo: str, delay_ms: int = 0) -> None:
+    """Devuelve el payload al debounce (texto e ids incluidos): el turno no se pierde."""
+    log.warning("debounce_turno_reencolado", conversation_id=conversation_id_str, motivo=motivo)
+    await schedule_debounce(uuid.UUID(conversation_id_str), delay_ms, dict(payload))
+
+
+async def _resolver_disparo(r: Any, conversation_id_str: str, payload: dict[str, Any], result: Any) -> None:
+    """Qué pasa con el turno según cómo terminó (H2).
+
+    - Bien: se borra el contador de intentos.
+    - `TurnQueueTimeout` (cupo del tenant saturado, HU-ARCH-27) o cancelado: no llegó a correr
+      (o lo cortó el apagado); se reencola sin contar intento.
+    - Cualquier otra excepción, `TurnTimeout` incluido: cuenta un intento; se reencola hasta
+      `MAX_DELIVERIES` y después va a la DLQ.
+    """
+    tenant_id = payload.get("tenant_id")
+    attempts_key = (
+        ATTEMPTS_KEY.format(tenant_id=tenant_id, conversation_id=conversation_id_str) if tenant_id else None
+    )
+    try:
+        if not isinstance(result, BaseException):
+            if attempts_key is not None:
+                await r.delete(attempts_key)
+            return
+        if isinstance(result, TurnQueueTimeout):
+            await _restaurar(conversation_id_str, payload, motivo="queue_timeout")
+            return
+        if isinstance(result, asyncio.CancelledError):
+            await _restaurar(conversation_id_str, payload, motivo="cancelado")
+            return
+        if attempts_key is None:
+            # Sin negocio no hay turno posible (`_fire_conversation` lo descarta antes de fallar).
+            log.error("debounce_fallo_sin_tenant", conversation_id=conversation_id_str)
+            return
+        from core.orchestrator.consumer import MAX_DELIVERIES
+
+        error = f"{type(result).__name__}: {result}"
+        intentos = int(await r.incr(attempts_key))
+        await r.expire(attempts_key, ATTEMPTS_TTL_S)
+        log.error(
+            "debounce_fire_failed",
+            conversation_id=conversation_id_str,
+            tenant_id=tenant_id,
+            intento=intentos,
+            error=error[:200],
+            exc_info=result,
+        )
+        if intentos < MAX_DELIVERIES:
+            await _restaurar(
+                conversation_id_str, payload, motivo="fallo", delay_ms=RETRY_DELAY_MS * intentos
+            )
+            return
+        await _dead_letter_debounce(r, conversation_id_str, payload, intentos, error=error)
+        await r.delete(attempts_key)
+    finally:
+        if tenant_id:
+            await r.delete(IN_FLIGHT_KEY.format(tenant_id=tenant_id, conversation_id=conversation_id_str))
+
+
+async def _dead_letter_debounce(
+    r: Any, conversation_id_str: str, payload: dict[str, Any], deliveries: int, *, error: str
+) -> None:
+    """Manda el turno agotado a la DLQ del stream de entrada y avisa al equipo.
+
+    Misma forma que `consumer._dead_letter` (campos del entrante + `error`, `deliveries`,
+    `failed_at`), sin su `XACK`/`XDEL`: el turno diferido no tiene entrada en el stream. El
+    `external_message_id` es sintético a propósito: el original ya está en `messages` y su índice
+    único haría que el reintento del panel se descartara como duplicado sin correr el turno.
+    """
+    from core.db.models import utcnow
+    from core.orchestrator.consumer import DEAD_LETTER_STREAM, _avisar_mensaje_fallido
+
+    tenant_id = str(payload["tenant_id"])
+    try:
+        campos = await _campos_para_dlq(uuid.UUID(conversation_id_str), payload)
+    except Exception:
+        # Sin la conversación el reintento quizá no la resuelva, pero el mensaje queda a la vista.
+        log.warning("debounce_dlq_sin_conversacion", conversation_id=conversation_id_str, exc_info=True)
+        campos = _campos_minimos(conversation_id_str, payload)
+    campos["error"] = (error or "")[:500]
+    campos["deliveries"] = str(deliveries)
+    campos["failed_at"] = utcnow().isoformat()
+    entry_id = await r.xadd(DEAD_LETTER_STREAM, campos)
+    log.error(
+        "debounce_dead_lettered",
+        conversation_id=conversation_id_str,
+        tenant_id=tenant_id,
+        entry_id=str(entry_id),
+        deliveries=deliveries,
+    )
+    await _avisar_mensaje_fallido(tenant_id, str(entry_id))
+
+
+def _campos_minimos(conversation_id_str: str, payload: dict[str, Any]) -> dict[str, str]:
+    return {
+        "tenant_id": str(payload.get("tenant_id") or ""),
+        "provider": "",
+        "channel": "",
+        "external_message_id": f"debounce:{conversation_id_str}:{uuid.uuid4().hex}",
+        "customer_external_id": "",
+        "customer_name": "",
+        "content": str(payload.get("latest_message") or ""),
+        "connection_external_id": "",
+        "media": "[]",
+        "media_context": "",
+        "conversation_id": conversation_id_str,
+        "origen": "debounce",
+    }
+
+
+async def _campos_para_dlq(conversation_id: uuid.UUID, payload: dict[str, Any]) -> dict[str, str]:
+    """Reconstruye los campos de un entrante del stream a partir de la conversación."""
+    from core.db.models import ChannelConnection, Conversation, Customer
+    from core.db.session import get_session
+
+    tenant_id = str(payload["tenant_id"])
+    campos = _campos_minimos(str(conversation_id), payload)
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            conversation = await session.get(Conversation, conversation_id)
+            if conversation is None or str(conversation.tenant_id) != tenant_id:
+                raise LookupError("conversación no encontrada")
+            customer = await session.get(Customer, conversation.customer_id)
+            connection = (
+                await session.get(ChannelConnection, conversation.connection_id)
+                if conversation.connection_id
+                else None
+            )
+    channel = conversation.channel or "whatsapp"
+    campos["channel"] = channel
+    if connection is not None and str(connection.tenant_id) == tenant_id:
+        campos["provider"] = connection.provider
+        campos["connection_external_id"] = connection.external_id or ""
+        campos["connection_id"] = str(connection.id)
+    else:
+        campos["provider"] = "web" if channel == "web" else "meta"
+    if customer is not None:
+        campos["customer_external_id"] = customer.external_id or ""
+        campos["customer_name"] = customer.name or ""
+    return campos
 
 
 async def _fire_conversation(conversation_id: uuid.UUID, payload: dict[str, Any]) -> None:
-    """Procesa el turno diferido. Sin reintento automático: si falla, el próximo
-    mensaje del cliente genera un turno fresco (límite conocido, documentado)."""
-    try:
-        latest_message = str(payload.get("latest_message", ""))
-        tenant_id = payload.get("tenant_id")
-        if tenant_id is None:
-            log.warning("debounce_without_tenant", conversation_id=str(conversation_id))
+    """Procesa el turno diferido. Un fallo se propaga: lo reintenta `_resolver_disparo` (H2)."""
+    latest_message = str(payload.get("latest_message", ""))
+    tenant_id = payload.get("tenant_id")
+    if tenant_id is None:
+        log.warning("debounce_without_tenant", conversation_id=str(conversation_id))
+        return
+
+    async with tenant_scope(tenant_id):
+        # Ciclo de vida: un tenant suspendido/eliminado no genera respuestas
+        # (el mensaje quedó encolado ANTES de la suspensión).
+        from core.tenants import is_tenant_active
+
+        if not await is_tenant_active(uuid.UUID(tenant_id)):
+            log.info("debounce_tenant_not_active", conversation_id=str(conversation_id))
             return
-
-        async with tenant_scope(tenant_id):
-            # Ciclo de vida: un tenant suspendido/eliminado no genera respuestas
-            # (el mensaje quedó encolado ANTES de la suspensión).
-            from core.tenants import is_tenant_active
-
-            if not await is_tenant_active(uuid.UUID(tenant_id)):
-                log.info("debounce_tenant_not_active", conversation_id=str(conversation_id))
-                return
-            await _turno_diferido(
-                conversation_id, latest_message, payload.get("inbound_message_ids") or []
-            )
-    except Exception:
-        log.exception("debounce_fire_failed", conversation_id=str(conversation_id))
+        await _turno_diferido(
+            conversation_id, latest_message, payload.get("inbound_message_ids") or []
+        )
 
 
 @en_turno  # decisión y resultado del turno (HU-AOS-10); el loop reusa este turno
@@ -259,11 +455,17 @@ async def _turno_diferido(
     await entregar(conversation_id, result)
 
 
-async def recover_orphaned_conversations() -> None:
-    """Al arrancar: reprograma conversaciones con inbound pendiente sin timer vivo.
+async def recover_orphaned_conversations(*, periodico: bool = False) -> None:
+    """Reprograma conversaciones con inbound pendiente sin timer vivo.
 
     Recorre los tenants uno a uno dentro de tenant_scope: la query es RLS-aware
     (ADR-0012), así que cada tenant recupera solo sus conversaciones.
+
+    Al arrancar (`periodico=False`) no hay turnos en vuelo y se recupera todo, como siempre. El
+    barrido periódico (H2) corre con turnos en vuelo, así que solo mira inbound más viejos que lo
+    que puede durar un turno y más nuevos que `ORPHAN_MAX_AGE_S`, salta la conversación con un
+    turno diferido en curso y recupera cada mensaje una sola vez (un mensaje que una política dejó
+    sin respuesta a propósito no se re-dispara cada ciclo; si su turno falla, lo sigue el contador).
     """
     from sqlalchemy import text
 
@@ -279,6 +481,13 @@ async def recover_orphaned_conversations() -> None:
     r = get_redis()
     try:
         desde = await ultima_reactivacion()
+        # Ventana del barrido periódico. El piso va en la query (si el último mensaje es más viejo,
+        # todos lo son); el techo se mira en Python sobre el ÚLTIMO mensaje: en la query tomaría
+        # un inbound viejo de una conversación que ya se respondió.
+        desde_ventana = (
+            datetime.now(UTC) - timedelta(seconds=ORPHAN_MAX_AGE_S) if periodico else None
+        )
+        hasta_ventana = datetime.now(UTC) - timedelta(seconds=_orphan_min_age_s()) if periodico else None
         async with get_session() as session:
             tenant_ids = (
                 await session.execute(
@@ -295,17 +504,19 @@ async def recover_orphaned_conversations() -> None:
                             text(
                                 """
                                 SELECT DISTINCT ON (m.conversation_id)
-                                       m.conversation_id, m.id, m.direction, m.content
+                                       m.conversation_id, m.id, m.direction, m.content, m.created_at
                                 FROM messages m
                                 JOIN conversations c ON c.id = m.conversation_id
                                 WHERE c.status = 'open' AND c.bot_paused = false
                                   AND m.tenant_id = :tid AND c.tenant_id = :tid
                                   AND (CAST(:desde AS timestamptz) IS NULL
                                        OR m.created_at > CAST(:desde AS timestamptz))
+                                  AND (CAST(:desde_ventana AS timestamptz) IS NULL
+                                       OR m.created_at > CAST(:desde_ventana AS timestamptz))
                                 ORDER BY m.conversation_id, m.created_at DESC
                                 """
                             ),
-                            {"desde": desde, "tid": tenant_id},
+                            {"desde": desde, "tid": tenant_id, "desde_ventana": desde_ventana},
                         )
                     ).all()
                 # DENTRO del tenant_scope (bug encontrado por auditor-multitenant,
@@ -314,18 +525,46 @@ async def recover_orphaned_conversations() -> None:
                 # el ContextVar ya volvió a None y la recuperación quedaba
                 # silenciosamente inoperante para TODOS los tenants (el payload
                 # sin tenant_id hace que `_fire_conversation` descarte el turno).
-                for conversation_id, message_id, direction, content in rows:
+                for conversation_id, message_id, direction, content, created_at in rows:
                     if direction != "inbound":
                         continue
+                    if hasta_ventana is not None and created_at > hasta_ventana:
+                        continue  # puede seguir en su ventana de debounce o en turno
                     has_timer = await r.zscore(PENDING_KEY, str(conversation_id))
-                    if has_timer is None:
-                        await schedule_debounce(
-                            uuid.UUID(str(conversation_id)),
-                            0,
-                            {"latest_message": content or "", "inbound_message_ids": [message_id]},
-                        )
-                        recovered += 1
+                    if has_timer is not None:
+                        continue
+                    if periodico and not await _reclamar_recuperacion(
+                        r, str(tenant_id), str(conversation_id), str(message_id)
+                    ):
+                        continue
+                    await schedule_debounce(
+                        uuid.UUID(str(conversation_id)),
+                        0,
+                        {"latest_message": content or "", "inbound_message_ids": [message_id]},
+                    )
+                    recovered += 1
         if recovered:
-            log.info("orphaned_conversations_recovered", count=recovered)
+            log.info("orphaned_conversations_recovered", count=recovered, periodico=periodico)
     except Exception:
-        log.exception("orphan_recovery_failed")
+        log.exception("orphan_recovery_failed", periodico=periodico)
+
+
+def _orphan_min_age_s() -> int:
+    """Edad mínima del último inbound para el barrido periódico: ventana de debounce más larga
+    (30 s) + lo que puede durar el turno diferido."""
+    return _in_flight_ttl_s() + 30
+
+
+async def _reclamar_recuperacion(r: Any, tenant_id: str, conversation_id: str, message_id: str) -> bool:
+    """¿Le toca a este barrido recuperar el mensaje? No, si hay un turno diferido en curso o si
+    ya se recuperó antes (SET NX: entre réplicas, una sola lo recupera)."""
+    if await r.exists(IN_FLIGHT_KEY.format(tenant_id=tenant_id, conversation_id=conversation_id)):
+        return False
+    return bool(
+        await r.set(
+            RECOVERED_KEY.format(tenant_id=tenant_id, message_id=message_id),
+            "1",
+            nx=True,
+            ex=2 * ORPHAN_MAX_AGE_S,
+        )
+    )

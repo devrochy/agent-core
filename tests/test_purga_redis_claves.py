@@ -32,6 +32,9 @@ CONV = str(uuid.uuid5(uuid.NAMESPACE_DNS, "conversacion"))
         f"meta:paused:{T}:{CONV}",
         f"outbound:claim:{T}:{CONV}:{OTRO}",
         f"debounce:inbound:{T}:{CONV}",  # ids del inbound de la ráfaga (#438)
+        f"debounce:intentos:{T}:{CONV}",  # reintentos del turno diferido (H2)
+        f"debounce:en_curso:{T}:{CONV}",
+        f"debounce:recuperado:{T}:{CONV}",
     ],
 )
 def test_claves_del_tenant(clave: str) -> None:
