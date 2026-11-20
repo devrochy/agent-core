@@ -32,6 +32,10 @@ class FakeRedis:
         self.contadores[clave] = self.contadores.get(clave, 0) + 1
         return self.contadores[clave]
 
+    async def decr(self, clave):
+        self.contadores[clave] -= 1
+        return self.contadores[clave]
+
     async def expire(self, clave, ttl):
         return True
 
@@ -167,3 +171,18 @@ def test_el_cron_esta_en_el_beat_y_el_visibility_timeout_supera_el_time_limit():
     vt = celery.conf.broker_transport_options["visibility_timeout"]
     assert vt > celery.conf.task_time_limit
     assert vt > 3600  # el countdown más largo de la salida (QUOTA)
+
+
+@pytest.mark.asyncio
+async def test_si_el_broker_falla_el_intento_no_cuenta(entorno, monkeypatch):
+    _, _, _, redis, _ = entorno
+
+    class BrokerCaido:
+        @staticmethod
+        def delay(*a):
+            raise ConnectionError("broker caído")
+
+    monkeypatch.setattr(mod, "outbound_send_task", BrokerCaido)
+    conteo = await mod.barrer_salientes_atascadas(AHORA)
+    assert conteo["errores"] == 1 and conteo["reencoladas"] == 0
+    assert set(redis.contadores.values()) == {0}

@@ -265,9 +265,9 @@ async def _registrar_enviado(tenant_id: uuid.UUID, message_id: uuid.UUID, wamid:
     """Pasa la fila a `sent`. Devuelve False si la base falló (el envío ya salió: se recuerda en
     Redis para que el siguiente intento no lo repita)."""
     try:
-        async with get_session() as session:
+        async with tenant_scope(tenant_id), get_session() as session:
             db_message = await session.get(Message, message_id)
-            if db_message is not None:
+            if db_message is not None and db_message.tenant_id == tenant_id:
                 db_message.status = "sent"
                 db_message.external_message_id = wamid or None
                 db_message.status_updated_at = utcnow()

@@ -142,7 +142,12 @@ async def barrer_salientes_atascadas(ahora: datetime | None = None) -> dict[str,
                         conv_id, creado, fallido = info
                         await _enqueue_next(conv_id, tenant_id, creado, fallido)
                     continue
-                outbound_send_task.delay(str(message_id), str(tenant_id))
+                try:
+                    outbound_send_task.delay(str(message_id), str(tenant_id))
+                except Exception:
+                    # Broker caído: no cuenta como intento (no hubo reencolado real).
+                    await redis.decr(f"{_REENCOLADOS_PREFIX}{tenant_id}:{message_id}")
+                    raise
                 conteo["reencoladas"] += 1
                 log.warning(
                     "outbound_sweeper_reencolado",
