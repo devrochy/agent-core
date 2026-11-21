@@ -690,7 +690,14 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
         # sin release y niega toda herramienta (fail-closed).
         release_vigente.marcar_v3_sin_release(tenant_id)
         return asignacion
-    release_vigente.fijar(release.artefactos(asignacion.lane, foco=asignacion.foco))
+    foco = asignacion.foco
+    if foco is not None and foco.role == "core":
+        # ADR-0205 §5 (HU-AOS-89): sin especialistas atiende el Coordinador con su vista de recepción; el router,
+        # `active_agent_instance_id` y las decisiones siguen con la instancia real (mismos ids).
+        from core.agents.recepcion import vista_de_recepcion
+
+        foco = vista_de_recepcion(foco)
+    release_vigente.fijar(release.artefactos(asignacion.lane, foco=foco))
     release_vigente.fijar_pausados(tenant_id, asignacion.pausados)
     anotar_release(
         asignacion.release_id,

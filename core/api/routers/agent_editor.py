@@ -615,6 +615,20 @@ async def _agente_o_404(tid: uuid.UUID, agent_id: uuid.UUID) -> None:
         raise ApiError.not_found("Agente no encontrado.") from None
 
 
+MENSAJE_COORDINADOR_INMUTABLE = "Las habilidades del Coordinador vienen fijas del sistema: no se cambian."
+
+
+async def _especialista_o_409(tid: uuid.UUID, agent_id: uuid.UUID) -> None:
+    """404 si no existe; 409 `coordinador_inmutable` si es el Coordinador (ADR-0205 §5): sus habilidades, su flujo y
+    su horario de recepción son del core."""
+    try:
+        agente = await versiones.obtener_agente(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    if agente.kind == "core":
+        raise ApiError(409, "coordinador_inmutable", MENSAJE_COORDINADOR_INMUTABLE)
+
+
 @router.get("/agents/{agent_id}/actions", response_model=Page[AgentAction])
 async def list_agent_actions(
     agent_id: uuid.UUID,
@@ -682,7 +696,7 @@ async def put_agent_skill(
     from core.agents.instalaciones import ConflictoInstalacion, InstalacionNoEncontrada
 
     tid = await _puede_escribir(principal)
-    await _agente_o_404(tid, agent_id)
+    await _especialista_o_409(tid, agent_id)
     try:
         h = await hda.configurar(
             tid, agent_id, pack_id, instalada=payload.installed, config=payload.config, actor=principal.admin.id
@@ -779,6 +793,7 @@ async def save_agent_flow(
     from core.agents import flujo_agente as fa
 
     tid = await _puede_escribir(principal)
+    await _especialista_o_409(tid, agent_id)
     _borrador, acciones, _semilla, permitidas = await _flujo_del_agente(tid, agent_id)
     try:
         borrador = await versiones.guardar_flujo(
@@ -858,6 +873,7 @@ async def save_agent_schedule(
     from core.agents.horario_agente import HorarioInvalido
 
     tid = await _puede_escribir(principal)
+    await _especialista_o_409(tid, agent_id)
     try:
         borrador = await versiones.guardar_horario(
             tid, agent_id, payload.schedule, payload.lock_version, actor=principal.admin.id

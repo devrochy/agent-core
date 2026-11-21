@@ -346,13 +346,6 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # `release_missing`; la release 1 llega al alta de la conexión.
         log.warning("turno_sin_release", conversation_id=str(conversation.id))
         return None
-    foco_del_turno = release_vigente.agente_del_turno()
-    if foco_del_turno is not None and foco_del_turno.role == "core":
-        # Conexión atendida solo por el Coordinador (ADR-0205 §2–§3): sin especialistas el foco es el Coordinador.
-        # Hasta que exista su vista de recepción (HU-AOS-89) el turno sale en silencio, como sin release; el lead
-        # base ya quedó asegurado arriba.
-        log.info("turno_coordinador_sin_vista", conversation_id=str(conversation.id))
-        return None
     # Lo compilado del agente en foco, una vez por versión (HU-AOS-35, adenda de ADR-0117): la
     # vista v2, el flujo de la release y los bloques fijos del prompt. None sin release o
     # si no se pudo compilar de forma determinista: el turno se arma como siempre.
@@ -1328,6 +1321,16 @@ async def _execute_tool_safely(
             output_data=result,
         )
         return result
+
+    if tool_call.name == "update_customer_profile":
+        # ADR-0205 §5: desde la recepción del Coordinador solo se guardan los datos de contacto. Lo hace cumplir el
+        # host con la lista de la vista, no una rama dentro de la tool compartida.
+        from core.agents.recepcion import atributos_de_recepcion, es_vista_de_recepcion
+
+        if es_vista_de_recepcion(agente):
+            argumentos, descartados = atributos_de_recepcion(dict(argumentos))
+            if descartados:
+                log.info("recepcion_atributos_descartados", claves=descartados)
 
     try:
         # Prioridad al host: una tool declarativa NO puede shadowear una tool

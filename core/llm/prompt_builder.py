@@ -35,6 +35,9 @@ CURRENT_DATETIME_HEADER = "## Fecha y hora actual"
 
 # Playbook del kernel con las reglas de Captar leads (`core/playbooks/kernel/captar-leads.md`).
 PLAYBOOK_CAPTAR_LEADS = "captar-leads"
+# Vista de recepción del Coordinador (`core/agents/recepcion.py`): mismos valores, sin importar ese módulo aquí.
+PLAYBOOK_RECEPCION = "recepcion-coordinador"
+VERSION_RECEPCION = "coordinador@recepcion"
 
 
 def tiene_captar_leads(spec: AgentSpec) -> bool:
@@ -265,7 +268,13 @@ async def bloques_fijos(
 
     # 1b. Captar leads (HU-AOS-70, ADR-0193 §2): no es un pack con playbook propio, es un grupo de acciones del
     # core; sus reglas (confirmar, preguntar antes de reemplazar, no deducir) van a todo agente que tenga alguna.
-    if tiene_captar_leads(spec):
+    # La vista de recepción del Coordinador (ADR-0205 §5) lleva su propio playbook del kernel, que ya dice cómo
+    # registrar al cliente con `crear_lead` (no tiene `actualizar_lead`, que pide el de Captar leads).
+    if str(spec.version).startswith(VERSION_RECEPCION):
+        from core.agents.playbooks import load_core_playbook
+
+        blocks.append(load_core_playbook(PLAYBOOK_RECEPCION).strip())
+    elif tiene_captar_leads(spec):
         from core.agents.playbooks import load_core_playbook
 
         blocks.append(load_core_playbook(PLAYBOOK_CAPTAR_LEADS).strip())
