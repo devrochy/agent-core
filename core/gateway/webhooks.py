@@ -896,6 +896,30 @@ async def count_stalled_webhook_events(older_than_minutes: int = 5) -> int:
         ).scalar() or 0
 
 
+async def webhook_events_existentes(
+    meta_app_id: str, tenant_id: uuid.UUID, external_ids: list[str]
+) -> set[str]:
+    """Cuáles de `external_ids` ya tienen fila de auditoría de este negocio (llegaron por el webhook o ya se
+    reconciliaron). Lo usa la reconciliación de Twilio para no volver a publicar lo que ya entró; vive acá por
+    ADR-0028 (solo este módulo toca `webhook_events`)."""
+    from sqlalchemy import select
+
+    from core.db.models import WebhookEvent
+    from core.db.session import get_session
+
+    if not external_ids:
+        return set()
+    async with get_session() as session:
+        filas = await session.execute(
+            select(WebhookEvent.external_id).where(
+                WebhookEvent.meta_app_id == meta_app_id,
+                WebhookEvent.tenant_id == tenant_id,
+                WebhookEvent.external_id.in_(external_ids),
+            )
+        )
+        return {str(fila[0]) for fila in filas}
+
+
 def _media_metric(message: Any) -> str | None:
     """Métrica de cuota que consume un mensaje multimedia (audio u OCR)."""
     for item in getattr(message, "media", []) or []:

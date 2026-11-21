@@ -170,6 +170,17 @@ def _twilio_health_check() -> Any:
     return revisar_todas()
 
 
+_TWILIO_RECONCILIACION_TASK = "core.twilio_reconciliacion"
+
+
+@core_cron(_TWILIO_RECONCILIACION_TASK, crontab(minute="*/2"))
+def _twilio_reconciliacion() -> Any:
+    """Recupera de la API de Twilio los entrantes que no llegaron por el webhook (adenda 2 del ADR-0186)."""
+    from core.gateway.twilio.reconciliacion import reconciliar_todas
+
+    return reconciliar_todas()
+
+
 _TELEGRAM_HEALTH_CHECK_TASK = "core.telegram_health_check"
 
 
