@@ -143,6 +143,47 @@ def test_valor_invalido_falla_en_vez_de_pasar_en_silencio():
         assert "inválido" in _falla_tools_prohibidas(valor, [])
 
 
+# --- `tool_arguments_absent`: el agente no guarda lo que el cliente no dio (HU-AOS-70) -----------------------------
+from runner import _falla_argumentos_prohibidos  # noqa: E402
+
+
+def _llamada(nombre, **argumentos):  # type: ignore[no-untyped-def]
+    from types import SimpleNamespace
+
+    return SimpleNamespace(name=nombre, arguments=argumentos)
+
+
+def test_argumento_prohibido_con_valor_falla():
+    falla = _falla_argumentos_prohibidos(
+        {"actualizar_lead": ["email"]}, [_llamada("actualizar_lead", email="ana@x.com", interest="planes")]
+    )
+    assert "actualizar_lead.email" in falla
+
+
+def test_argumento_vacio_otra_tool_o_sin_aserto_pasan():
+    vetado = {"actualizar_lead": ["email", "name"]}
+    assert _falla_argumentos_prohibidos(vetado, [_llamada("actualizar_lead", interest="planes", email=" ")]) == ""
+    assert _falla_argumentos_prohibidos(vetado, [_llamada("crear_lead", email="ana@x.com")]) == ""
+    assert _falla_argumentos_prohibidos(vetado, []) == ""
+    for valor in (None, {}):
+        assert _falla_argumentos_prohibidos(valor, [_llamada("actualizar_lead", email="ana@x.com")]) == ""
+
+
+def test_argumentos_prohibidos_invalidos_fallan():
+    for valor in (["email"], {"actualizar_lead": "email"}, {"actualizar_lead": [1]}):
+        assert "inválido" in _falla_argumentos_prohibidos(valor, [])
+
+
+def test_spec_captar_leads_trae_los_bindings_y_no_trae_comercio():
+    from runner import _load_spec, _spec_del_escenario
+
+    from core.leads.tools import ACCIONES_CAPTAR_LEADS
+
+    spec = _spec_del_escenario({"spec": "captar-leads"}, _load_spec(None), None)
+    assert "pack_commerce" not in spec.packs
+    assert {t.tool for t in spec.tools if t.enabled} == ACCIONES_CAPTAR_LEADS
+
+
 # --------------------------------------------------------------- spec y conexiones por escenario (HU-CONN-26)
 def test_spec_del_escenario_carga_el_de_evals_specs_y_sin_campo_deja_el_neutro():
     import pytest

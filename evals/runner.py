@@ -26,7 +26,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from agentcore_contracts import AgentSpec
 
@@ -183,6 +183,28 @@ def _falla_tools_prohibidas(valor: object, llamadas: list[str]) -> str:
     return f"llamó tools prohibidas: {prohibidas} (llamó: {llamadas})" if prohibidas else ""
 
 
+def _falla_argumentos_prohibidos(valor: object, llamadas: list[Any]) -> str:
+    """Evalúa `tool_arguments_absent` (`{tool: [argumento, ...]}`); devuelve el motivo de la falla o "".
+
+    Falla si alguna llamada a esa tool trae alguno de esos argumentos con valor (no vacío): sirve para afirmar que el
+    agente no guardó un dato que el cliente no dio (HU-AOS-70). Ausente o `{}`: sin restricción. Otra forma es un
+    error del escenario y falla.
+    """
+    if not valor:
+        return ""
+    if not isinstance(valor, dict) or not all(
+        isinstance(k, str) and isinstance(v, list) and all(isinstance(a, str) for a in v) for k, v in valor.items()
+    ):
+        return f"tool_arguments_absent inválido ({{tool: [argumentos]}}): {valor!r}"
+    puestos = [
+        f"{t.name}.{arg}={t.arguments[arg]!r}"
+        for t in llamadas
+        for arg in valor.get(t.name, [])
+        if str((t.arguments or {}).get(arg) or "").strip()
+    ]
+    return f"llamó con argumentos que el cliente no dio: {puestos}" if puestos else ""
+
+
 def _spec_del_escenario(scenario: dict, spec: AgentSpec, tenant: str | None) -> AgentSpec:
     """`spec` del escenario: otro spec del framework (`evals/specs/<nombre>.json`) para los packs que el neutro no
     trae. Con `--tenant` manda el spec real del negocio (ADR-0016) y el campo se rechaza."""
@@ -262,12 +284,15 @@ async def run_scenario(
     from core.shared.tenant import tenant_scope
 
     enabled = enabled_packs(spec)
-    # El golden no tiene agente: Captar leads (del core, con binding, ADR-0193) se ofrece como antes de moverla, solo
-    # si el negocio vende (comercio). Así las grabaciones miden lo mismo.
+    # El golden no tiene agente: Captar leads (del core, con binding, ADR-0193) se ofrece como antes de moverla si el
+    # negocio vende (comercio), para que las grabaciones midan lo mismo, o si el spec del escenario trae el binding,
+    # como un agente sin comercio con la habilidad (HU-AOS-70).
+    con_binding = {t.tool for t in spec.tools if t.enabled}
     candidate = [
         tool
         for tool in mcp_host.get_skill_tools([s.name for s in mcp_host.list_skills()])
-        if (tool.plugin_id or "core") in enabled and (not es_de_captar_leads(tool.name) or "pack_commerce" in enabled)
+        if (tool.plugin_id or "core") in enabled
+        and (not es_de_captar_leads(tool.name) or "pack_commerce" in enabled or tool.name in con_binding)
     ]
     # Los overrides del negocio (flow.json, playbooks) salen del `tenant_scope`, no del
     # `tenantId` del spec.json: el flujo y el prompt se arman dentro del scope del negocio.
@@ -303,6 +328,10 @@ async def run_scenario(
     falla = _falla_tools_prohibidas(
         assertions.get("must_not_call_tools", False), [t.name for t in response.tool_calls]
     )
+    if falla:
+        failures.append(falla)
+
+    falla = _falla_argumentos_prohibidos(assertions.get("tool_arguments_absent"), response.tool_calls)
     if falla:
         failures.append(falla)
 

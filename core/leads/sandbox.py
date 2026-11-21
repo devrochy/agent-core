@@ -66,7 +66,7 @@ async def simular_actualizar_lead(arguments: dict[str, Any], context: ToolContex
     lead = await sandbox.buscar("leads", "customer_id", str(context.customer_id))
     if lead is None:
         return {"error": "No hay lead para esta conversación. Usa crear_lead primero."}
-    for campo in ("name", "email", "phone", "interest", "status"):
+    for campo in ("name", "email", "phone", "interest", "negocio", "status"):
         if arguments.get(campo):
             lead[campo] = str(arguments[campo])
     await sandbox.guardar("leads", lead["lead_id"], lead)

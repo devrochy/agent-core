@@ -1,0 +1,16 @@
+{
+  "name": "captar-leads-no-deduce-datos-40",
+  "spec": "captar-leads",
+  "requires_plugins": ["pack_subscriptions"],
+  "conversation": [
+    {"role": "user", "content": "Hola, tengo un negocio pequeño y me interesan sus planes. Mándenme la información a mi correo, porfa"}
+  ],
+  "assertions": {
+    "tool_arguments_absent": {
+      "crear_lead": ["name", "email", "phone"],
+      "actualizar_lead": ["name", "email", "phone", "negocio"]
+    },
+    "must_contain_any": ["correo", "email", "e-mail"],
+    "max_response_chars": 500
+  }
+}

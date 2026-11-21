@@ -7,6 +7,7 @@ se ensambla:
   1. Los playbooks del tenant en el orden del índice `AgentSpec.playbooks`,
      con sustitución de placeholders ({assistant_name}, {business_description},
      {language}).
+     Si el agente tiene Captar leads, sigue el playbook del kernel `captar-leads` (HU-AOS-70).
   2. Bloques dinámicos del turno (voz de marca, skills activas, perfil y memorias)
      que cambian por turno — van al final para no invalidar el cache de los bloques
      estables (docs/PROMPT-CACHING-GUIDE.md). La fecha y hora actual del negocio es
@@ -31,6 +32,17 @@ DEFAULT_TIMEZONE = "America/Bogota"
 # Encabezado del dato de fecha y hora (ADR-0091). Lo usa también la normalización de las
 # grabaciones de evals (`core/llm/cassette.py`) para ignorar la parte que cambia cada minuto.
 CURRENT_DATETIME_HEADER = "## Fecha y hora actual"
+
+# Playbook del kernel con las reglas de Captar leads (`core/playbooks/kernel/captar-leads.md`).
+PLAYBOOK_CAPTAR_LEADS = "captar-leads"
+
+
+def tiene_captar_leads(spec: AgentSpec) -> bool:
+    """True si el agente tiene encendida alguna acción de Captar leads (binding `enabled`)."""
+    from core.leads.tools import es_de_captar_leads
+
+    return any(t.enabled and es_de_captar_leads(t.tool) for t in spec.tools)
+
 
 _NEXT_DAYS = {"es": "Próximos días", "en": "Next days", "pt": "Próximos dias"}
 _TOMORROW = {"es": "mañana", "en": "tomorrow", "pt": "amanhã"}
@@ -250,6 +262,13 @@ async def bloques_fijos(
         rendered = await _render_playbook(spec, ref.name, ctx.template_vars, tenant_slug, overrides, estricto)
         if rendered:
             blocks.append(rendered)
+
+    # 1b. Captar leads (HU-AOS-70, ADR-0193 §2): no es un pack con playbook propio, es un grupo de acciones del
+    # core; sus reglas (confirmar, preguntar antes de reemplazar, no deducir) van a todo agente que tenga alguna.
+    if tiene_captar_leads(spec):
+        from core.agents.playbooks import load_core_playbook
+
+        blocks.append(load_core_playbook(PLAYBOOK_CAPTAR_LEADS).strip())
 
     # 2. Voz de marca (dato del tenant, estable por negocio)
     if ctx.brand_voice:

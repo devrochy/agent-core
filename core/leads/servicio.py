@@ -158,6 +158,16 @@ def fijar_contacto(lead: Lead, *, name: Any = None, phone: Any = None, email: An
     return cambio
 
 
+def fijar_negocio(lead: Lead, negocio: str) -> bool:
+    """Pone en `custom["negocio"]` el negocio que dijo el cliente (vacío no borra). True si cambió."""
+    if not negocio or (lead.custom or {}).get("negocio") == negocio:
+        return False
+    # Diccionario nuevo: SQLAlchemy no detecta la mutación en sitio de un JSONB.
+    lead.custom = {**(lead.custom or {}), "negocio": negocio}
+    lead.last_activity_at = datetime.now(UTC)
+    return True
+
+
 # ------------------------------------------------------------------ entradas por ids (para los packs)
 async def completar_contacto(
     session: Any, tenant_id: uuid.UUID, customer_id: uuid.UUID, *, nombre: Any = None, email: Any = None,
@@ -226,6 +236,7 @@ async def registrar_desde_intake(
     phone: Any = None,
     email: Any = None,
     interest: Any = None,
+    negocio: Any = None,
     idempotency_key: str | None = None,
 ) -> tuple[LeadVista, bool]:
     """Lead del formulario de la página (origen `landing`): si el cliente ya tiene uno vivo, se le ponen los datos que
@@ -235,6 +246,8 @@ async def registrar_desde_intake(
         raise ClienteSinLead("Cliente no encontrado.")
     lead, creado = await asegurar(session, tenant_id, customer_id, origen="landing", idempotency_key=idempotency_key)
     fijar_contacto(lead, name=name, phone=phone, email=email, interest=interest)
+    # El negocio del formulario también va a su campo (HU-AOS-70), como el que guarda `actualizar_lead`.
+    fijar_negocio(lead, " ".join(str(negocio or "").split())[:200])
     return vista(lead), creado
 
 

@@ -39,9 +39,8 @@ description: Reglas del proceso de venta
 - Si ya registraste al lead en esta misma conversación y el cliente responde con un dato
   de calificación (presupuesto, urgencia) o un dato de contacto (teléfono, email), llama
   `calificar_lead` o `actualizar_lead` en ese mismo turno — no vuelvas a llamar
-  `crear_lead` ni te quedes solo charlando sin guardar el dato nuevo. Esto no requiere
-  consultar el inventario, aunque el interés mencionado sea sobre un producto o
-  categoría concreta.
+  `crear_lead` ni te quedes solo charlando sin guardar el dato nuevo (si contradice uno
+  guardado, pregunta antes, como dicen las reglas de Captar leads). No requiere inventario.
 - Para recomendar productos usa la venta cruzada: sugiere categorías complementarias cuando
   tenga sentido, sin ser insistente.
 - El flujo completo para cerrar un pedido, en orden, es: cotización (`generar_cotizacion`)
