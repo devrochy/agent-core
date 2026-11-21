@@ -175,6 +175,9 @@ pasa por él, y eso es lo esperado.
 9. Settings → Advanced → API access, y un token de API para la skill `release` (al gestor de
    contraseñas).
 10. El proxy de Coolify (Traefik) no se usa: el túnel llega directo a los puertos de loopback.
+    Con un puerto fijo no hay rolling update y cada deploy de la API corta mientras arranca el
+    contenedor nuevo. La alternativa con Traefik y health check está en
+    [`despliegue-api-sin-corte.md`](despliegue-api-sin-corte.md) (propuesta, sin ejecutar).
     Puede quedar detenido (Servers → `prod-app` → Proxy).
 
 ## 4. Operador: datos en `prod-data`
@@ -288,7 +291,7 @@ available during build*.
 - Health check HTTP: `/healthz`, puerto `8000`.
 - Persistent Storage: volumen `agent-core-tenants` en `/app/tenants`.
 - Variables: las de la columna A, **incluida** `MIGRATIONS_DATABASE_URL`, y `AGENT_CORE_ROLE=api`.
-- Deploy. En los logs: `[entrypoint] aplicando migraciones`, `✓ Migraciones del core aplicadas`,
+- Deploy. En los logs: `[entrypoint] ya instalado en la imagen` por cada pack, `[entrypoint] aplicando migraciones`, `✓ Migraciones del core aplicadas`,
   una línea `✓` por pack, y el contenedor `healthy`. Así queda la **base nueva migrada desde
   cero**.
 
