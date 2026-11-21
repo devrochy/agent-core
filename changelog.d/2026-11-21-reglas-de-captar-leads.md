@@ -1,4 +1,4 @@
-### Captar leads: reglas del agente y campo «negocio» (HU-AOS-70)
+## Captar leads: reglas del agente y campo «negocio» (2026-11-21, HU-AOS-70 parte 4)
 
 - Playbook del kernel `captar-leads`: el agente confirma el dato con el cliente, pregunta antes de reemplazar uno que
   contradice y nunca lo deduce. Entra al prompt de todo agente con alguna acción de Captar leads encendida, tenga o no
