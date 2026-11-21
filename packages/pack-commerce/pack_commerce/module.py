@@ -999,7 +999,11 @@ async def crm_orders(request: Request):
             )
         ).scalars().all()
         items = (
-            await session.execute(select(OrderItem).where(OrderItem.tenant_id == tenant_id))
+            await session.execute(
+                select(OrderItem).where(
+                    OrderItem.tenant_id == tenant_id, OrderItem.order_id.in_([o.id for o in orders])
+                )
+            )
         ).scalars().all()
         variants = (
             await session.execute(

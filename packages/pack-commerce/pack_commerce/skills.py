@@ -1489,6 +1489,8 @@ class OrderSkill(BaseSkill):
                 return await _cotizacion_no_encontrada(
                     context, _sin_cotizacion_vigente(), session
                 )
+            # Sin filtrar `deleted_at` a propósito (HU-AOS-71): protege la idempotencia; una cotización oculta
+            # ya no llega hasta aquí (`_quote_del_cliente` la filtra).
             existing_order = (
                 await session.execute(
                     select(Order).where(
