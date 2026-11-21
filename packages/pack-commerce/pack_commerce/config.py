@@ -257,7 +257,7 @@ class CRMConfig(BasePluginConfig):
 
     # ---------------------------------------------------------------- intake de leads (ADR-0055 superseded)
     # Captar leads es del core (ADR-0193 §6): estos campos y los del lead de arriba (`auto_create_lead`, reenganche y
-    # seguimiento) ya no los lee nadie de commerce y se editan en la config de Captar leads (`/api/v1/admin/leads/config`).
+    # seguimiento) ya no los lee nadie de commerce y se editan en la config de Captar leads (`/api/v1/admin/captar-leads/config`).
     # Quedan OCULTOS (no salen en el formulario y al guardar se conservan) solo para que `agent-core db copiar-leads`
     # los copie a `lead_settings`; su retiro es otra HU.
     lead_intake_enabled: bool = Field(

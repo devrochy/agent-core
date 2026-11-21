@@ -264,8 +264,8 @@ Las `NEXT_PUBLIC_*` se hornean en el build (Coolify las pasa como build args, `D
 | `NEXT_PUBLIC_PANEL_URL` | build | fijo: `https://app.solvershub.site` (botón "Iniciar sesión", `lib/site.ts:13-14`) |
 | `NEXT_PUBLIC_WHATSAPP_NUMBER`, `NEXT_PUBLIC_SCHEDULE_URL` | build | datos del negocio |
 | `NEXT_PUBLIC_POSTHOG_KEY`, `NEXT_PUBLIC_POSTHOG_HOST` | build | proveedor (opcional) |
-| `LEAD_WEBHOOK_URL` | runtime | fijo: `http://agent-core-api:8000/api/public/leads/<slug del negocio solvershub>` (intake del core, ADR-0193; la ruta vieja `/api/pack/pack_commerce/leads/<slug>` sigue como alias) |
-| `LEAD_WEBHOOK_BASE` | runtime | fijo: `http://agent-core-api:8000/api/public/leads` (formulario alojado `/f/<slug>`; requiere la landing con la base nueva, solvershub-landing HU-AOS-71) |
+| `LEAD_WEBHOOK_URL` | runtime | fijo: `http://agent-core-api:8000/api/pack/pack_commerce/leads/<slug del negocio solvershub>`. Desde ADR-0193 lo atiende el intake del core (la ruta vieja es un alias); la ruta nueva `/api/public/leads/<slug>` se adopta con HU-AOS-71 |
+| `LEAD_WEBHOOK_BASE` | runtime | fijo: `http://agent-core-api:8000/api/pack/pack_commerce` (formulario alojado `/f/<slug>`). **No** cambiarla a `/api/public/leads` hasta que la landing de HU-AOS-71 arme las rutas con la base nueva: la landing actual agrega `/leads/<slug>` y daría 404 |
 | `WEBCHAT_API_BASE` | runtime | fijo: `http://agent-core-api:8000/api/v1/public/web-chat`. Explícita: si falta, la landing la deriva de `LEAD_WEBHOOK_BASE` (`lib/webchat.ts`) |
 | `LEAD_WEBHOOK_SECRET` | runtime | heredada: el secreto del intake de la config de Captar leads del negocio `solvershub` (`/api/v1/admin/captar-leads/config`; antes en la config de comercio) |
 | `RESEND_API_KEY`, `LEAD_NOTIFY_EMAIL`, `LEAD_FROM_EMAIL` | runtime | proveedor, opcional (aviso por correo si no hay webhook) |
