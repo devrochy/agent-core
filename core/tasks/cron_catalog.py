@@ -139,6 +139,9 @@ CATALOGO: dict[str, CronMeta] = dict(
            "Trae todas las plantillas de cada cuenta de Twilio y el estado de su aprobación.", "20 * * * *"),
         _m("core.twilio_health_check", "Canales y Meta", "Salud de las conexiones de Twilio",
            "Revisa la cuenta, el número y los webhooks de cada conexión de WhatsApp vía Twilio.", "*/15 * * * *"),
+        _m("core.twilio_reconciliacion", "Canales y Meta", "Recuperación de mensajes de Twilio",
+           "Trae de Twilio los mensajes de clientes que no llegaron por el webhook (despliegue, túnel caído).",
+           "*/2 * * * *"),
         _m("core.telegram_health_check", "Canales y Meta", "Salud de los bots de Telegram",
            "Revisa el token y el webhook de cada bot de Telegram conectado.", "*/15 * * * *"),
         # ---- Facturación de la plataforma
