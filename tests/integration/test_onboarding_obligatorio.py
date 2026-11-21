@@ -7,8 +7,9 @@ Gherkin:
   abrirlo (`abrir`) solo al propietario; el master lo ve sin bloqueo. Uno anterior al corte `no_aplica`.
 - «Omitir deja el aviso»: omitir guarda quién y cuándo, `avisar` queda encendido y `abrir` apagado;
   reanudar o avanzar lo retoma.
-- «Sin agente propio»: el Coordinador del alta (`kind='core'`) no cuenta; en cuanto el negocio crea un
-  agente, `avisar` y `abrir` se apagan aunque el recorrido siga en curso o pendiente.
+- «Sin agente propio ajeno»: el Coordinador del alta (`kind='core'`) no cuenta, y el agente que creó la
+  bienvenida (`agente_id` de `dejar-listo`) tampoco: el aviso sigue de la estación 2 a la 5. En cuanto el
+  negocio crea otro agente, `avisar` y `abrir` se apagan aunque el recorrido siga en curso o pendiente.
 - «Terminar lo valida el servidor»: `finalizar` responde 409 `faltan_pasos` con lo que falta.
 - «Dejar listo»: crea el chat web CERRADO, publica el agente del guion y activa su versión, sin duplicar
   nada al repetir; con un chat web que ya atiende clientes, 409 `canal_en_vivo`.
@@ -276,6 +277,83 @@ async def test_el_aviso_y_la_apertura_solo_insisten_sin_agente_propio(app_client
         False,
         False,
     )
+
+
+async def _agente(app_client, h: dict[str, str], plantilla: str = "ventas") -> str:
+    r = await app_client.post(
+        "/api/v1/admin/agents/from-script", headers=h, json={"template_key": plantilla, "answers": {}}
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["agent"]["id"]
+
+
+async def test_el_agente_de_la_bienvenida_no_apaga_el_aviso_y_uno_ajeno_si(app_client) -> None:
+    """SPEC-49 (decisión del 2026-11-20): la bienvenida crea su agente al salir de la estación 1 y el aviso
+    sigue hasta terminarla; un agente creado por «Nuevo agente» lo apaga aunque el recorrido esté omitido."""
+    tid = await _negocio()
+    h = await _persona(app_client, tid, "owner")
+    de_la_bienvenida = await _agente(app_client, h)
+
+    # `dejar-listo` guarda el agente y su RETURNING ya lo excluye: avisa en la misma respuesta.
+    r = await app_client.post(
+        "/api/v1/admin/onboarding/dejar-listo", headers=h, json={"agent_id": de_la_bienvenida}
+    )
+    assert r.status_code == 200, r.text
+    listo = r.json()["recorrido"]
+    assert (listo["estado"], listo["paso"], listo["agente_id"]) == ("en_curso", 2, de_la_bienvenida)
+    assert (listo["avisar"], listo["abrir"]) == (True, False)
+    actual = await _recorrido(app_client, h)
+    assert (actual["estado"], actual["avisar"], actual["abrir"]) == ("en_curso", True, False)
+
+    # «Seguir después» en la estación 3: el aviso sigue y cuenta desde donde quedó.
+    r = await app_client.post("/api/v1/admin/onboarding/avanzar", headers=h, json={"paso": 3, "pasos": 5})
+    assert r.status_code == 200, r.text
+    r = await app_client.post("/api/v1/admin/onboarding/omitir", headers=h)
+    assert r.status_code == 200, r.text
+    assert (r.json()["estado"], r.json()["paso"], r.json()["avisar"]) == ("omitido", 3, True)
+
+    # Ya omitido, el dueño publica otro agente por «Nuevo agente»: el recorrido deja de insistir, pero
+    # sigue omitido y se puede retomar a mano.
+    await _agente(app_client, h, "agenda")
+    actual = await _recorrido(app_client, h)
+    assert (actual["estado"], actual["aplica"], actual["avisar"], actual["abrir"]) == (
+        "omitido",
+        True,
+        False,
+        False,
+    )
+
+    # Si el agente ajeno se da de baja (`deleted_at`) y queda solo el de la bienvenida, vuelve el aviso.
+    await _sql(
+        tid,
+        "update agents set deleted_at = now() where tenant_id = :t and kind <> 'core' and id <> :a",
+        t=tid,
+        a=uuid.UUID(de_la_bienvenida),
+    )
+    assert (await _recorrido(app_client, h))["avisar"] is True
+
+
+async def test_el_agente_de_la_bienvenida_de_otro_negocio_no_cuenta(app_client) -> None:
+    """Aislamiento: el `agente_id` guardado solo excluye agentes del propio negocio, y los agentes de otro
+    negocio no apagan el aviso de este."""
+    tid_a = await _negocio()
+    h_a = await _persona(app_client, tid_a, "owner")
+    tid_b = await _negocio()
+    h_b = await _persona(app_client, tid_b, "owner")
+    agente_b = await _agente(app_client, h_b)
+
+    # A guarda (mal) el agente de B como el de su bienvenida: no lo vuelve propio ni ajeno; A no tiene
+    # agentes y sigue avisando.
+    await _guardar(tid_a, f'{{"estado": "omitido", "paso": 2, "pasos": 5, "agente_id": "{agente_b}"}}')
+    assert (await _recorrido(app_client, h_a))["avisar"] is True
+
+    # B, con un agente que no es el de su bienvenida, no avisa: que A haya guardado ese id no lo cambia.
+    await _guardar(tid_b, '{"estado": "omitido", "paso": 2, "pasos": 5}')
+    assert (await _recorrido(app_client, h_b))["avisar"] is False
+
+    # Un `agente_id` mal formado no rompe la lectura.
+    await _guardar(tid_a, '{"estado": "en_curso", "paso": 2, "pasos": 5, "agente_id": "no-es-uuid"}')
+    assert (await _recorrido(app_client, h_a))["avisar"] is True
 
 
 async def test_finalizar_lo_valida_el_servidor_y_dejar_listo_publica_y_activa_sin_duplicar(
