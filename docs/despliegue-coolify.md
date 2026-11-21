@@ -70,7 +70,7 @@ crearlos.
 
 | Recurso (nombre en Coolify) | Nodo | Origen | Arranque | Red y puertos | Salud | Persistencia | UUID |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `agent-core-api` | prod-app | `devrochy/agent-core` · `main` · `Dockerfile` | `ENTRYPOINT` de la imagen: instala packs, **migra** y arranca uvicorn (`Dockerfile:46-47`, `scripts/entrypoint.sh:41-49`) | `127.0.0.1:3003:8000`; alias de red `agent-core-api` | HTTP `/healthz` (`core/main.py:140-142`) | volumen `agent-core-tenants` en `/app/tenants` | `<uuid-api>` |
+| `agent-core-api` | prod-app | `devrochy/agent-core` · `main` · `Dockerfile` | `ENTRYPOINT` de la imagen: **migra** y arranca uvicorn; los packs ya vienen instalados en la imagen (`Dockerfile:54-55`, `scripts/entrypoint.sh:64-83`) | `127.0.0.1:3003:8000`; alias de red `agent-core-api` | HTTP `/healthz` (`core/main.py:140-142`) | volumen `agent-core-tenants` en `/app/tenants` | `<uuid-api>` |
 | `agent-core-worker` | prod-app | el mismo repo, rama y Dockerfile | Custom Docker Options: `--entrypoint /app/scripts/entrypoint-worker.sh` | sin puertos | sin HTTP: latido en Redis cada minuto (`core/tasks/celery_app.py:165-193`) | el mismo volumen | `<uuid-worker>` |
 | `agent-core-beat` | prod-app | ídem | `--entrypoint /app/scripts/entrypoint-beat.sh` | sin puertos | igual que el worker | el mismo volumen | `<uuid-beat>` |
 | `panel-web` | prod-app | `devrochy/solvershub-panel` · `main` · base `/apps/panel-web` · Dockerfile `/Dockerfile` | `CMD` de la imagen (`node server.js`) | `127.0.0.1:3004:3000` | HTTP `/login` (la imagen trae `curl`) | — | `<uuid-panel>` |
@@ -85,7 +85,7 @@ Equivalencia con `docker-compose.yml` (la topología de desarrollo):
   `agent-core-redis`, en `prod-data`.
 - `core-api` (`:49-85`), `celery-worker` (`:87-108`) y `celery-beat` (`:110-129`) → los tres
   recursos de la misma imagen en `prod-app`. Los bind-mounts de compose (`./sdd`, `./packages`,
-  `./plugins`) no existen en Coolify: la imagen hornea los packs (`Dockerfile:22-30`). El volumen
+  `./plugins`) no existen en Coolify: la imagen hornea los packs y deja el sello `/app/.packs-instalados`, así que el entrypoint no los reinstala (`Dockerfile:26-38`). El volumen
   `tenants-data` (`:68-70`, `:155-158`) es `agent-core-tenants`.
 - `waweb-connector` (`:133-153`) **no va a producción**: WhatsApp Web no se vende en v1 (P-08) y
   `WAWEB_ENABLED` vale `false` por defecto (`core/config.py:138`).
@@ -179,7 +179,7 @@ Columnas A/W/B: la variable va en la API, el worker o el beat. Fuente de verdad 
 
 | Variable | A | W | B | Origen y valor |
 | --- | --- | --- | --- | --- |
-| `AGENT_CORE_ROLE` | ✓ | ✓ | ✓ | fijo: `api`, `worker`, `beat`. Explícito en los tres: si el worker hereda `api`, migra al arrancar (`scripts/entrypoint-worker.sh:14`, `scripts/entrypoint.sh:41-47`) |
+| `AGENT_CORE_ROLE` | ✓ | ✓ | ✓ | fijo: `api`, `worker`, `beat`. Explícito en los tres: si el worker hereda `api`, migra al arrancar (`scripts/entrypoint-worker.sh:14`, `scripts/entrypoint.sh:64-69`) |
 | `DATABASE_URL` | ✓ | ✓ | ✓ | runbook: `postgresql+asyncpg://app_runtime:<clave>@<ip-privada-data>:5432/agent_core`. Clave **generada** al crear `app_runtime`, nunca la de desarrollo |
 | `MIGRATIONS_DATABASE_URL` | ✓ | — | — | runbook: rol dueño `agent_core_migrations`. Solo la API migra; worker y beat no reciben la credencial del dueño |
 | `REDIS_URL` | ✓ | ✓ | ✓ | Coolify: `redis://default:<clave>@<ip-privada-data>:6379/0` |
