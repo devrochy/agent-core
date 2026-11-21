@@ -525,7 +525,7 @@ cobranza en `evidencias/`) viven en **`TENANTS_ROOT`** (`/app/tenants`) en el fi
 - **Coolify**: el **mismo volumen nombrado** (`agent-core-tenants` en producción) montado en
   `/app/tenants` en la API, el worker y el beat; con nombres distintos se desincronizan. Los tres
   están en `prod-app`, así que comparten el volumen de Docker.
-- **Dueño del volumen**: la imagen corre como `app` (`Dockerfile:12`, `:37-38`) pero no trae
+- **Dueño del volumen**: la imagen corre como `app` (`Dockerfile:15`, `:45-46`) pero no trae
   `/app/tenants`, así que un volumen nuevo nace de `root` y `app` no puede escribir en él
   (comprobado con la misma base de imagen). Se arregla una vez, después del primer deploy:
   `docker exec -u root <contenedor-api> chown -R app:app /app/tenants`. Si el `Dockerfile` crea
