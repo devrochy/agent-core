@@ -18,7 +18,7 @@ if [ "$modo" = "replay" ]; then
   export LLM_API_KEY=""  # replay nunca usa la clave: si algo la pidiera, falla
 fi
 
-GOLDEN="06,07,08,21,22,23,24,25,26,38,39"
+GOLDEN="06,07,08,21,22,23,24,25,26,38,39,40,41"
 JOURNEYS="01,05"
 # Formas de pago (SPEC-48): pago en línea y comprobar transferencia, del set procedimientos.
 JOURNEYS_PAGOS="06,07,08,09"

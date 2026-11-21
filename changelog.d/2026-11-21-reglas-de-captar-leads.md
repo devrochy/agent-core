@@ -10,5 +10,6 @@
 - La config de Captar leads trae títulos en español: el panel muestra «Secreto del formulario», «Llave secreta de
   Turnstile», etc., en vez de los nombres técnicos.
 - Evals: aserción `tool_arguments_absent` en el golden, spec `captar-leads` (Suscripciones sin comercio) y escenarios
-  40 (no deduce datos) y 41 (pregunta antes de reemplazar el correo). Grabaciones del gate regrabadas.
+  40 (no deduce datos) y 41 (pregunta antes de reemplazar el correo), sumados al gate. Grabaciones del gate regrabadas.
+- `ventas.md` remite a las reglas de Captar leads ante un dato que contradice uno guardado (pack_commerce 4.5.0).
 - No hace falta republicar: el bloque sale del binding de la versión y del playbook que viaja con el binario.
