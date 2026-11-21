@@ -102,11 +102,13 @@ def spec_v2_desde_release(
     extensiones["guardrails"] = [g.model_dump(mode="json", exclude_none=True) for g in v3.guardrails]
     extensiones["tools"] = _declarativas_v2(v3, omitidas)
     rag = v3.memory.rag
+    # ADR-0205 §5: la vista de recepción del Coordinador no tiene packs y se anota aparte en el `usage_ledger`.
+    recepcion = agente.role == "core"
     return AgentSpec.model_validate(
         {
             "id": agente.key,
             # Texto libre en el contrato: identifica la versión congelada en `usage_ledger`.
-            "version": f"{agente.key}@v3:{agente.version}",
+            "version": f"coordinador@recepcion:{agente.version}" if recepcion else f"{agente.key}@v3:{agente.version}",
             "tenantId": str(tenant_id),
             "persona": {
                 # La voz es de la conexión (KernelSpec, ADR-0113 §4); el tope y las frases, del agente.
@@ -143,7 +145,7 @@ def spec_v2_desde_release(
                 "budgetUsdPerConversation": ks.policies.budgetUsdPerConversation,
             },
             # La habilitación congelada en el manifiesto (hasta HU-AOS-16, `pack_installations`).
-            "packs": sorted({*skills, *tenant_plugins}),
+            "packs": [] if recepcion else sorted({*skills, *tenant_plugins}),
             "extensions": extensiones,
         }
     )

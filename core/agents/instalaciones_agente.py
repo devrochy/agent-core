@@ -72,6 +72,8 @@ async def _agente_vivo(session, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> Ag
     ).scalar_one_or_none()
     if agente is None:
         raise AgenteNoEncontrado(str(agent_id))
+    if agente.kind == "core":  # ADR-0205 §5: las habilidades del Coordinador son fijas del core
+        raise ConflictoInstalacion("coordinador_inmutable", "Las habilidades del Coordinador vienen fijas del sistema.")
     if agente.status != "active":
         raise ConflictoInstalacion("agent_archived", "El agente está archivado: no se le instalan habilidades.")
     return agente
