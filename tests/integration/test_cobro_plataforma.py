@@ -81,7 +81,7 @@ def avisos(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 def correos(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
     enviados: list[dict[str, str]] = []
 
-    async def falso(to: str, subject: str, body: str) -> str:
+    async def falso(to: str, subject: str, body: str, html: str | None = None) -> str:
         enviados.append({"to": to, "subject": subject, "body": body})
         return "msg-test"
 
@@ -1482,7 +1482,7 @@ async def test_renovacion_por_el_panel_sale_por_el_smtp_del_vendedor(
 
     encolados: list[dict[str, Any]] = []
 
-    async def cola_falsa(to: str, subject: str, body: str) -> str:
+    async def cola_falsa(to: str, subject: str, body: str, html: str | None = None) -> str:
         encolados.append({"tenant": get_current_tenant_id(), "to": to, "body": body})
         return "msg-vendedor"
 
@@ -1506,7 +1506,7 @@ async def test_renovacion_por_el_panel_sin_smtp_del_vendedor_usa_el_de_la_plataf
     from core.billing.renovacion import on_platform_renewal_due
     from core.gateway.outbound_email import EmailOutboxError
 
-    async def sin_conexion(to: str, subject: str, body: str) -> str:
+    async def sin_conexion(to: str, subject: str, body: str, html: str | None = None) -> str:
         raise EmailOutboxError("no_connection")
 
     monkeypatch.setattr("core.gateway.outbound_email.queue_outbound_email", sin_conexion)

@@ -58,7 +58,7 @@ def _capturar_correo(monkeypatch):
 
     enviados: list[tuple[str, str, str]] = []
 
-    async def fake_send(to: str, subject: str, body: str) -> str:
+    async def fake_send(to: str, subject: str, body: str, html: str | None = None) -> str:
         enviados.append((to, subject, body))
         return "msg-id-test"
 

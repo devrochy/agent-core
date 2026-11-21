@@ -1,0 +1,104 @@
+<mjml lang="es" dir="ltr">
+  <mj-head>
+    <mj-title>{{ titulo }}</mj-title>
+    <mj-preview>{{ preview }}</mj-preview>
+
+    <mj-font name="Montserrat" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&display=swap" />
+    <mj-font name="Inter" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" />
+
+    <mj-attributes>
+      <mj-all font-family="Inter, 'Segoe UI', system-ui, sans-serif" />
+      <mj-text color="#46536B" font-size="15px" line-height="24px" padding="0 32px 10px" />
+      <mj-button background-color="#2560E6" color="#FFFFFF" border-radius="6px" inner-padding="14px 30px" font-size="15px" line-height="20px" font-weight="600" font-family="Inter, 'Segoe UI', system-ui, sans-serif" />
+      <mj-divider border-color="#E2E8F2" border-width="1px" padding="12px 32px" />
+      <mj-class name="titulo" font-family="Montserrat, 'Century Gothic', system-ui, sans-serif" font-size="24px" line-height="32px" font-weight="700" color="#0B1733" letter-spacing="-0.2px" />
+      <mj-class name="eyebrow" font-size="11px" line-height="16px" font-weight="600" letter-spacing="1.4px" text-transform="uppercase" />
+      <mj-class name="nota" font-size="13px" line-height="19px" color="#616F88" />
+    </mj-attributes>
+
+    <mj-html-attributes>
+      <mj-selector path=".h1 div">
+        <mj-html-attribute name="role">heading</mj-html-attribute>
+        <mj-html-attribute name="aria-level">1</mj-html-attribute>
+      </mj-selector>
+    </mj-html-attributes>
+  </mj-head>
+
+  <mj-body background-color="#F7F9FC" width="600px">
+
+    <mj-section background-color="#0B1733" padding="22px 32px">
+      <mj-column>
+        <mj-text padding="0">
+          <img src="{{ logo_url }}" alt="" width="34" height="34" style="vertical-align:middle;margin:0 10px 0 0;border:0;display:inline-block;" />
+          <span style="font-family:Montserrat,'Century Gothic',system-ui,sans-serif;font-size:18px;line-height:22px;font-weight:700;color:#E8EDF7;letter-spacing:0.4px;vertical-align:middle;">SOLVERS<span style="color:#22C7E0;">HUB</span></span>
+        </mj-text>
+        <mj-text padding="4px 0 0" font-size="11px" line-height="16px" color="#A9B6CC" letter-spacing="0.6px">
+          Centro de soluciones impulsado con IA
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+    <mj-section background-color="#FFFFFF" padding="32px 0 8px">
+      <mj-column>
+        <mj-text mj-class="eyebrow" color="#2560E6" padding="0 32px 8px">{{ estado }}</mj-text>
+        <mj-text css-class="h1" mj-class="titulo" padding="0 32px 8px">{{ titulo }}</mj-text>
+        <mj-text mj-class="nota" padding="0 32px 16px">Cita con {{ negocio }}</mj-text>
+      </mj-column>
+    </mj-section>
+
+    <mj-section background-color="#FFFFFF" padding="0">
+      <mj-column>
+        <mj-table cellpadding="0" cellspacing="0" padding="6px 32px 18px">
+          <tr>
+            <td style="padding:12px 0;border-bottom:1px solid #E2E8F2;font-size:13px;line-height:19px;color:#616F88;">Cita</td>
+            <td style="padding:12px 0;border-bottom:1px solid #E2E8F2;text-align:right;font-family:Montserrat,'Century Gothic',system-ui,sans-serif;font-size:16px;line-height:22px;font-weight:600;color:#0B1733;">{{ cita }}</td>
+          </tr>
+          <tr>
+            <td style="padding:12px 0;border-bottom:1px solid #E2E8F2;font-size:13px;line-height:19px;color:#616F88;">Fecha</td>
+            <td style="padding:12px 0;border-bottom:1px solid #E2E8F2;text-align:right;font-family:Montserrat,'Century Gothic',system-ui,sans-serif;font-size:16px;line-height:22px;font-weight:600;color:#0B1733;">{{ fecha }}</td>
+          </tr>
+          <tr>
+            <td style="padding:12px 0;border-bottom:1px solid #E2E8F2;font-size:13px;line-height:19px;color:#616F88;">Hora</td>
+            <td style="padding:12px 0;border-bottom:1px solid #E2E8F2;text-align:right;font-family:Montserrat,'Century Gothic',system-ui,sans-serif;font-size:16px;line-height:22px;font-weight:600;color:#0B1733;">{{ hora }}</td>
+          </tr>
+          <tr>
+            <td style="padding:12px 0;font-size:13px;line-height:19px;color:#616F88;">Negocio</td>
+            <td style="padding:12px 0;text-align:right;font-size:14px;line-height:22px;color:#0B1733;">{{ negocio }}</td>
+          </tr>
+        </mj-table>
+      </mj-column>
+    </mj-section>
+
+    <mj-raw>{% if enlace %}</mj-raw>
+    <mj-section background-color="#FFFFFF" padding="4px 0 8px">
+      <mj-column>
+        <mj-button href="{{ enlace }}" padding="6px 32px 18px" align="left">Agregar a mi calendario</mj-button>
+      </mj-column>
+    </mj-section>
+    <mj-raw>{% endif %}</mj-raw>
+
+    <mj-section background-color="#FFFFFF" padding="0 0 8px">
+      <mj-column>
+        <mj-text mj-class="nota">{{ nota }}</mj-text>
+      </mj-column>
+    </mj-section>
+
+    <mj-section background-color="#FFFFFF" padding="0 0 28px">
+      <mj-column>
+        <mj-divider />
+      </mj-column>
+    </mj-section>
+
+    <mj-section background-color="#F7F9FC" padding="22px 32px 28px">
+      <mj-column>
+        <mj-text mj-class="nota" padding="0" align="left">
+          SolversHub · Centro de soluciones impulsado con IA
+        </mj-text>
+        <mj-text mj-class="nota" padding="6px 0 0" align="left" color="#7C8AA3">
+          Este correo se envió desde el correo del negocio.
+        </mj-text>
+      </mj-column>
+    </mj-section>
+
+  </mj-body>
+</mjml>

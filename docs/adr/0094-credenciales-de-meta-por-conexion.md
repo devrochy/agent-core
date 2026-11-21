@@ -122,7 +122,8 @@ propia app) o credenciales por conexión que roten por otro mecanismo que el tok
   en el webhook) siguen eligiendo "la" conexión del tenant: es HU-CONN-05 (webhook y secreto por conexión),
   junto con alinear `meta_app_id` tras una toma por ES.
 - Descarga de media: el core no la hace hoy (`url: ""` en `inbound.py`); HU-MEDIA-02 deberá usar `credentials_for`.
-- `meta_private.meta_tokens` tiene RLS habilitada pero no forzada (la migración `0029` solo cubrió `public`).
+- `meta_private.meta_tokens` tenía RLS habilitada pero no forzada (la migración `0029` solo cubrió `public`); la
+  forzó la `0148` (2026-11-18).
 
 ## Impacto en el código
 

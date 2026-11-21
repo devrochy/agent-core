@@ -24,7 +24,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from core.alta_acceso import VIGENCIA_ENLACE, InvitacionOwner, asunto_y_cuerpo
+from core.alta_acceso import VIGENCIA_ENLACE, InvitacionOwner, asunto_y_cuerpo, html_de_acceso
 from core.db.models import Admin, Conversation, ProvisioningRequest
 from core.db.session import get_owned, get_session
 from core.gateway.event_notices import clean_param
@@ -184,8 +184,9 @@ async def entregar_por_correo(inv: InvitacionOwner, *, negocio: str, nombre: str
     from core.gateway.system_email import send_system_email
 
     asunto, cuerpo = asunto_y_cuerpo(inv, negocio=negocio, nombre=nombre)
+    html = html_de_acceso(inv, negocio=negocio, nombre=nombre)
     try:
-        enviado = await send_system_email(inv.email, asunto, cuerpo)
+        enviado = await send_system_email(inv.email, asunto, cuerpo, html)
     except (OSError, smtplib.SMTPException) as exc:
         raise AltaTransitoria(f"el correo de la invitación no salió ({type(exc).__name__})") from exc
     return "enviado" if enviado else "sin_smtp"

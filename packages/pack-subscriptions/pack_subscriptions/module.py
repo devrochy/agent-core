@@ -62,7 +62,7 @@ class SubscriptionsModule(BaseModule):
     config_agente = config_de_agente(SubscriptionConfig, ("monto_alto_inscripcion",), "ConfigDeAgenteDeSuscripciones")
     id = PLUGIN_ID
     name = "Suscripciones"
-    version = "0.7.0"
+    version = "0.8.0"  # 0.8: resumen del cambio de plan, reglas de pagar el período y de cambio de plan, cargos en sub_consultar
     description = "Suscripción de cliente final activada por pago de un plan (ADR-0083)"
     display_name = "Suscripciones"
     category = "Cobros"

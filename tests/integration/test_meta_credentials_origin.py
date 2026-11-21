@@ -166,7 +166,7 @@ async def test_un_negocio_nunca_resuelve_las_credenciales_de_otro(platform_app) 
     assert exc.value.reason == "tenant_mismatch"
 
     # 2. Sin contexto de tenant falla cerrado ANTES de leer el token store: no se confía
-    #    solo en RLS (en `meta_tokens` no está forzada) ni en el AAD.
+    #    solo en RLS (en `meta_tokens` forzada desde la 0148) ni en el AAD.
     async with tenant_scope(None):
         with pytest.raises(CredentialsUnavailable) as exc:
             await credentials_for(connection_b)

@@ -31,7 +31,7 @@ def testers_on(monkeypatch):
 
     monkeypatch.setattr(get_settings(), "qa_testers_enabled", True)
 
-    async def _sin_correo(to: str, subject: str, body: str) -> None:
+    async def _sin_correo(to: str, subject: str, body: str, html: str | None = None) -> None:
         return None
 
     import core.gateway.system_email as system_email
@@ -194,7 +194,7 @@ async def test_sin_la_variable_el_tester_no_existe(app_client, tenant_setup, mon
     master = await api_headers(app_client, t1)
     monkeypatch.setattr(get_settings(), "qa_testers_enabled", True)
 
-    async def _sin_correo(to: str, subject: str, body: str) -> None:
+    async def _sin_correo(to: str, subject: str, body: str, html: str | None = None) -> None:
         return None
 
     import core.gateway.system_email as system_email

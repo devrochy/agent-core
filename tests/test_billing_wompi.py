@@ -105,6 +105,66 @@ async def test_create_payment_link_rechaza_bajo_minimo():
         await provider.create_payment_link(reference="r", amount_cop=100_000)
 
 
+def _cliente_falso(monkeypatch) -> dict:
+    """Simula Wompi aceptando el link; devuelve lo que se le envió."""
+    captured: dict = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"data": {"id": "link-abc"}}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json, headers):
+            captured["url"] = url
+            captured["json"] = json
+            return _Resp()
+
+    monkeypatch.setattr("core.billing.providers.wompi.httpx.AsyncClient", _Client)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_minimo_del_sandbox_es_150_000(monkeypatch):
+    from core.billing.providers.base import BillingRequestRejected
+
+    provider = _provider()
+    assert provider.min_amount_cop == 150_000
+    with pytest.raises(BillingRequestRejected, match="150,000"):
+        await provider.create_payment_link(reference="r", amount_cop=149_999)
+    captured = _cliente_falso(monkeypatch)
+    await provider.create_payment_link(reference="r", amount_cop=150_000)
+    assert captured["url"].startswith("https://sandbox.wompi.co/")
+
+
+@pytest.mark.asyncio
+async def test_minimo_de_produccion_es_1_500(monkeypatch):
+    from core.billing.providers.base import BillingRequestRejected
+
+    provider = WompiBillingProvider(
+        public_key="pub_prod", private_key="prv_prod", events_secret="s", sandbox=False
+    )
+    assert provider.min_amount_cop == 1_500
+    with pytest.raises(BillingRequestRejected, match="1,500"):
+        await provider.create_payment_link(reference="r", amount_cop=1_499)
+    # Un plan de 100.000, rechazado en sandbox, se cobra en producción.
+    captured = _cliente_falso(monkeypatch)
+    link = await provider.create_payment_link(reference="r", amount_cop=100_000)
+    assert link.provider_reference == "link-abc"
+    assert captured["url"].startswith("https://production.wompi.co/")
+    assert captured["json"]["amount_in_cents"] == 10_000_000
+
+
 @pytest.mark.asyncio
 async def test_create_payment_link_ok(monkeypatch):
     provider = _provider()

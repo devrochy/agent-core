@@ -23,13 +23,35 @@ from core.shared.logger import get_logger
 log = get_logger(__name__)
 
 
-def _send_sync(host: str, port: int, username: str, password: str, from_address: str, to: str, subject: str, body: str) -> str:
+def _build_message(from_address: str, to: str, subject: str, body: str, html: str | None = None) -> EmailMessage:
+    """Arma el correo: texto plano y, si hay HTML, `multipart/alternative` con ambos.
+
+    El texto plano es el respaldo que ven los clientes que no renderizan HTML; el
+    HTML es el diseño (plantillas de `core/gateway/email_templates/`).
+    """
     msg = EmailMessage()
     msg["From"] = from_address
     msg["To"] = to
     msg["Subject"] = subject.replace("\r", " ").replace("\n", " ")
     msg["Message-ID"] = make_msgid()
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
+    return msg
+
+
+def _send_sync(
+    host: str,
+    port: int,
+    username: str,
+    password: str,
+    from_address: str,
+    to: str,
+    subject: str,
+    body: str,
+    html: str | None = None,
+) -> str:
+    msg = _build_message(from_address, to, subject, body, html)
 
     if port == 465:
         with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
@@ -45,9 +67,11 @@ def _send_sync(host: str, port: int, username: str, password: str, from_address:
     return str(msg["Message-ID"])
 
 
-async def send_system_email(to: str, subject: str, body: str) -> str | None:
+async def send_system_email(to: str, subject: str, body: str, html: str | None = None) -> str | None:
     """Envía (o solo registra) un correo de sistema. Devuelve el message-id o None.
 
+    `html` es opcional: sin él el correo viaja solo en texto plano (y sigue siendo
+    válido). Con él, `multipart/alternative` lleva las dos versiones.
     `None` = no se intentó el envío (SMTP de sistema sin configurar).
     Lanza `OSError`/`smtplib.SMTPException` si el envío falla: el llamador decide.
     """
@@ -68,4 +92,5 @@ async def send_system_email(to: str, subject: str, body: str) -> str | None:
         to,
         subject,
         body,
+        html,
     )

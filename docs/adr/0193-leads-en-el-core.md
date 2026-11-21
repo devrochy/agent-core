@@ -1,6 +1,7 @@
 # ADR-0193 — Los leads viven en el core y Captar leads no depende de comercio
 
 - **Estado:** aceptado (2026-11-13, por decisión del dueño. Documento mergeado en agent-core#756; D-70 y HU-AOS-70/71 en solvershub-docs#226. Sin código todavía: lo implementa HU-AOS-70).
+- **Nota de estado:** ADR-0205 (aceptado, 2026-11-21): enmienda §2; el lead base se asegura en toda conversación real, sin depender de que el agente en foco tenga Captar leads. Enriquecerlo sigue siendo de Captar leads.
 - **Fecha:** 2026-11-13
 - **Contexto:** [D-70](https://github.com/devrochy/solvershub-docs/blob/main/02-vision-y-decisiones/decisiones.md#d-70--los-leads-viven-en-el-core-y-captar-leads-no-depende-de-comercio) y [HU-AOS-70](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/hu/HU-AOS-70-leads-sin-comercio.md), con [HU-AOS-71](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/hu/HU-AOS-71-solvershub-sin-comercio.md) para `solvershub` ([SPEC-44](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-44-habilidades-por-agente/spec.md), REQ-AOS-24).
 - **Enmienda:** [ADR-0190](0190-habilidades-por-agente.md) (decisión 1, «Captar leads», y la alternativa `pack_leads` rechazada porque el modelo vivía en commerce), [ADR-0022](0022-leads-como-vista-computada-de-customer.md) (dónde vive el enriquecimiento del lead) y [ADR-0057](0057-rutas-publicas-e-identidad-de-pack.md) (el intake de leads deja de ser una ruta pública de pack). [ADR-0055](0055-intake-publico-leads-landing.md) ya estaba reemplazado por ADR-0057; queda como registro.
@@ -144,7 +145,7 @@ Decisiones tomadas al implementar, que el texto de arriba no fijaba:
    `/api/pack/pack_commerce/intake-config/{slug}` montado por el core (no por el pack). Mismo handler y mismo cupo; ninguno
    mira si el negocio tiene comercio. Lee la config de `lead_settings`: sin fila o apagado, 403 `intake_disabled`. Las
    claves del rate limit pasan a `rl:leads:intake*`. `/api/public/leads` entra en la allowlist del middleware.
-2. **Commerce 4.3.0** deja de declarar rutas públicas y salida a red (`network_allowlist` vacía). Los campos de leads de
+2. **Commerce 4.4.0** deja de declarar rutas públicas y salida a red (`network_allowlist` vacía). Los campos de leads de
    `CRMConfig` (`lead_intake_*`, `auto_create_lead`, reenganche y avisos de seguimiento) quedan **ocultos**: no salen en
    el formulario y al guardar se conservan, solo para que `copiar-leads` los lea. Su retiro es otra HU.
 3. **Config desde el panel:** `GET/PUT /api/v1/admin/captar-leads/config`, con la forma de la config de una habilidad

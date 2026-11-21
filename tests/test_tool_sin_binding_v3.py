@@ -11,7 +11,6 @@ import pytest
 import pytest_asyncio
 from agentcore_contracts import AgentSpec
 from agentcore_contracts.contracts import ToolBinding
-from structlog.testing import capture_logs
 
 import core.orchestrator.loop as loop_mod
 from core.mcp.types import MCPTool
@@ -85,6 +84,28 @@ def registradas(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("core.plugin_manager.plugin_manager.is_disabled_for_tenant", _sano)
 
 
+class _LogQueAnota:
+    """Sustituto del logger del módulo: con `cache_logger_on_first_use` (lo activa `configure_logging`, que corre
+    al importar `core.main`) el logger del loop queda atado a la lista de procesadores de su primer uso; si otro test
+    del mismo worker de xdist configura una lista nueva, `capture_logs` muta esa y no ve los eventos."""
+
+    def __init__(self, eventos: list[dict[str, Any]]) -> None:
+        self._eventos = eventos
+
+    def __getattr__(self, nivel: str) -> Any:
+        def anotar(event: str, **kw: Any) -> None:
+            self._eventos.append({"event": event, "log_level": nivel, **kw})
+
+        return anotar
+
+
+@pytest.fixture
+def eventos(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+    anotados: list[dict[str, Any]] = []
+    monkeypatch.setattr(loop_mod, "log", _LogQueAnota(anotados))
+    return anotados
+
+
 @pytest_asyncio.fixture
 async def turno() -> AsyncIterator[None]:
     token = release_vigente.abrir()
@@ -96,10 +117,9 @@ async def turno() -> AsyncIterator[None]:
 
 
 @pytest.mark.usefixtures("registradas", "turno")
-async def test_sin_binding_en_v3_se_niega_y_deja_evento() -> None:
+async def test_sin_binding_en_v3_se_niega_y_deja_evento(eventos: list[dict[str, Any]]) -> None:
     release_vigente.fijar(_release())
-    with capture_logs() as eventos:
-        assert "no está disponible" in await _tool_denial(make_spec([]), "send_email")
+    assert "no está disponible" in await _tool_denial(make_spec([]), "send_email")
     assert any(e["event"] == "tool_sin_binding" and e["tool"] == "send_email" for e in eventos)
 
 
@@ -148,12 +168,11 @@ async def test_release_1_no_concede_por_procedimiento() -> None:
 
 
 @pytest.mark.usefixtures("registradas", "turno")
-async def test_v3_sin_release_niega_aunque_el_spec_v2_tenga_binding() -> None:
+async def test_v3_sin_release_niega_aunque_el_spec_v2_tenga_binding(eventos: list[dict[str, Any]]) -> None:
     release_vigente.marcar_v3_sin_release(T)
     spec = make_spec([])
     spec.tools = [ToolBinding(tool="send_email", enabled=True, scopes=[])]
-    with capture_logs() as eventos:
-        assert await _tool_denial(spec, "send_email") is not None
+    assert await _tool_denial(spec, "send_email") is not None
     assert any(e["event"] == "tool_sin_binding" for e in eventos)
 
 
@@ -166,9 +185,8 @@ async def test_release_sin_foco_niega() -> None:
 
 
 @pytest.mark.usefixtures("registradas", "turno")
-async def test_legacy_corre_y_deja_evento() -> None:
-    with capture_logs() as eventos:
-        assert await _tool_denial(make_spec([]), "send_email") is None
+async def test_legacy_corre_y_deja_evento(eventos: list[dict[str, Any]]) -> None:
+    assert await _tool_denial(make_spec([]), "send_email") is None
     assert any(
         e["event"] == "tool_sin_binding_legacy" and e["tool"] == "send_email" and e["tenant_id"] == str(T)
         for e in eventos

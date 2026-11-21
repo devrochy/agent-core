@@ -14,9 +14,12 @@ Estados:
 - `no_aplica`: no se calcula de la clave; es del negocio. Negocios creados antes de
   `ONBOARDING_DESDE`, o todos si la variable está vacía (función apagada).
 
-La apertura automática y el aviso solo tienen sentido mientras el negocio no tenga ningún agente
-propio: en cuanto existe uno, el recorrido deja de insistir (`con_agente`). El Coordinador del
-alta (`kind = 'core'`) no cuenta: lo crea el sistema para todos.
+La apertura automática y el aviso solo tienen sentido mientras el negocio no tenga un agente propio
+**ajeno a la bienvenida**: en cuanto existe uno, el recorrido deja de insistir (`con_agente`). No cuentan
+el Coordinador del alta (`kind = 'core'`), que lo crea el sistema para todos, ni el agente que creó la
+propia bienvenida (el `agente_id` que guarda `dejar-listo`): la bienvenida de 5 estaciones (SPEC-49) lo
+crea al salir de la estación 1 y el aviso tiene que seguir hasta terminarla (decisión del dueño del
+2026-11-20). Un agente creado por «Nuevo agente», o antes de existir el recorrido, sí apaga la insistencia.
 """
 
 from __future__ import annotations
@@ -37,14 +40,20 @@ log = get_logger(__name__)
 EstadoDelRecorrido = Literal["pendiente", "en_curso", "omitido", "completo", "no_aplica"]
 ESTADOS_GUARDADOS: Final = ("en_curso", "omitido", "completo")
 
-# SPEC-47 (HU-AOS-81, D-SPEC-47-4): la bienvenida es la creación rápida de 4 pasos: 1 Tu negocio y tipo de
-# agente · 2 Habilidades y formas de pago · 3 Datos para probar · 4 Revisar, probar y publicar. Antes fueron
-# 9 (HU-UX-23) y antes 6 (HU-UX-21, la APK todavía los manda sin `pasos`). Lo guardado lleva `pasos` con el
-# total con que se guardó; uno de 9 o de 6 se traduce al leerlo.
-TOTAL_PASOS: Final = 4
+# SPEC-49 (HU-AOS-84, D-77): la bienvenida es la ruta de 5 estaciones: 1 Tu negocio y tipo de agente ·
+# 2 Habilidades y formas de pago · 3 Datos del cliente · 4 Datos para probar · 5 Revisar, probar y publicar.
+# Antes fueron 4 (HU-AOS-81), 9 (HU-UX-23) y 6 (HU-UX-21, la APK todavía los manda sin `pasos`). Lo guardado
+# lleva `pasos` con el total con que se guardó; uno de 4, 9 o 6 se traduce al leerlo.
+TOTAL_PASOS: Final = 5
+PASOS_DE_4: Final = 4
 PASOS_ANTERIORES: Final = 9
 PASO_DE_6_A_9: Final = {1: 1, 2: 3, 3: 4, 4: 4, 5: 7, 6: 8}
 PASO_DE_9_A_4: Final = {1: 1, 2: 1, 3: 1, 4: 1, 5: 2, 6: 2, 7: 3, 8: 4, 9: 4}
+PASO_DE_4_A_5: Final = {1: 1, 2: 2, 3: 4, 4: 5}
+# Totales con que un cliente puede numerar `avanzar` (sin `pasos`, la escala de 6 de la APK).
+ESCALAS_DE_AVANZAR: Final = frozenset({PASOS_DE_4, TOTAL_PASOS, PASOS_ANTERIORES})
+# Al dejar listo el agente sigue «Habilidades».
+PASO_DE_DEJAR_LISTO: Final = 2
 ACCION_AUDITORIA: Final = "onboarding_recorrido"
 
 
@@ -74,19 +83,20 @@ class Recorrido:
     agente_id: str | None = None
     conexion_id: str | None = None
     probado_en: datetime | None = None
-    # El negocio ya tiene un agente propio (distinto del Coordinador del sistema).
+    # El negocio ya tiene un agente propio ajeno a la bienvenida: ni el Coordinador del sistema ni el
+    # `agente_id` que creó el recorrido.
     con_agente: bool = False
 
     @property
     def obliga(self) -> bool:
         """El panel abre el asistente solo si el recorrido es del negocio, nunca se tocó y no hay
-        ningún agente creado."""
+        ningún agente propio ajeno a la bienvenida."""
         return self.estado == "pendiente" and not self.con_agente
 
     @property
     def avisa(self) -> bool:
-        """El aviso persistente se ve mientras el recorrido está empezado o saltado y el negocio
-        todavía no tiene un agente propio."""
+        """El aviso persistente se ve mientras el recorrido está empezado o saltado y el negocio no
+        tiene un agente propio ajeno a la bienvenida (el que creó la bienvenida no lo apaga)."""
         return self.estado in ("en_curso", "omitido") and not self.con_agente
 
 
@@ -141,23 +151,38 @@ def paso_de_6_a_9(paso: int) -> int:
 
 
 def paso_de_4(paso: int, pasos: int | None) -> int:
-    """El paso de la bienvenida de 4 que corresponde a `paso` numerado sobre `pasos` (4, 9 o, sin dato, 6)."""
+    """El paso de la creación rápida de 4 (HU-AOS-81) que corresponde a `paso` numerado sobre `pasos` (4, 9 o,
+    sin dato, 6). Un `{paso: 5, pasos: 4}` solo lo escribía el `dejar_listo` anterior a HU-AOS-84 con la
+    numeración de 9 («Habilidades»): un paso mayor que 4 guardado con 4 se lee sobre 9."""
+    if pasos == PASOS_DE_4 and paso <= PASOS_DE_4:
+        return max(paso, 1)
+    if pasos in (PASOS_DE_4, PASOS_ANTERIORES):
+        de_9 = paso
+    else:
+        de_9 = paso_de_6_a_9(min(max(paso, 1), 6))
+    return PASO_DE_9_A_4.get(min(max(de_9, 1), PASOS_ANTERIORES), PASOS_DE_4)
+
+
+def paso_de_5(paso: int, pasos: int | None) -> int:
+    """El paso de la bienvenida de 5 que corresponde a `paso` numerado sobre `pasos` (5, 4, 9 o, sin dato, 6).
+    Lo de 9 y de 6 pasa por las tablas de siempre hasta la escala de 4 y de ahí a la de 5. Siempre 1..5."""
     if pasos == TOTAL_PASOS:
-        return paso
-    de_9 = paso if pasos == PASOS_ANTERIORES else paso_de_6_a_9(min(max(paso, 1), 6))
-    return PASO_DE_9_A_4.get(min(max(de_9, 1), PASOS_ANTERIORES), TOTAL_PASOS)
+        return min(max(paso, 1), TOTAL_PASOS)
+    return PASO_DE_4_A_5[paso_de_4(paso, pasos)]
 
 
 def paso_guardado(datos: dict[str, Any]) -> int:
-    """El paso guardado, entre 1 y `TOTAL_PASOS`. Uno guardado con 9 o con 6 pasos se lleva a su
-    equivalente de 4. Un recorrido completo queda en el último paso."""
+    """El paso guardado, entre 1 y `TOTAL_PASOS`. Uno guardado con 4, 9 o 6 pasos se lleva a su
+    equivalente de 5. Un recorrido completo queda en el último paso."""
     paso = datos.get("paso")
     if not isinstance(paso, int) or isinstance(paso, bool):
         return 1
     if datos.get("estado") == "completo":
         return TOTAL_PASOS
     pasos = datos.get("pasos")
-    return min(max(paso_de_4(paso, pasos if isinstance(pasos, int) else None), 1), TOTAL_PASOS)
+    if not isinstance(pasos, int) or isinstance(pasos, bool):
+        pasos = None
+    return paso_de_5(paso, pasos)
 
 
 # --------------------------------------------------------------------- transiciones (puras)
@@ -223,11 +248,15 @@ def cambios_de_finalizar(
 
 # --------------------------------------------------------------------- base de datos
 
-# Un agente propio es cualquier fila vigente de `agents` que no sea el Coordinador (`kind='core'`),
-# que se crea con el negocio. Se evalúa en el mismo query: el aviso se decide en cada lectura.
+# Un agente propio ajeno a la bienvenida es cualquier fila vigente de `agents` del negocio que no sea el
+# Coordinador (`kind='core'`), que se crea con el negocio, ni el agente que guardó la bienvenida en
+# `settings.onboarding.agente_id`. Se compara como texto para que un valor guardado mal formado no rompa la
+# lectura. Se evalúa en el mismo query (también en el RETURNING de `fijar`, sobre la fila ya escrita): el
+# aviso se decide en cada lectura.
 _AGENTE_PROPIO_SQL: Final = (
     "EXISTS (SELECT 1 FROM agents a WHERE a.tenant_id = tenants.id "
-    "AND a.deleted_at IS NULL AND a.kind <> 'core')"
+    "AND a.deleted_at IS NULL AND a.kind <> 'core' "
+    "AND a.id::text <> coalesce(tenants.settings #>> '{onboarding,agente_id}', ''))"
 )
 
 
@@ -272,8 +301,8 @@ async def fijar(
     from core.db.session import get_session
 
     _exigir_scope(tenant_id)
-    # Todo lo que se escribe queda con el total de 4 pasos. Si el cambio no trae `paso`, se escribe el ya
-    # traducido: si no, un recorrido guardado con 9 o 6 quedaría marcado como de 4 con el número viejo.
+    # Todo lo que se escribe queda con el total de 5 pasos. Si el cambio no trae `paso`, se escribe el ya
+    # traducido: si no, un recorrido guardado con 4, 9 o 6 quedaría marcado como de 5 con el número viejo.
     if "paso" not in cambios:
         cambios = {**cambios, "paso": (await leer(tenant_id)).paso}
     cambios = {**cambios, "pasos": TOTAL_PASOS}
@@ -324,9 +353,13 @@ async def marcar_prueba(tenant_id: uuid.UUID, connection_id: uuid.UUID) -> None:
 
 __all__ = [
     "ACCION_AUDITORIA",
+    "ESCALAS_DE_AVANZAR",
     "PASOS_ANTERIORES",
+    "PASOS_DE_4",
+    "PASO_DE_4_A_5",
     "PASO_DE_6_A_9",
     "PASO_DE_9_A_4",
+    "PASO_DE_DEJAR_LISTO",
     "TOTAL_PASOS",
     "FaltanPasos",
     "NegocioNoEncontrado",
@@ -343,6 +376,7 @@ __all__ = [
     "leer",
     "marcar_prueba",
     "paso_de_4",
+    "paso_de_5",
     "paso_de_6_a_9",
     "paso_guardado",
 ]

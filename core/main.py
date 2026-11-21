@@ -24,7 +24,7 @@ from core.admin.permissions import effective_access, pack_prefixes, required_sec
 from core.admin.views import router as admin_router
 from core.api import api_router
 from core.api.errors import ApiError, api_error_handler, validation_error_handler
-from core.config import get_settings
+from core.config import get_settings, verificar_clave_secreta
 from core.gateway.telegram.webhook import router as telegram_webhook_router
 from core.gateway.twilio.webhook import router as twilio_webhook_router
 from core.gateway.webhooks import router as webhooks_router
@@ -47,6 +47,7 @@ log = get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     log.info("starting", app=settings.app_name, env=settings.app_env)
+    verificar_clave_secreta(settings)
 
     from core.observability.sentry_setup import configure_sentry
 

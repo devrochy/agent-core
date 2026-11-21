@@ -1,6 +1,7 @@
 # ADR-0191 — Un solo motor: retiro del runtime `legacy`
 
 - **Estado:** aceptado (2026-11-14, código mergeado en agent-core#754/#757/#758/#761/#762; panel#253/#257/#258/#259/#260 y apk#249/#250/#251/#252)
+- **Nota de estado:** ADR-0206 (aceptado, 2026-11-21): retira lo que este ADR dejaba fuera (`agent_specs`, `AgentSpecRecord` y `spec_de_release`) y mueve los datos del negocio de §4 a `AppSettings`.
 - **Fecha:** 2026-11-12
 
 ## Contexto

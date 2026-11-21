@@ -23,8 +23,9 @@ se mide el consumo, qué pasa al llegar al límite y cómo paga un tenant.
 
 ## 2. Catálogo de planes
 
-Precios en COP/mes. Wompi exige un mínimo de **150.000 COP por link de pago**: los
-planes pagos se fijan por encima. `null` = ilimitado.
+Precios en COP/mes. El mínimo de Wompi por link depende del ambiente
+(`core/payments/wompi_minimo.py`): **150.000 COP en sandbox** y **1.500 COP en producción**
+(modelo Agregador). En test los planes pagos se fijan por encima de 150.000. `null` = ilimitado.
 
 **Planes v2 por agentes (D-35, HU-BILL-05, ADR-0142).** Las dimensiones que se venden y sus
 cifras salen de `modelo-de-precios.md §5` (docs) y las aprobó el dueño el 2026-10-19:

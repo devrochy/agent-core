@@ -18,9 +18,6 @@
     {
       "nota": "da sus datos en otro turno; el asistente no vuelve a elegir plan y pide confirmar el resumen",
       "usuario": "Mis datos: Ana Gómez, cédula 1012345678, celular 3001234567, correo ana+{cliente.id}@example.com. Lo quiero pagar en línea.",
-      "hasta_herramienta": "sub_confirmar_inscripcion",
-      "insistir": "Sí, esos son mis datos. Seguí con el Plan Premium.",
-      "max_turnos": 3,
       "espera": {
         "texto_contiene_alguno": [
           "600.000",

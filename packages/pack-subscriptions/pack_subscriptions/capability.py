@@ -559,7 +559,17 @@ class SubscriptionCapabilityImpl:
                     .order_by(Subscription.created_at.desc())
                 )
             ).scalars().all()
-            return [_view(s, plan_codigo=await codigo_de_plan(session, s)) for s in subs]
+            # Con sus cargos recientes (como `get`): sin ellos `sub_consultar` decía «cargos: []» aunque el
+            # período tuviera un cargo pendiente, y el asistente no sabía que había algo por pagar (journeys
+            # con LLM real, 2026-11-18). Un cliente tiene pocas suscripciones; las canceladas no los traen.
+            return [
+                _view(
+                    s,
+                    await self._cargos_recientes(session, s.id) if s.estado != "cancelada" else None,
+                    plan_codigo=await codigo_de_plan(session, s),
+                )
+                for s in subs
+            ]
 
     async def pause(
         self, subscription_id: uuid.UUID, *, reason: str = "", actor: str = ""

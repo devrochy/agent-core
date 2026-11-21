@@ -19,8 +19,8 @@
     {
       "nota": "pide subir de plan",
       "usuario": "Quiero pasarme del Plan Basic al Plan Premium.",
-      "hasta_herramienta": "sub_cambiar_plan",
-      "insistir": "Sí, confirmo el cambio al Plan Premium.",
+      "hasta_herramienta": "sub_aplicar_cambio_plan",
+      "insistir": "Sí, confirmo el Plan Premium.",
       "max_turnos": 4,
       "espera": {
         "texto_contiene": [

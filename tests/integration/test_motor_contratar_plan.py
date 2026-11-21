@@ -372,3 +372,33 @@ async def test_que_etapas_pide_a_confirmar_el_kernel(packs_registrados) -> None:
     assert ligables["pack_cobranza.promesa_de_pago"] == ["cob_registrar_promesa_saldo"]
     assert ligables["pack_subscriptions.cambiar_plan"] == []
     assert ligables["pack_calendar.agendar_cita"] == []
+
+
+async def test_un_suscriptor_que_paga_su_periodo_recibe_el_link_desde_elegir_plan(packs_registrados, monkeypatch) -> None:  # noqa: F811
+    """Journeys con LLM real del 2026-11-18 (HU-ARCH-28): «pasame el link» de un suscriptor con su período pendiente
+    enruta a `contratar_plan` (los ejemplos del disparador lo piden así) y `sub_link_pago` moría con «no corresponde a
+    la etapa actual»; el asistente le preguntaba qué plan quería. `elegir_plan` permite la acción y el modelo cierra
+    el recorrido con `cancelar_tarea`."""
+    from pack_subscriptions.capability import crear_suscripcion_para
+    from pack_subscriptions.planes import por_codigo
+
+    from core.shared.tenant import tenant_scope
+
+    tid, conv = await _listo()
+    async with tenant_scope(tid):
+        plan = await por_codigo("PREMIUM")
+        await crear_suscripcion_para(customer_id=conv.customer_id, plan_id=plan.id)
+    guion = _Guion([
+        ("iniciar_procedimiento", {"procedure_id": PROC}),
+        ("sub_link_pago", {}),
+        ("cancelar_tarea", {}),
+        "Te paso el link de tu período.",
+    ])
+    await _turno(conv, guion, monkeypatch, "Sí, pasame el link para pagarla en línea.")
+    vistos = "".join(guion.vistos)
+    assert "sub_link_pago" in guion.tools[1]
+    assert "no corresponde a la etapa" not in vistos, vistos[-800:]
+    # Sin pasarela en la suite: la tool corrió y respondió el error de la pasarela, no el del motor.
+    assert "sin_pasarela" in vistos or "pasarela" in vistos.lower(), vistos[-800:]
+    _, estado = await _tarea(conv, PROC)
+    assert estado == "cancelled", estado

@@ -122,10 +122,13 @@ async def test_link_pago_genera_cargo_y_webhook_lo_paga() -> None:
             assert len(cargos) == 1
             assert float(cargos[0].monto or 0) == 200000
             assert cargos[0].subscription_id == sub_id
+        # `sub_consultar` lee esta vista: el cargo pendiente tiene que estar (antes salía «cargos: []»).
+        [vista] = await cap.list_for_customer(customer_id)
+        assert [(c["estado"], c["monto"]) for c in vista["cargos"]] == [("pendiente", 200000.0)]
 
-            from pack_subscriptions.module import SubscriptionsModule
+        from pack_subscriptions.module import SubscriptionsModule
 
-            await SubscriptionsModule()._on_payment_confirmed(f"sub-{cargos[0].id}", "wompi", "ref-1", 200000.0)
+        await SubscriptionsModule()._on_payment_confirmed(f"sub-{cargos[0].id}", "wompi", "ref-1", 200000.0)
 
         async with get_session() as session:
             cargo = (

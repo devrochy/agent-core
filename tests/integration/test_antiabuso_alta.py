@@ -58,7 +58,7 @@ def silencio(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
     """Sin correo, WhatsApp ni push reales. Devuelve los push al equipo (título, cuerpo)."""
     from core.gateway.event_notices import NoticeResult
 
-    async def correo(to: str, subject: str, body: str) -> str:
+    async def correo(to: str, subject: str, body: str, html: str | None = None) -> str:
         return "msg-test"
 
     async def aviso(*_a: Any, **_k: Any) -> NoticeResult:

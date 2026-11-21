@@ -59,8 +59,27 @@ def _truthy(value: Any) -> bool:
     return str(value).strip().lower() in ("1", "true", "on", "yes")
 
 
+def render_outbound_html(asunto: str, cuerpo: str) -> str | None:
+    """Envuelve el texto que redactó el asistente en el diseño de correo de SolversHub.
+
+    El HTML es solo presentación: si la plantilla fallara, se devuelve `None` y el
+    correo sale en texto plano (nunca se pierde el envío por el diseño).
+    """
+    try:
+        from core.gateway.email_templates import html_generico
+
+        return html_generico(asunto=asunto, cuerpo=cuerpo)
+    except Exception:  # el diseño nunca debe tumbar un envío
+        log.warning("email_template_render_failed", exc_info=True)
+        return None
+
+
 def _send_sync(
-    credentials: dict[str, Any], to_external_id: str, subject: str, body: str
+    credentials: dict[str, Any],
+    to_external_id: str,
+    subject: str,
+    body: str,
+    html: str | None = None,
 ) -> str:
     host = str(credentials.get("host", "") or "")
     port = int(credentials.get("port", 587) or 587)
@@ -77,6 +96,8 @@ def _send_sync(
     msg["Subject"] = subject
     msg["Message-ID"] = make_msgid()
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
 
     if port == 465:
         with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
@@ -100,7 +121,18 @@ class EmailSmtpOutbound(OutboundAdapter):
         self, credentials: dict[str, Any], to_external_id: str, text: str
     ) -> str:
         subject, body = split_subject(text)
-        return await asyncio.to_thread(_send_sync, credentials, to_external_id, subject, body)
+        html = render_outbound_html(subject, body)
+        return await asyncio.to_thread(
+            _send_sync, credentials, to_external_id, subject, body, html
+        )
+
+    async def send_text_with_html(
+        self, credentials: dict[str, Any], to_external_id: str, text: str, html: str
+    ) -> str:
+        subject, body = split_subject(text)
+        return await asyncio.to_thread(
+            _send_sync, credentials, to_external_id, subject, body, html
+        )
 
     async def send_image(
         self,
