@@ -108,10 +108,17 @@ async def test_campos_de_la_dlq_salen_de_la_conversacion_del_negocio(tenant_setu
         await _borrar(t1, ids)
 
 
-async def test_barrido_periodico_respeta_la_ventana_y_recupera_una_vez(tenant_setup) -> None:
+async def test_barrido_periodico_respeta_la_ventana_y_recupera_una_vez(tenant_setup, monkeypatch) -> None:
+    from core.admin import kill_switch_service
     from core.memory.working import get_redis
     from core.orchestrator.debounce import PENDING_KEY, recover_orphaned_conversations
 
+    # Lo que se prueba es la ventana, no el interruptor global: su última desactivación vive en una tabla de
+    # plataforma, y si otro worker de xdist la desactivó durante la corrida el mensaje «viejo» quedaba fuera.
+    async def _nunca_desactivado():
+        return None
+
+    monkeypatch.setattr(kill_switch_service, "ultima_reactivacion", _nunca_desactivado)
     t1, _ = tenant_setup
     r = get_redis()
     reciente = await _conversacion(t1, con_conexion=False)
