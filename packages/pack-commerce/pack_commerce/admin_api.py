@@ -43,6 +43,7 @@ from .models import (
     ProductVariant,
     Promotion,
 )
+from .vivos import pedido_vivo
 
 router = APIRouter(prefix="/api/v1/pack/commerce", tags=["pack · comercio"])
 
@@ -112,7 +113,7 @@ async def commerce_dashboard(
         orders = (
             await session.execute(
                 select(Order)
-                .where(Order.tenant_id == tenant_id)
+                .where(Order.tenant_id == tenant_id, Order.deleted_at.is_(None))
                 .order_by(Order.created_at.desc())
                 .limit(5)
             )
@@ -1114,7 +1115,7 @@ async def list_orders(
     tenant_id = principal.tenant_id
     texto = (q or "").strip()
     async with get_session() as session:
-        filtros = [Order.tenant_id == tenant_id]
+        filtros = [Order.tenant_id == tenant_id, Order.deleted_at.is_(None)]
         if estado is not None:
             filtros.append(Order.status == estado)
         if pago is not None:
@@ -1242,7 +1243,7 @@ async def update_order_status(
     from datetime import UTC
 
     async with get_session() as session:
-        order = await get_owned(session, Order, order_id, principal.tenant_id)
+        order = await pedido_vivo(session, order_id, principal.tenant_id)
         if order is None:
             raise ApiError.not_found("Pedido no encontrado.")
         order.status = payload.status
@@ -1572,7 +1573,7 @@ async def comprobantes_del_pedido(
 ) -> ComprobantesOut:
     """Comprobantes del pedido (los 20 más recientes) con su imagen firmada y el resultado."""
     async with get_session() as session:
-        order = await get_owned(session, Order, order_id, principal.tenant_id)
+        order = await pedido_vivo(session, order_id, principal.tenant_id)
         if order is None:
             raise ApiError.not_found("Pedido no encontrado.")
         return await _comprobantes_out(session, order)
@@ -1597,7 +1598,9 @@ async def cambiar_estado_de_pago(
     async with get_session() as session:
         order = (
             await session.execute(
-                select(Order).where(Order.tenant_id == principal.tenant_id, Order.id == order_id).with_for_update()
+                select(Order)
+                .where(Order.tenant_id == principal.tenant_id, Order.id == order_id, Order.deleted_at.is_(None))
+                .with_for_update()
             )
         ).scalar_one_or_none()
         if order is None:

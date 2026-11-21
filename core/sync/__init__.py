@@ -79,6 +79,8 @@ async def ejecutar_sync(
     adapter: SyncAdapter, tenant_id: uuid.UUID, cursor_dt: datetime, limit: int
 ) -> tuple[list[dict[str, Any]], datetime, list[str]]:
     model = adapter.model
+    # Una fila borrada no viaja en `items`: llega solo su id en `deletedIds` (HU-AOS-71).
+    vivas = (model.deleted_at.is_(None),) if adapter.tiene_deleted_at else ()
     async with get_session() as session:
         rows = (
             await session.execute(
@@ -86,6 +88,7 @@ async def ejecutar_sync(
                 .where(
                     model.tenant_id == tenant_id,
                     adapter.marcador_sql > cursor_dt,
+                    *vivas,
                 )
                 .order_by(adapter.marcador_sql.asc(), model.id.asc())
                 .limit(limit)

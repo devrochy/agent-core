@@ -127,7 +127,10 @@ async def comprobar(arguments: dict[str, Any], context: Any) -> dict[str, Any]:
         order = (
             await session.execute(
                 select(Order).where(
-                    Order.tenant_id == tenant_id, Order.id == order_uuid, Order.customer_id == context.customer_id
+                    Order.tenant_id == tenant_id,
+                    Order.id == order_uuid,
+                    Order.customer_id == context.customer_id,
+                    Order.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -170,8 +173,14 @@ async def comprobar(arguments: dict[str, Any], context: Any) -> dict[str, Any]:
     if mismo is not None:
         async with get_session() as session:
             order = (
-                await session.execute(select(Order).where(Order.tenant_id == tenant_id, Order.id == order_uuid))
-            ).scalar_one()
+                await session.execute(
+                    select(Order).where(
+                        Order.tenant_id == tenant_id, Order.id == order_uuid, Order.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+            if order is None:  # se ocultó entre la validación y aquí (HU-AOS-71)
+                return {"error": "pedido_no_encontrado", "detail": "Pedido no encontrado."}
             return _salida(order, mismo.status, repetido=True)
     duplicado = bool(previos)
 
@@ -215,9 +224,13 @@ async def comprobar(arguments: dict[str, Any], context: Any) -> dict[str, Any]:
     async with get_session() as session:
         order = (
             await session.execute(
-                select(Order).where(Order.tenant_id == tenant_id, Order.id == order_uuid).with_for_update()
+                select(Order)
+                .where(Order.tenant_id == tenant_id, Order.id == order_uuid, Order.deleted_at.is_(None))
+                .with_for_update()
             )
-        ).scalar_one()
+        ).scalar_one_or_none()
+        if order is None:  # se ocultó entre la validación y aquí (HU-AOS-71)
+            return {"error": "pedido_no_encontrado", "detail": "Pedido no encontrado."}
         try:
             async with session.begin_nested():
                 session.add(

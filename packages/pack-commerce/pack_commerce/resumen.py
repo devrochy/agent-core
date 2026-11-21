@@ -35,6 +35,7 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
                 await session.execute(
                     select(func.count(o.id)).where(
                         o.tenant_id == tenant_id,
+                        o.deleted_at.is_(None),
                         o.created_at >= desde,
                         o.created_at < hasta,
                         o.status.not_in(_FUERA),
@@ -50,6 +51,7 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
                 await session.execute(
                     select(func.coalesce(func.sum(o.total), 0)).where(
                         o.tenant_id == tenant_id,
+                        o.deleted_at.is_(None),
                         o.created_at >= desde,
                         o.created_at < hasta,
                         o.payment_status == "pagado",
@@ -80,7 +82,9 @@ async def kpis(tenant_id: uuid.UUID, p: PeriodoResumen) -> list[Kpi]:
     async with get_session() as session:
         por_despachar = (
             await session.execute(
-                select(func.count(o.id)).where(o.tenant_id == tenant_id, o.status == "abierto")
+                select(func.count(o.id)).where(
+                    o.tenant_id == tenant_id, o.deleted_at.is_(None), o.status == "abierto"
+                )
             )
         ).scalar() or 0
         return [
