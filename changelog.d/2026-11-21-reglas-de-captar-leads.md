@@ -7,4 +7,4 @@
   al perfil con los `writeNamespaces` del agente.
 - Evals: aserción `tool_arguments_absent` en el golden, spec `captar-leads` (Suscripciones sin comercio) y escenarios
   40 (no deduce datos) y 41 (pregunta antes de reemplazar el correo). Grabaciones del gate regrabadas.
-- Hay que republicar los agentes con Captar leads para que tomen el playbook.
+- No hace falta republicar: el bloque sale del binding de la versión y del playbook que viaja con el binario.
