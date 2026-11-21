@@ -78,6 +78,8 @@ def lead_vivo(tid: uuid.UUID) -> Select[Any]:
         Lead.score,
         Lead.interest,
         Lead.origen,
+        # El negocio del cliente, si lo dijo (`actualizar_lead`, HU-AOS-70): vive en `custom`, sin columna propia.
+        Lead.custom["negocio"].astext.label("negocio"),
         Lead.stage_changed_at,
         Lead.last_activity_at,
         Lead.next_action_at,
@@ -222,6 +224,7 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
             **_del_cierre(lead),
             "interes": (lead.interest or None) if lead else None,
             "origen": origenes.get(lead.origen, lead.origen) if lead and lead.origen else None,
+            "negocio": (lead.negocio or None) if lead else None,
         }
     return out
 
@@ -313,14 +316,20 @@ def _con_texto(columna: Any) -> Any:
 
 
 async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
-    """Clientes con un lead con contenido: nombre, teléfono, correo o interés. El lead que se asegura al empezar
-    la conversación nace vacío y no es un dato del cliente hasta que el cliente da algo."""
+    """Clientes con un lead con contenido: nombre, teléfono, correo, interés o negocio. El lead que se asegura al
+    empezar la conversación nace vacío y no es un dato del cliente hasta que el cliente da algo."""
     tid = get_current_tenant_id()
     q = select(Lead.customer_id).where(
         Lead.tenant_id == tid,
         Lead.customer_id.is_not(None),
         Lead.deleted_at.is_(None),
-        or_(_con_texto(Lead.name), _con_texto(Lead.phone), _con_texto(Lead.email), _con_texto(Lead.interest)),
+        or_(
+            _con_texto(Lead.name),
+            _con_texto(Lead.phone),
+            _con_texto(Lead.email),
+            _con_texto(Lead.interest),
+            _con_texto(Lead.custom["negocio"].astext),
+        ),
     )
     if ids is not None:
         q = q.where(Lead.customer_id.in_(ids))
@@ -412,6 +421,7 @@ lead_registry.register(
         LeadColumn(key="valor_estimado", label="Valor estimado"),
         LeadColumn(key="interes", label="Interés"),
         LeadColumn(key="origen", label="Origen"),
+        LeadColumn(key="negocio", label="Negocio"),
     ],
     resolver=_resolver,
     filters=[
