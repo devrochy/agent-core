@@ -1,6 +1,7 @@
-"""Intake público de leads del pack de comercio (ADR-0057/ADR-0055 superseded).
+"""Intake público de leads del core (ADR-0193 §5, HU-AOS-70 parte 3).
 
-`POST /api/pack/pack_commerce/leads/{slug}` con header `X-Intake-Secret`.
+`POST /api/public/leads/{slug}` con header `X-Intake-Secret`, y el alias `POST /api/pack/pack_commerce/leads/{slug}`
+de la ruta vieja. La config es la de Captar leads (`lead_settings`), sin depender de commerce.
 Requiere el stack real (Postgres+Redis) y `AGENT_CORE_INTEGRATION=1`.
 """
 
@@ -12,6 +13,7 @@ import pytest
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
+    pytest.mark.aislamiento,
     pytest.mark.skipif(
         os.environ.get("AGENT_CORE_INTEGRATION") != "1",
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
@@ -28,8 +30,7 @@ IDEM = f"intake:{EMAIL}"
 async def _reset_rate_limit():
     """El rate limit vive en Redis (no en el proceso): sin limpiar, dos corridas
     seguidas dentro de la ventana comparten cupo."""
-    from pack_commerce import api
-
+    from core.leads import intake as api
     from core.memory.working import get_redis
 
     r = get_redis()
@@ -43,16 +44,22 @@ async def _reset_rate_limit():
 
 
 async def _configure_intake(
-    tenant_id, enabled: bool, turnstile_secret: str | None = None
+    tenant_id, enabled: bool, turnstile_secret: str | None = None, origins: list[str] | None = None
 ) -> None:
-    from core.plugin_manager import plugin_manager
+    """Config de Captar leads del negocio (`lead_settings`), no la de commerce."""
+    from core.db.session import get_session
+    from core.leads import config as config_leads
     from core.shared.tenant import tenant_scope
 
-    values: dict = {"lead_intake_enabled": enabled, "lead_intake_secret": SECRET}
-    if turnstile_secret is not None:
-        values["lead_intake_turnstile"] = turnstile_secret
+    config = config_leads.ConfigCaptarLeads(
+        lead_intake_enabled=enabled,
+        lead_intake_secret=SECRET,
+        lead_intake_turnstile=turnstile_secret or "",
+        lead_intake_allowed_origins=origins or [],
+    )
     async with tenant_scope(tenant_id):
-        await plugin_manager.save_config("pack_commerce", values)
+        async with get_session() as session:
+            await config_leads.guardar(session, tenant_id, config)
 
 
 async def _cleanup(tenant_id) -> None:
@@ -91,12 +98,12 @@ async def test_intake_valida_secreto(app_client, moto_setup) -> None:
     await _cleanup(moto)
 
     # sin secreto → 401
-    r = await app_client.post(f"/api/pack/pack_commerce/leads/{SLUG}", json=_payload())
+    r = await app_client.post(f"/api/public/leads/{SLUG}", json=_payload())
     assert r.status_code == 401, r.text
 
     # secreto incorrecto → 401
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": "nope"},
         json=_payload(),
     )
@@ -104,7 +111,7 @@ async def test_intake_valida_secreto(app_client, moto_setup) -> None:
 
     # secreto correcto → 200 {ok:true}
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": SECRET},
         json=_payload(),
     )
@@ -125,7 +132,7 @@ async def test_intake_crea_y_es_idempotente(app_client, moto_setup) -> None:
 
     for _ in range(2):
         r = await app_client.post(
-            f"/api/pack/pack_commerce/leads/{SLUG}",
+            f"/api/public/leads/{SLUG}",
             headers={"X-Intake-Secret": SECRET},
             json=_payload(),
         )
@@ -161,6 +168,7 @@ async def test_intake_crea_y_es_idempotente(app_client, moto_setup) -> None:
     assert n == 1, "el intake debe ser idempotente (mismo email/phone)"
     assert lead.status == "nuevo"
     assert lead.email == EMAIL
+    assert lead.origen == "landing"
 
 
 async def test_intake_deshabilitado_y_validacion(app_client, moto_setup) -> None:
@@ -168,7 +176,7 @@ async def test_intake_deshabilitado_y_validacion(app_client, moto_setup) -> None
 
     # slug desconocido → 404
     r = await app_client.post(
-        "/api/pack/pack_commerce/leads/no-existe",
+        "/api/public/leads/no-existe",
         headers={"X-Intake-Secret": SECRET},
         json=_payload(),
     )
@@ -176,7 +184,7 @@ async def test_intake_deshabilitado_y_validacion(app_client, moto_setup) -> None
 
     # payload inválido → 422
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": SECRET},
         json={"nombre": "", "email": "", "whatsapp": ""},
     )
@@ -185,7 +193,7 @@ async def test_intake_deshabilitado_y_validacion(app_client, moto_setup) -> None
     # intake deshabilitado → 403
     await _configure_intake(moto, enabled=False)
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": SECRET},
         json=_payload(),
     )
@@ -197,7 +205,7 @@ async def test_intake_config(app_client, moto_setup) -> None:
     _t1, moto = moto_setup
     await _configure_intake(moto, enabled=True)
 
-    r = await app_client.get(f"/api/pack/pack_commerce/intake-config/{SLUG}")
+    r = await app_client.get(f"/api/public/leads/intake-config/{SLUG}")
     assert r.status_code == 200
     body = r.json()
     assert body["enabled"] is True
@@ -205,13 +213,13 @@ async def test_intake_config(app_client, moto_setup) -> None:
     assert body["turnstile"] is False
 
     # slug desconocido → 404
-    r = await app_client.get("/api/pack/pack_commerce/intake-config/no-existe")
+    r = await app_client.get("/api/public/leads/intake-config/no-existe")
     assert r.status_code == 404
 
 
 async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
     """Turnstile: se exige y valida solo si el tenant tiene secret configurado."""
-    from pack_commerce import api as intake_api
+    from core.leads import intake as intake_api
 
     _t1, moto = moto_setup
     await _cleanup(moto)
@@ -219,7 +227,7 @@ async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
     # 1) Tenant CON turnstile: token ausente → 403 (no llama a Cloudflare).
     await _configure_intake(moto, enabled=True, turnstile_secret="tt-secret")
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": SECRET},
         json=_payload(),
     )
@@ -232,7 +240,7 @@ async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
 
     monkeypatch.setattr(intake_api, "_verify_turnstile", _fail)
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": SECRET},
         json={**_payload(), "turnstile_token": "bad"},
     )
@@ -244,7 +252,7 @@ async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
 
     monkeypatch.setattr(intake_api, "_verify_turnstile", _ok)
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": SECRET},
         json={**_payload(), "turnstile_token": "good"},
     )
@@ -254,7 +262,7 @@ async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
     # 4) Sin turnstile configurado → no se exige token (200).
     await _configure_intake(moto, enabled=True, turnstile_secret="")
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": SECRET},
         json=_payload(),
     )
@@ -264,8 +272,7 @@ async def test_intake_turnstile(app_client, moto_setup, monkeypatch) -> None:
 async def test_intake_rate_limit_por_tenant(app_client, moto_setup, monkeypatch) -> None:
     """429 `rate_limited` al pasar el cupo; el cupo es por tenant y la clave
     en Redis vence sola (TTL = ventana)."""
-    from pack_commerce import api as intake_api
-
+    from core.leads import intake as intake_api
     from core.memory.working import get_redis
 
     _t1, moto = moto_setup
@@ -275,14 +282,14 @@ async def test_intake_rate_limit_por_tenant(app_client, moto_setup, monkeypatch)
 
     for _ in range(2):
         r = await app_client.post(
-            f"/api/pack/pack_commerce/leads/{SLUG}",
+            f"/api/public/leads/{SLUG}",
             headers={"X-Intake-Secret": SECRET},
             json=_payload(),
         )
         assert r.status_code == 200, r.text
 
     r = await app_client.post(
-        f"/api/pack/pack_commerce/leads/{SLUG}",
+        f"/api/public/leads/{SLUG}",
         headers={"X-Intake-Secret": SECRET},
         json=_payload(),
     )
@@ -291,7 +298,7 @@ async def test_intake_rate_limit_por_tenant(app_client, moto_setup, monkeypatch)
 
     # Misma IP, otro slug: no hereda el cupo agotado (llega a resolver el tenant).
     r = await app_client.post(
-        "/api/pack/pack_commerce/leads/no-existe",
+        "/api/public/leads/no-existe",
         headers={"X-Intake-Secret": SECRET},
         json=_payload(),
     )
@@ -305,7 +312,7 @@ async def test_intake_rate_limit_por_tenant(app_client, moto_setup, monkeypatch)
     # Seguir insistiendo no agranda el set: guarda como mucho el cupo + 1.
     for _ in range(5):
         r = await app_client.post(
-            f"/api/pack/pack_commerce/leads/{SLUG}",
+            f"/api/public/leads/{SLUG}",
             headers={"X-Intake-Secret": SECRET},
             json=_payload(),
         )
@@ -317,8 +324,7 @@ async def test_intake_slugs_inexistentes_cortan_por_ip(app_client, moto_setup, m
     """Contra Redis real: los 404 suman en el cupo de fallos de la IP y, lleno,
     la IP recibe 429 antes de resolver el tenant, salvo en slugs que ya se
     resolvieron (conocidos)."""
-    from pack_commerce import api as intake_api
-
+    from core.leads import intake as intake_api
     from core.memory.working import get_redis
 
     _t1, moto = moto_setup
@@ -328,7 +334,7 @@ async def test_intake_slugs_inexistentes_cortan_por_ip(app_client, moto_setup, m
 
     async def _post(slug: str):
         return await app_client.post(
-            f"/api/pack/pack_commerce/leads/{slug}",
+            f"/api/public/leads/{slug}",
             headers={"X-Intake-Secret": SECRET},
             json=_payload(),
         )
@@ -357,3 +363,93 @@ async def test_intake_slugs_inexistentes_cortan_por_ip(app_client, moto_setup, m
     r = await _post(SLUG)
     assert r.status_code == 200, r.text
     assert (await _post("no-existe")).status_code == 429
+
+
+async def _negocio_sin_comercio():
+    from uuid import uuid4
+
+    from core.alta_negocio import onboard_tenant
+
+    slug = f"lsc-{uuid4().hex[:8]}"
+    tid, _ = await onboard_tenant(
+        name=f"Sin comercio {slug}", slug=slug, persona={"tone": "cercano"}, admin_email="admin@local",
+        packs=[], sembrar_ejemplos=False,
+    )
+    return tid, slug
+
+
+async def _leads_vivos(tenant_id) -> list:
+    from sqlalchemy import select
+
+    from core.db.models import Lead
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            return list(
+                (await session.execute(select(Lead).where(Lead.deleted_at.is_(None)))).scalars().all()
+            )
+
+
+async def test_intake_sin_comercio_por_la_ruta_nueva_y_el_alias(app_client) -> None:
+    """Gherkin «Intake sin comercio» y «Ruta vieja como alias»: un negocio sin `pack_commerce` recibe el lead por las
+    dos rutas, deduplicado en un solo cliente y un solo lead con origen `landing`."""
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.shared.tenant import tenant_scope
+
+    tid, slug = await _negocio_sin_comercio()
+    async with tenant_scope(tid):
+        assert "pack_commerce" not in enabled_packs(await load_active_spec(tid))
+
+    # Sin config de Captar leads: el intake está apagado (403), y la config pública lo dice.
+    r = await app_client.post(f"/api/public/leads/{slug}", headers={"X-Intake-Secret": SECRET}, json=_payload())
+    assert r.status_code == 403 and r.json() == {"error": "intake_disabled"}
+    r = await app_client.get(f"/api/public/leads/intake-config/{slug}")
+    assert r.json() == {"enabled": False, "allowed_origins": [], "turnstile": False}
+
+    await _configure_intake(tid, enabled=True, turnstile_secret="tt", origins=["https://www.ejemplo.co"])
+    for prefijo in ("/api/public/leads", "/api/pack/pack_commerce"):
+        r = await app_client.get(f"{prefijo}/intake-config/{slug}")
+        assert r.status_code == 200
+        assert r.json() == {"enabled": True, "allowed_origins": ["https://www.ejemplo.co"], "turnstile": True}
+
+    await _configure_intake(tid, enabled=True)
+    r = await app_client.post(f"/api/public/leads/{slug}", headers={"X-Intake-Secret": SECRET}, json=_payload())
+    assert r.status_code == 200, r.text
+    r = await app_client.post(
+        f"/api/pack/pack_commerce/leads/{slug}", headers={"X-Intake-Secret": SECRET}, json=_payload("Otro nombre")
+    )
+    assert r.status_code == 200, r.text
+    # Alias con el secreto equivocado: 401 igual que la ruta nueva.
+    r = await app_client.post(f"/api/pack/pack_commerce/leads/{slug}", headers={"X-Intake-Secret": "x"}, json=_payload())
+    assert r.status_code == 401
+
+    [lead] = await _leads_vivos(tid)
+    assert lead.origen == "landing" and lead.email == EMAIL and lead.idempotency_key == IDEM
+
+
+async def test_intake_no_cruza_negocios(app_client, moto_setup) -> None:
+    """Gherkin «Aislamiento»: el secreto de un negocio no abre el intake de otro y el lead queda solo en el suyo."""
+    _t1, moto = moto_setup
+    await _configure_intake(moto, enabled=True)
+    await _cleanup(moto)
+    otro, slug_otro = await _negocio_sin_comercio()
+    from core.db.session import get_session
+    from core.leads import config as config_leads
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(otro):
+        async with get_session() as session:
+            await config_leads.guardar(
+                session,
+                otro,
+                config_leads.ConfigCaptarLeads(lead_intake_enabled=True, lead_intake_secret="secreto-del-otro"),
+            )
+
+    r = await app_client.post(f"/api/public/leads/{slug_otro}", headers={"X-Intake-Secret": SECRET}, json=_payload())
+    assert r.status_code == 401
+    r = await app_client.post(f"/api/public/leads/{SLUG}", headers={"X-Intake-Secret": SECRET}, json=_payload())
+    assert r.status_code == 200
+    assert await _leads_vivos(otro) == []
+    assert [lead.idempotency_key for lead in await _leads_vivos(moto) if lead.idempotency_key == IDEM] == [IDEM]

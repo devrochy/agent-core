@@ -28,6 +28,8 @@ from core.config import get_settings, verificar_clave_secreta
 from core.gateway.telegram.webhook import router as telegram_webhook_router
 from core.gateway.twilio.webhook import router as twilio_webhook_router
 from core.gateway.webhooks import router as webhooks_router
+from core.leads.intake import alias_router as leads_intake_alias_router
+from core.leads.intake import router as leads_intake_router
 from core.mcp.host import mcp_host
 from core.observability.salud import router as salud_router
 from core.orchestrator.consumer import consume_loop
@@ -120,6 +122,10 @@ app.include_router(twilio_webhook_router)
 app.include_router(telegram_webhook_router)
 # `/healthz/deep` (ADR-0188): pública por el prefijo `/healthz` del middleware.
 app.include_router(salud_router)
+# Intake público de leads del core (ADR-0193 §5): `/api/public/leads/*` y el alias de la ruta vieja de commerce
+# (`/api/pack/pack_commerce/leads|intake-config`), para todo negocio, tenga o no comercio. Se autentica solo.
+app.include_router(leads_intake_router)
+app.include_router(leads_intake_alias_router)
 app.include_router(admin_router)
 # API JSON unificada (ADR-0076/0077): se autentica sola por realms.
 app.include_router(api_router)
@@ -195,6 +201,7 @@ async def tenant_context_middleware(request: Request, call_next):
             "/webhooks",
             "/healthz",
             "/api/pack",  # API pública de packs (ADR-0057): se autentica sola
+            "/api/public/leads",  # intake público de leads del core (ADR-0193 §5): se autentica solo
             "/api/v1",  # API unificada (ADR-0077): resuelve identidad y tenant en `deps`
             "/admin/login",
             "/admin/logout",

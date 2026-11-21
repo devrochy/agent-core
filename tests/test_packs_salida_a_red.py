@@ -95,12 +95,13 @@ def test_allowlists_de_los_packs_migrados() -> None:
     from pack_payments.module import PaymentsModule
 
     assert set(GoogleCalendarModule.network_allowlist) == {"www.googleapis.com", "oauth2.googleapis.com"}
-    assert set(CRMModule.network_allowlist) == {"challenges.cloudflare.com"}
+    # El `siteverify` de Turnstile era del intake de leads, que pasó al core (ADR-0193 §5).
+    assert set(CRMModule.network_allowlist) == set()
     # `checkout.wompi.co` solo lo abre el navegador del pagador.
     assert set(PaymentsModule.network_allowlist) == {"production.wompi.co", "sandbox.wompi.co"}
 
 
-# ------------------------------------------------------------- pack-commerce
+# ------------------------------------------------------------- intake de leads del core (antes de pack-commerce)
 
 
 def _mock_transport(monkeypatch, handler):  # type: ignore[no-untyped-def]
@@ -129,7 +130,8 @@ def _mock_transport(monkeypatch, handler):  # type: ignore[no-untyped-def]
 
 async def test_turnstile_sale_por_plugin_http_y_es_fail_closed(monkeypatch) -> None:
     import httpx
-    from pack_commerce import api
+
+    from core.leads import intake as api
 
     seen: list[httpx.Request] = []
     reply: dict = {"response": httpx.Response(200, json={"success": True})}
@@ -168,8 +170,8 @@ async def test_turnstile_sale_por_plugin_http_y_es_fail_closed(monkeypatch) -> N
 
 def test_turnstile_fuera_de_la_allowlist_no_sale() -> None:
     import httpx
-    from pack_commerce import api
 
+    from core.leads import intake as api
     from core.mcp.types import plugin_http
 
     http = plugin_http(api.NETWORK)

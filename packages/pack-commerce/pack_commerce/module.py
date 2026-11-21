@@ -36,12 +36,10 @@ from core.shared.events import ON_PROCEDURE_SLOTS_SET
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 from core.shared.test_mode import TEST_CHANNEL
-from pack_commerce import api as leads_api
 
 # Registra las columnas y filtros del pack en la vista global de clientes (ADR-0056, HU-UX-16).
 from pack_commerce import providers as _lead_provider  # noqa: F401
 from pack_commerce.admin_api import router as admin_api_router
-from pack_commerce.api import router as leads_router
 from pack_commerce.config import CRMConfig
 from pack_commerce.models import (
     Category,
@@ -1078,7 +1076,7 @@ class CRMModule(BaseModule):
     config_agente = config_de_agente(CRMConfig, ("scoring_mode", "monto_alto_threshold", "order_status_visible", "order_confirmed_message", "order_confirmed_transfer_message", "completion_claims_disabled", "completion_claims_custom", "payment_forms", "transfer_accounts", "transfer_proof_required", "transfer_ocr_enabled",), "ConfigDeAgenteDeVentas")
     id = PLUGIN_ID
     name = "CRM"
-    version = "4.3.0"  # 4.3: pago_en_linea no atiende la mensualidad de una suscripción. SPEC-48: segundo comprobante (4.1 instrucciones, 4.2 la acción en «resultado»). ADR-0193: los leads pasan al core (LeadSkill, crons y provider de leads salen del pack)
+    version = "4.4.0"  # 4.4: el intake público de leads pasa al core (ADR-0193 §5). 4.3: pago_en_linea no atiende la mensualidad de una suscripción. SPEC-48: segundo comprobante (4.1 instrucciones, 4.2 la acción en «resultado»). ADR-0193: los leads pasan al core (LeadSkill, crons y provider de leads salen del pack)
     description = "Catálogo (menú), promociones, cotizaciones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"
@@ -1098,8 +1096,8 @@ class CRMModule(BaseModule):
     setup_guide = "Carga tu catálogo (CSV o a mano) y define cómo cierras pedidos y cobras."
     requires_config = True
     config_schema = CRMConfig
-    # Salida a red (ADR-0052): solo el `siteverify` de Turnstile del intake de leads.
-    network_allowlist: ClassVar[tuple[str, ...]] = leads_api.NETWORK
+    # Sin salida a red (ADR-0052): el `siteverify` de Turnstile era del intake de leads, que pasó al core (ADR-0193 §5).
+    network_allowlist: ClassVar[tuple[str, ...]] = ()
     admin_menu: list[dict[str, str]] = [  # noqa: RUF012
         {"label": "Dashboard", "path": "/crm/"},
         {"label": "Leads", "path": "/admin/packs/pack_commerce/leads"},
@@ -1117,10 +1115,6 @@ class CRMModule(BaseModule):
         CatalogSkill,
         OrderSkill,
     ]
-
-    def public_routes(self) -> list[Any]:
-        """API pública del pack (ADR-0057): intake de leads desde landings."""
-        return [leads_router]
 
     async def ocultar_datos(self, tenant_id: uuid.UUID, *, aplicar: bool) -> dict[str, int]:
         """HU-AOS-71: oculta (borrado lógico) productos, pedidos y cotizaciones del negocio del scope; sin
