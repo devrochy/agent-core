@@ -31,6 +31,9 @@ CONV = str(uuid.uuid5(uuid.NAMESPACE_DNS, "conversacion"))
         f"waweb:cap:{T}:2026-10-10",
         f"meta:paused:{T}:{CONV}",
         f"outbound:claim:{T}:{CONV}:{OTRO}",
+        f"outbound:programado:{T}:{OTRO}",  # marcas del barrido de salientes (H3)
+        f"outbound:enviado:{T}:{OTRO}",
+        f"outbound:barrido:{T}:{OTRO}",
         f"debounce:inbound:{T}:{CONV}",  # ids del inbound de la ráfaga (#438)
         f"debounce:intentos:{T}:{CONV}",  # reintentos del turno diferido (H2)
         f"debounce:en_curso:{T}:{CONV}",

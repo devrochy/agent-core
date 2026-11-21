@@ -188,28 +188,123 @@ async def _enqueue_next(
 
 _CLAIM_TTL_S = 300
 
+# Marcas en Redis que el barrido de salientes atascadas (`core/tasks/outbound_sweeper.py`) lee
+# para distinguir una fila `queued` huérfana de una que espera a propósito.
+# - Programado: la tarea tiene un reintento o una reprogramación con plazo (`self.retry` con
+#   countdown, pausa anti-baneo). El TTL cubre ese plazo más un margen.
+# - Enviado sin registrar: el proveedor aceptó el mensaje pero falló el update a `sent`. Quien
+#   vuelva a correr la tarea registra el envío sin volver a mandarlo.
+_PROGRAMADO_PREFIX = "outbound:programado:"
+_PROGRAMADO_MARGEN_S = 120
+_ENVIADO_PREFIX = "outbound:enviado:"
+_ENVIADO_TTL_S = 2 * 24 * 3600
+
+
+class ClaimNoDisponibleError(Exception):
+    """Redis no respondió al tomar el claim: no se envía (falla cerrado)."""
+
+
+def claim_key(tenant_id: uuid.UUID, conversation_id: uuid.UUID, message_id: uuid.UUID) -> str:
+    return f"outbound:claim:{tenant_id}:{conversation_id}:{message_id}"
+
+
+def programado_key(tenant_id: uuid.UUID, message_id: uuid.UUID) -> str:
+    return f"{_PROGRAMADO_PREFIX}{tenant_id}:{message_id}"
+
+
+def _enviado_key(tenant_id: uuid.UUID, message_id: uuid.UUID) -> str:
+    return f"{_ENVIADO_PREFIX}{tenant_id}:{message_id}"
+
+
+async def _marcar_programado(tenant_id: uuid.UUID, message_id: uuid.UUID, segundos: float) -> None:
+    """Deja constancia de que el mensaje tiene una ejecución futura (best-effort: sin la marca, a
+    lo sumo el barrido lo reencola antes de tiempo y el claim evita el doble envío)."""
+    from core.memory.working import get_redis
+
+    try:
+        await get_redis().set(
+            programado_key(tenant_id, message_id), "1", ex=max(1, int(segundos)) + _PROGRAMADO_MARGEN_S
+        )
+    except Exception as exc:
+        log.warning(
+            "outbound_marca_programado_fallida",
+            message_id=str(message_id),
+            motivo=type(exc).__name__,
+        )
+
+
+async def _recordar_enviado(tenant_id: uuid.UUID, message_id: uuid.UUID, wamid: str | None) -> None:
+    from core.memory.working import get_redis
+
+    try:
+        await get_redis().set(_enviado_key(tenant_id, message_id), wamid or "", ex=_ENVIADO_TTL_S)
+    except Exception as exc:
+        log.error(
+            "outbound_enviado_sin_marca",
+            message_id=str(message_id),
+            motivo=type(exc).__name__,
+            detalle="si se reencola, el mensaje puede salir dos veces",
+        )
+
+
+async def _envio_sin_registrar(tenant_id: uuid.UUID, message_id: uuid.UUID) -> str | None:
+    """El wamid de un envío que salió pero no quedó en la base, o `None`. Si Redis falla devuelve
+    `None`: el claim acaba de responder, así que es un fallo raro y no frena el envío."""
+    from core.memory.working import get_redis
+
+    try:
+        valor = await get_redis().get(_enviado_key(tenant_id, message_id))
+    except Exception:
+        return None
+    if valor is None:
+        return None
+    return valor.decode() if isinstance(valor, bytes) else str(valor)
+
+
+async def _registrar_enviado(tenant_id: uuid.UUID, message_id: uuid.UUID, wamid: str | None) -> bool:
+    """Pasa la fila a `sent`. Devuelve False si la base falló (el envío ya salió: se recuerda en
+    Redis para que el siguiente intento no lo repita)."""
+    try:
+        async with tenant_scope(tenant_id), get_session() as session:
+            db_message = await session.get(Message, message_id)
+            if db_message is not None and db_message.tenant_id == tenant_id:
+                db_message.status = "sent"
+                db_message.external_message_id = wamid or None
+                db_message.status_updated_at = utcnow()
+    except Exception as exc:
+        log.error(
+            "outbound_sent_sin_registrar",
+            message_id=str(message_id),
+            motivo=type(exc).__name__,
+        )
+        await _recordar_enviado(tenant_id, message_id, wamid)
+        return False
+    return True
+
 
 async def _claim_outbound(
     message_id: uuid.UUID, conversation_id: uuid.UUID, tenant_id: uuid.UUID
 ) -> bool:
     """Claim atómico (Redis SETNX) para que UNA sola tarea envíe el mensaje.
 
-    Un mensaje puede encolarse dos veces (batch + cadena) o ser redeliverado
-    por Celery tras un crash; el claim evita el doble envío. Si Redis falla,
-    se envía igual (garantía at-least-once, no peor que hoy).
+    Un mensaje puede encolarse dos veces (batch + cadena), ser redeliverado
+    por Celery tras un crash o reencolarlo el barrido (H3); el claim evita el
+    doble envío. Falla cerrado: si Redis falla, lanza `ClaimNoDisponibleError`
+    y `_send_one` no envía (lo reintenta después). Antes se enviaba igual, y con
+    el barrido eso podía duplicar el mensaje.
     """
     from core.memory.working import get_redis
 
     try:
         claimed = await get_redis().set(
-            f"outbound:claim:{tenant_id}:{conversation_id}:{message_id}",
+            claim_key(tenant_id, conversation_id, message_id),
             "1",
             nx=True,
             ex=_CLAIM_TTL_S,
         )
-        return bool(claimed)
-    except Exception:
-        return True
+    except Exception as exc:
+        raise ClaimNoDisponibleError(type(exc).__name__) from exc
+    return bool(claimed)
 
 
 async def _release_claim(
@@ -218,9 +313,97 @@ async def _release_claim(
     from core.memory.working import get_redis
 
     try:
-        await get_redis().delete(f"outbound:claim:{tenant_id}:{conversation_id}:{message_id}")
+        await get_redis().delete(claim_key(tenant_id, conversation_id, message_id))
     except Exception:
         pass
+
+
+async def _preparar_envio(
+    message: Message, conversation: Conversation, customer: Customer, tenant_id: uuid.UUID
+) -> tuple[str, dict[str, str], object] | ProviderError:
+    """Pausas, credenciales y adaptador del envío. Devuelve el `ProviderError` que corta el envío
+    (sin proveedor, pausado, ritmo) o `(provider, credentials, adapter)`. Corre con el claim
+    tomado: quien lo llama lo libera si esto falla o lanza."""
+    # Encolado antes de pausar o eliminar la conexión (ADR-0122): falla sin escalar. La
+    # cuenta sale de la conexión canónica si la conversación la tiene (ADR-0115 §2).
+    from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
+
+    if (motivo := await motivo_pausa_de_conversacion(conversation)) is not None:
+        return ConexionPausadaError(motivo)
+
+    # El negocio o el cliente quedó en pausa con un mensaje automático en la cola (HU-ARCH-37): lo de
+    # una persona sale; lo automático (agente, avisos, segmentos) falla con el motivo.
+    from core.gateway.pausa_automatica import es_envio_automatico, motivo_pausa_automatica
+
+    if es_envio_automatico(getattr(message, "sender_type", None), getattr(message, "client_message_id", None)) and (
+        motivo := await motivo_pausa_automatica(conversation, customer)
+    ):
+        return PausaAutomaticaError(motivo)
+
+    provider, credentials = await resolve_credentials(
+        conversation.connection_id,
+        conversation.meta_connection_id,
+        expected_tenant_id=tenant_id,
+        # Una plantilla nunca sale por el número de la plataforma (ADR-0108).
+        allow_env_fallback=not message.template_name,
+    )
+    # Canal `web` (HU-CHAN-02): sin proveedor externo; el adaptador solo
+    # marca el mensaje como enviado y el widget lo lee por polling.
+    if conversation.channel == "web":
+        provider, credentials = "web", {}
+    elif provider == "meta" and not credentials.get("access_token"):
+        # Sin credenciales (la conexión viva no tiene número o token, ADR-0122): ni el
+        # tiempo ni los reintentos lo arreglan. Falla ya y se escala.
+        return GraphError(
+            "La conexión de WhatsApp no tiene credenciales para enviar", category="PERMANENT"
+        )
+    elif provider == "twilio" and not (
+        credentials.get("account_sid")
+        and credentials.get("auth_token")
+        and credentials.get("from")
+    ):
+        # Igual que Meta: una conexión de Twilio sin credenciales completas no se arregla reintentando.
+        return ProviderError(
+            "La conexión de Twilio no tiene credenciales para enviar",
+            provider="twilio",
+            category="CONFIG",
+        )
+    elif (provider == "telegram" or conversation.channel == "telegram") and not (
+        provider == "telegram" and credentials.get("bot_token") and credentials.get("bot_id")
+    ):
+        # Telegram (ADR-0199): conexión borrada, pausada, sin token o con el kill-switch apagado, o una conversación de
+        # Telegram que no resolvió a su bot (nunca sale por otro proveedor). No se arregla reintentando.
+        return ProviderError(
+            "La conexión de Telegram no puede enviar", provider="telegram", category="CONFIG"
+        )
+    if provider == "telegram":
+        # Ritmo por bot y por chat (y la pausa tras un 429): se reprograma con `retry_after`, sin gastar el envío.
+        from core.gateway.telegram import ritmo
+
+        espera = await ritmo.esperar(tenant_id, credentials["bot_id"], customer.external_id)
+        if espera > 0:
+                return ProviderError(
+                "Ritmo de Telegram: el envío espera", provider="telegram", category="RATE_LIMIT",
+                retry_after=espera,
+            )
+    if conversation.channel in CANALES_DE_MENSAJERIA_META:
+        # Ventana y autoría para decidir `RESPONSE` o `HUMAN_AGENT` (ADR-0152): los datos del
+        # mensaje que el adaptador no ve.
+        credentials = {
+            **credentials,
+            "service_window_expires_at": (
+                conversation.service_window_expires_at.isoformat()
+                if conversation.service_window_expires_at
+                else ""
+            ),
+            "human": "true" if message.sender_type == "human" else "false",
+        }
+    try:
+        adapter = outbound_adapter_for(provider, conversation.channel)
+    except KeyError as exc:
+        # Canal sin adaptador de salida: ni el tiempo ni los reintentos lo arreglan.
+        return GraphError(str(exc), category="PERMANENT")
+    return provider, credentials, adapter
 
 
 async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderError | None:
@@ -262,96 +445,53 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
             return None
 
         # CLAIM (Redis): evita doble envío si el mismo mensaje se encoló dos
-        # veces (batch + cadena) o Celery lo redeliveró tras un crash.
-        if not await _claim_outbound(message.id, message.conversation_id, tenant_id):
+        # veces (batch + cadena), Celery lo redeliveró tras un crash o lo
+        # reencoló el barrido. Sin Redis no se envía: se reintenta después.
+        try:
+            if not await _claim_outbound(message.id, message.conversation_id, tenant_id):
+                return None
+        except ClaimNoDisponibleError as exc:
+            log.warning(
+                "outbound_claim_redis_caido",
+                message_id=str(message.id),
+                tenant_id=str(tenant_id),
+                motivo=str(exc),
+            )
+            return GraphError(
+                "Redis no disponible para el claim del envío", category="TRANSIENT", is_transient=True
+            )
+
+        # Salió por el proveedor en un intento anterior pero falló el update a `sent`: se registra
+        # sin volver a mandarlo.
+        if (wamid_previo := await _envio_sin_registrar(tenant_id, message.id)) is not None:
+            log.warning(
+                "outbound_sent_registrado_tarde", message_id=str(message.id), tenant_id=str(tenant_id)
+            )
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            if await _registrar_enviado(tenant_id, message_id, wamid_previo):
+                await _enqueue_next(message.conversation_id, tenant_id, message.created_at, message.id)
             return None
 
-        # Encolado antes de pausar o eliminar la conexión (ADR-0122): falla sin escalar. La
-        # cuenta sale de la conexión canónica si la conversación la tiene (ADR-0115 §2).
-        from core.gateway.meta_connection_state import motivo_pausa_de_conversacion
-
-        if (motivo := await motivo_pausa_de_conversacion(conversation)) is not None:
-            await _release_claim(message.id, message.conversation_id, tenant_id)
-            return ConexionPausadaError(motivo)
-
-        # El negocio o el cliente quedó en pausa con un mensaje automático en la cola (HU-ARCH-37): lo de
-        # una persona sale; lo automático (agente, avisos, segmentos) falla con el motivo.
-        from core.gateway.pausa_automatica import es_envio_automatico, motivo_pausa_automatica
-
-        if es_envio_automatico(getattr(message, "sender_type", None), getattr(message, "client_message_id", None)) and (
-            motivo := await motivo_pausa_automatica(conversation, customer)
-        ):
-            await _release_claim(message.id, message.conversation_id, tenant_id)
-            return PausaAutomaticaError(motivo)
-
-        provider, credentials = await resolve_credentials(
-            conversation.connection_id,
-            conversation.meta_connection_id,
-            expected_tenant_id=tenant_id,
-            # Una plantilla nunca sale por el número de la plataforma (ADR-0108).
-            allow_env_fallback=not message.template_name,
-        )
-        # Canal `web` (HU-CHAN-02): sin proveedor externo; el adaptador solo
-        # marca el mensaje como enviado y el widget lo lee por polling.
-        if conversation.channel == "web":
-            provider, credentials = "web", {}
-        elif provider == "meta" and not credentials.get("access_token"):
-            # Sin credenciales (la conexión viva no tiene número o token, ADR-0122): ni el
-            # tiempo ni los reintentos lo arreglan. Falla ya y se escala.
-            await _release_claim(message.id, message.conversation_id, tenant_id)
-            return GraphError(
-                "La conexión de WhatsApp no tiene credenciales para enviar", category="PERMANENT"
-            )
-        elif provider == "twilio" and not (
-            credentials.get("account_sid")
-            and credentials.get("auth_token")
-            and credentials.get("from")
-        ):
-            # Igual que Meta: una conexión de Twilio sin credenciales completas no se arregla reintentando.
-            await _release_claim(message.id, message.conversation_id, tenant_id)
-            return ProviderError(
-                "La conexión de Twilio no tiene credenciales para enviar",
-                provider="twilio",
-                category="CONFIG",
-            )
-        elif (provider == "telegram" or conversation.channel == "telegram") and not (
-            provider == "telegram" and credentials.get("bot_token") and credentials.get("bot_id")
-        ):
-            # Telegram (ADR-0199): conexión borrada, pausada, sin token o con el kill-switch apagado, o una conversación de
-            # Telegram que no resolvió a su bot (nunca sale por otro proveedor). No se arregla reintentando.
-            await _release_claim(message.id, message.conversation_id, tenant_id)
-            return ProviderError(
-                "La conexión de Telegram no puede enviar", provider="telegram", category="CONFIG"
-            )
-        if provider == "telegram":
-            # Ritmo por bot y por chat (y la pausa tras un 429): se reprograma con `retry_after`, sin gastar el envío.
-            from core.gateway.telegram import ritmo
-
-            espera = await ritmo.esperar(tenant_id, credentials["bot_id"], customer.external_id)
-            if espera > 0:
-                await _release_claim(message.id, message.conversation_id, tenant_id)
-                return ProviderError(
-                    "Ritmo de Telegram: el envío espera", provider="telegram", category="RATE_LIMIT",
-                    retry_after=espera,
-                )
-        if conversation.channel in CANALES_DE_MENSAJERIA_META:
-            # Ventana y autoría para decidir `RESPONSE` o `HUMAN_AGENT` (ADR-0152): los datos del
-            # mensaje que el adaptador no ve.
-            credentials = {
-                **credentials,
-                "service_window_expires_at": (
-                    conversation.service_window_expires_at.isoformat()
-                    if conversation.service_window_expires_at
-                    else ""
-                ),
-                "human": "true" if message.sender_type == "human" else "false",
-            }
+        # Lo que falle entre el claim y el envío (credenciales, base, Redis del ritmo) libera el
+        # claim y se reintenta: antes la excepción dejaba la fila `queued` sin tarea y la
+        # conversación bloqueada para siempre (H3).
         try:
-            adapter = outbound_adapter_for(provider, conversation.channel)
-        except KeyError as exc:
-            # Canal sin adaptador de salida: ni el tiempo ni los reintentos lo arreglan.
+            preparado = await _preparar_envio(message, conversation, customer, tenant_id)
+        except Exception as exc:
             await _release_claim(message.id, message.conversation_id, tenant_id)
-            return GraphError(str(exc), category="PERMANENT")
+            log.warning(
+                "outbound_preparacion_fallida",
+                message_id=str(message.id),
+                tenant_id=str(tenant_id),
+                motivo=type(exc).__name__,
+            )
+            return GraphError(
+                f"Error preparando el envío: {type(exc).__name__}", category="TRANSIENT", is_transient=True
+            )
+        if isinstance(preparado, ProviderError):
+            await _release_claim(message.id, message.conversation_id, tenant_id)
+            return preparado
+        provider, credentials, adapter = preparado
 
         # Presentación del correo (ADR-0204); `getattr` tolera filas/objetos viejos sin la columna.
         html_correo = getattr(message, "html", None)
@@ -506,14 +646,11 @@ async def _send_one(message_id: uuid.UUID, tenant_id: uuid.UUID) -> ProviderErro
                 f"Error de red enviando mensaje: {exc}", category="TRANSIENT", is_transient=True
             )
 
-        async with get_session() as session:
-            db_message = await session.get(Message, message_id)
-            if db_message is not None:
-                db_message.status = "sent"
-                db_message.external_message_id = wamid or None
-                db_message.status_updated_at = utcnow()
-
+        registrado = await _registrar_enviado(tenant_id, message_id, wamid)
         await _release_claim(message.id, message.conversation_id, tenant_id)
+        if not registrado:
+            # La fila sigue `queued`: el barrido la reencola y el siguiente intento solo la registra.
+            return None
         # Encadena el siguiente pendiente de la conversación (la cola avanza
         # en orden incluso si este mensaje fue un "batch" inicial).
         await _enqueue_next(message.conversation_id, tenant_id, message.created_at, message.id)
@@ -701,6 +838,7 @@ async def _handle_policy_defer(
             )
         return
     eta = await _policy_eta(tenant_id)
+    await _marcar_programado(tenant_id, message_id, (eta - utcnow()).total_seconds())
     outbound_send_task.apply_async(args=[str(message_id), str(tenant_id)], eta=eta)
     log.warning(
         "outbound_deferred_policy",
@@ -719,6 +857,8 @@ def outbound_send_task(self, message_id: str, tenant_id: str) -> None:
 
     decision = decide_retry(error, attempts_made=self.request.retries)
     if decision.action == "retry":
+        # El barrido no reencola un mensaje que espera su reintento (hasta 1 h con QUOTA).
+        run_async(_marcar_programado(uuid.UUID(tenant_id), uuid.UUID(message_id), decision.countdown_s or _DEFAULT_RETRY_S))
         raise self.retry(exc=error, countdown=decision.countdown_s)
     if decision.action == "defer":
         run_async(_handle_policy_defer(uuid.UUID(message_id), uuid.UUID(tenant_id), error))

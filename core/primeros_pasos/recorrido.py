@@ -14,9 +14,12 @@ Estados:
 - `no_aplica`: no se calcula de la clave; es del negocio. Negocios creados antes de
   `ONBOARDING_DESDE`, o todos si la variable está vacía (función apagada).
 
-La apertura automática y el aviso solo tienen sentido mientras el negocio no tenga ningún agente
-propio: en cuanto existe uno, el recorrido deja de insistir (`con_agente`). El Coordinador del
-alta (`kind = 'core'`) no cuenta: lo crea el sistema para todos.
+La apertura automática y el aviso solo tienen sentido mientras el negocio no tenga un agente propio
+**ajeno a la bienvenida**: en cuanto existe uno, el recorrido deja de insistir (`con_agente`). No cuentan
+el Coordinador del alta (`kind = 'core'`), que lo crea el sistema para todos, ni el agente que creó la
+propia bienvenida (el `agente_id` que guarda `dejar-listo`): la bienvenida de 5 estaciones (SPEC-49) lo
+crea al salir de la estación 1 y el aviso tiene que seguir hasta terminarla (decisión del dueño del
+2026-11-20). Un agente creado por «Nuevo agente», o antes de existir el recorrido, sí apaga la insistencia.
 """
 
 from __future__ import annotations
@@ -80,19 +83,20 @@ class Recorrido:
     agente_id: str | None = None
     conexion_id: str | None = None
     probado_en: datetime | None = None
-    # El negocio ya tiene un agente propio (distinto del Coordinador del sistema).
+    # El negocio ya tiene un agente propio ajeno a la bienvenida: ni el Coordinador del sistema ni el
+    # `agente_id` que creó el recorrido.
     con_agente: bool = False
 
     @property
     def obliga(self) -> bool:
         """El panel abre el asistente solo si el recorrido es del negocio, nunca se tocó y no hay
-        ningún agente creado."""
+        ningún agente propio ajeno a la bienvenida."""
         return self.estado == "pendiente" and not self.con_agente
 
     @property
     def avisa(self) -> bool:
-        """El aviso persistente se ve mientras el recorrido está empezado o saltado y el negocio
-        todavía no tiene un agente propio."""
+        """El aviso persistente se ve mientras el recorrido está empezado o saltado y el negocio no
+        tiene un agente propio ajeno a la bienvenida (el que creó la bienvenida no lo apaga)."""
         return self.estado in ("en_curso", "omitido") and not self.con_agente
 
 
@@ -244,11 +248,15 @@ def cambios_de_finalizar(
 
 # --------------------------------------------------------------------- base de datos
 
-# Un agente propio es cualquier fila vigente de `agents` que no sea el Coordinador (`kind='core'`),
-# que se crea con el negocio. Se evalúa en el mismo query: el aviso se decide en cada lectura.
+# Un agente propio ajeno a la bienvenida es cualquier fila vigente de `agents` del negocio que no sea el
+# Coordinador (`kind='core'`), que se crea con el negocio, ni el agente que guardó la bienvenida en
+# `settings.onboarding.agente_id`. Se compara como texto para que un valor guardado mal formado no rompa la
+# lectura. Se evalúa en el mismo query (también en el RETURNING de `fijar`, sobre la fila ya escrita): el
+# aviso se decide en cada lectura.
 _AGENTE_PROPIO_SQL: Final = (
     "EXISTS (SELECT 1 FROM agents a WHERE a.tenant_id = tenants.id "
-    "AND a.deleted_at IS NULL AND a.kind <> 'core')"
+    "AND a.deleted_at IS NULL AND a.kind <> 'core' "
+    "AND a.id::text <> coalesce(tenants.settings #>> '{onboarding,agente_id}', ''))"
 )
 
 

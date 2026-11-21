@@ -239,6 +239,9 @@ CATALOGO: dict[str, CronMeta] = dict(
         _m("core.domain_events_dispatch", "Plataforma", "Despachador de eventos de dominio",
            "Entrega los eventos pendientes del outbox, con reintentos.", None, interval_s=30.0,
            critical=True, reprogramable=False, record_success=False),
+        _m("core.outbound_sweeper", "Plataforma", "Salientes atascadas",
+           "Reencola los mensajes de salida que perdieron su tarea; si no avanzan, los marca "
+           "fallidos y escala la conversación.", "*/5 * * * *"),
         _m("core.cron_runs_retention", "Plataforma", "Mantenimiento del historial de crons",
            "Borra el historial de ejecuciones de más de 30 días y cierra las que quedaron colgadas.",
            "20 4 * * *"),
