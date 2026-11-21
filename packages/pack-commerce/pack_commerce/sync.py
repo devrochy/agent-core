@@ -115,6 +115,7 @@ register_sync(
         marcador_sql=func.coalesce(Order.status_changed_at, Order.created_at),
         marcador_row=_marcador_pedido,
         serialize=_serializar_pedido,
-        tiene_deleted_at=False,
+        # Un pedido oculto (HU-AOS-71) llega a la APK en `deletedIds`, que se aplican al final.
+        tiene_deleted_at=True,
     )
 )

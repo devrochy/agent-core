@@ -78,6 +78,9 @@ class PresetManifest(BaseModel):
     # Cómo lo llama un cliente ("tienda", "pizzería"): el resolver del tipo de negocio de un plan
     # (pack-commerce, adenda 2026-10-13 de ADR-0113) lo lleva al id del preset. Dato del preset.
     sinonimos: list[Annotated[str, Field(min_length=2, max_length=40)]] = Field(default_factory=list, max_length=40)
+    # HU-AOS-71: un preset de la plataforma (el negocio que vende los planes) no es un tipo de
+    # negocio que un cliente elige al inscribirse: `False` lo saca de esas opciones y del resolver.
+    ofrecer_en_alta: bool = True
     plan_minimo: str
     packs: list[str] = Field(min_length=1)
     playbooks: list[str] = Field(default_factory=list)

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 
 import questionary
 import typer
@@ -977,3 +978,92 @@ def descartar_alta(
         console.print(f"[red]✗ {exc}[/red]")
         raise typer.Exit(1) from exc
     console.print(f"✓ Alta {referencia} descartada: {fila.motivo}")
+
+
+async def _orden_seguro_para_ocultar(tenant_id: uuid.UUID, desde: datetime | None) -> tuple[list[str], str]:
+    """Las guardas del orden seguro de HU-AOS-71 (el scope ya es el del negocio): `(faltas, lead)`.
+
+    1. Un lead de origen `landing` en el core (el intake nuevo, ADR-0193): sin él, apagar comercio pierde en
+       silencio los leads del formulario del home. Los copiados de commerce quedan con `origen` NULL, así que
+       no cuentan. Con `desde`, tiene que ser posterior.
+    2. Comercio ya apagado en el negocio: ocultar con comercio encendido dejaría al agente sin sus datos.
+    """
+    from sqlalchemy import select
+
+    from core.agents.spec import enabled_packs, load_active_spec
+    from core.db.models import Lead
+    from core.db.session import get_session
+
+    faltas: list[str] = []
+    filtros = [Lead.tenant_id == tenant_id, Lead.origen == "landing", Lead.deleted_at.is_(None)]
+    if desde is not None:
+        filtros.append(Lead.created_at >= desde)
+    async with get_session() as session:
+        lead = (
+            await session.execute(select(Lead.id, Lead.created_at).where(*filtros).order_by(Lead.created_at.desc()).limit(1))
+        ).first()
+    if lead is None:
+        faltas.append(
+            "no hay ningún lead del formulario (origen landing) en el intake nuevo"
+            + (f" desde {desde.isoformat()}" if desde else "")
+            + ": envía uno de prueba desde el home y vuelve a correr"
+        )
+    if "pack_commerce" in enabled_packs(await load_active_spec()):
+        faltas.append("comercio sigue encendido: apágalo en el panel (Habilidades → Comercio) y vuelve a correr")
+    detalle = f"{lead[0]} ({lead[1].isoformat()})" if lead is not None else "-"
+    return faltas, detalle
+
+
+@app.command("ocultar-comercio")
+def ocultar_comercio(
+    ref: str = typer.Argument(..., help="Slug o UUID del negocio"),
+    desde: str = typer.Option(
+        "", "--desde", help="Fecha ISO: el lead de prueba del formulario tiene que ser posterior (recomendado)"
+    ),
+    aplicar: bool = typer.Option(False, "--aplicar", help="Ocultar de verdad (sin la bandera solo informa)"),
+) -> None:
+    """HU-AOS-71: oculta (borrado lógico) los productos, pedidos y cotizaciones de un negocio que apagó comercio.
+
+    No borra nada: las filas quedan con `deleted_at`, dejan de verse en el panel, la APK, el agente y los crons,
+    y no reaparecen si comercio se vuelve a encender. Idempotente. Orden seguro: exige un lead del formulario
+    del home en el intake nuevo y comercio ya apagado; sin eso no oculta (no hay forma de saltarlo).
+    """
+    desde_dt: datetime | None = None
+    if desde:
+        try:
+            desde_dt = datetime.fromisoformat(desde)
+        except ValueError as exc:
+            raise typer.BadParameter(f"--desde no es una fecha ISO: {desde}") from exc
+        if desde_dt.tzinfo is None:
+            desde_dt = desde_dt.replace(tzinfo=UTC)
+
+    def _cuenta(c: dict[str, int]) -> str:
+        return f"{c['productos']} productos, {c['pedidos']} pedidos, {c['cotizaciones']} cotizaciones"
+
+    async def _run():  # type: ignore[no-untyped-def]
+        from cli.tenant_ref import resolve_tenant
+        from core.plugin_manager import plugin_manager
+        from core.shared.tenant import tenant_scope
+
+        plugin_manager.scan()
+        comercio = plugin_manager.get("pack_commerce")  # por el registro: el CLI no importa packs (invariante 5)
+        if comercio is None or not hasattr(comercio, "ocultar_datos"):
+            raise typer.BadParameter("Este binario no trae el pack de comercio con `ocultar_datos`.")
+        tenant_id = await resolve_tenant(ref)
+        async with tenant_scope(tenant_id):
+            faltas, lead = await _orden_seguro_para_ocultar(tenant_id, desde_dt)
+            vivos = await comercio.ocultar_datos(tenant_id, aplicar=False)
+            ocultos = await comercio.ocultar_datos(tenant_id, aplicar=True) if aplicar and not faltas else None
+        return faltas, lead, vivos, ocultos
+
+    faltas, lead, vivos, ocultos = asyncio.run(_run())
+    console.print(f"Lead del formulario en el intake nuevo: {lead}")
+    console.print(f"Vivos: {_cuenta(vivos)}")
+    if faltas:
+        for falta in faltas:
+            console.print(f"[red]✗ {falta}[/red]")
+        raise typer.Exit(1)
+    if ocultos is None:
+        console.print("[yellow]Dry-run: nada cambió. Repite con --aplicar para ocultar.[/yellow]")
+        return
+    console.print(f"✓ Ocultos: {_cuenta(ocultos)}")

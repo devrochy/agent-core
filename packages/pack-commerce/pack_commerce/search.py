@@ -39,6 +39,7 @@ async def _buscar_comercio(
                 select(Order)
                 .where(
                     Order.tenant_id == tenant_id,
+                    Order.deleted_at.is_(None),
                     or_(
                         Order.public_order_number.ilike(patron, escape="\\"),
                         Order.delivery_full_name.ilike(patron, escape="\\"),

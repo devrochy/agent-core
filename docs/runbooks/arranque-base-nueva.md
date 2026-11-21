@@ -2,9 +2,10 @@
 
 Crea, en la instancia de Postgres de producción que ya existe, una **base nueva al lado de la
 vieja**, la migra a `head` desde cero y la deja lista para que la API, el worker y el beat
-arranquen sobre ella con **un solo usuario master y sin negocios** (decisión del dueño del
-2026-11-18: sin siembra; los negocios se crean después desde el panel). La base vieja no se toca
-y queda como vuelta atrás unos 7 días.
+arranquen sobre ella con **un solo usuario master y solo el negocio `solvershub`** (decisión del
+dueño del 2026-11-18, ajustada el 2026-11-20: se siembra `solvershub` con su preset propio para que el
+formulario del home funcione desde el día 1, paso 6.2; los demás negocios se crean después desde el
+panel). La base vieja no se toca y queda como vuelta atrás unos 7 días.
 
 - **Quién**: el dueño (u operador con SSH a la máquina de producción). **Ningún paso se corre
   desde una sesión de asistente**: tocan producción.
@@ -200,7 +201,7 @@ Una sola fila: `<correo-master>`, rol `master`.
 ### 6.1 El negocio `tenant-1` que crea la `0003`
 
 La migración `0003` siembra un negocio `tenant-1` («Tenant #1») en cualquier base nueva, y las
-`0127`/`0128` cuentan con él. Para que la base quede **sin negocios**, se suspende y se purga.
+`0127`/`0128` cuentan con él. Para que la base no lo arrastre, se suspende y se purga.
 Es irreversible, pero en una base recién creada no hay nada que perder, y de paso prueba de punta a
 punta el permiso del paso 3 (`purge_tenant` es la función de la `0072`):
 
@@ -212,6 +213,35 @@ docker exec "$API" agent-core tenant list   # vacío
 
 Esperado: `✓ tenant-1 eliminado por completo (irreversible)`. Si `purge` falla con
 `session_replication_role`, falta el paso 3.
+
+### 6.2 El negocio `solvershub`, el único que se siembra (HU-AOS-71)
+
+Decisión del dueño del 2026-11-20: la base nueva nace con el master y **solo** `solvershub`, para que el
+formulario del home entregue leads desde el primer día. El resto de los negocios se crean desde el panel.
+Sin leads importados: los de la base vieja no pasan (ADR-0193).
+
+1. Archivos del negocio al volumen desde `solvershub-comercial` (`main`): paso 2 de
+   `runbooks/reconstruir-asistente-solvershub.md`.
+2. Alta con el preset propio (sin comercio ni Ventas; Suscripciones por defecto con Captar leads, Agenda
+   para las demos):
+   ```bash
+   docker exec "$API" agent-core tenant create -y --name "SolversHub" --slug solvershub \
+     --business "<descripción del runbook de comercial>" --language es --tone cercano \
+     --preset plataforma-suscripciones --plan empresarial --sin-ejemplos
+   docker exec "$API" agent-core tenant seed solvershub --voz-de-marca   # los cuatro planes
+   ```
+3. Captar leads del negocio (panel → Captar leads o `PUT /api/v1/admin/captar-leads/config`): intake
+   encendido, **secreto nuevo de producción** (no el de test), la secret key de Turnstile de producción y
+   `https://www.solvershub.site` como origen. Detalle en el §4.1.1 del runbook de comercial.
+4. El primer canal conversacional (chat web o el que toque) crea los agentes del preset: comprobar que
+   Suscripciones es el agente por defecto y que no hay agente Ventas ni `pack_commerce` (paso 5 del runbook
+   de comercial).
+5. Landing de producción: `LEAD_WEBHOOK_URL=https://<api>/api/public/leads/solvershub`,
+   `LEAD_WEBHOOK_BASE=https://<api>/api/public/leads`, `LEAD_WEBHOOK_SECRET` (el del punto 3) y la site key
+   de Turnstile; redesplegar **sin caché**. Enviar un lead de prueba del home: tiene que verse en Clientes con
+   origen `landing` antes de dar el formulario por bueno.
+
+`agent-core tenant list` muestra una sola fila: `solvershub`.
 
 ## 7. Verificar
 
@@ -346,3 +376,4 @@ Hallazgos que no se arreglan en este runbook:
 - `inbound_trim_blocked_by_pending` salta con un stream recién creado (`last-delivered-id 0-0`):
   es un falso aviso de `core/orchestrator/retencion_streams.py`.
 - La `0003` siembra `tenant-1` en toda base nueva: aquí se purga a mano (paso 6.1).
+- Después se siembra solo `solvershub`, con el preset `plataforma-suscripciones` (paso 6.2, HU-AOS-71).

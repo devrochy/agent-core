@@ -58,6 +58,7 @@ from pack_commerce.skills import (
     classify_customer,
     referencias_vigentes,
 )
+from pack_commerce.vivos import pedido_vivo
 
 if TYPE_CHECKING:
     from core.mcp.host import MCPHost
@@ -334,6 +335,7 @@ async def crm_dashboard(request: Request):
             await session.execute(
                 select(Order).where(
                     Order.tenant_id == tenant_id,
+                    Order.deleted_at.is_(None),
                     ~Order.customer_id.in_(de_prueba),
                 )
             )
@@ -387,7 +389,9 @@ async def _leads_list() -> list[dict[str, Any]]:
         order_customer_ids = set(
             (
                 await session.execute(
-                    select(Order.customer_id).where(Order.tenant_id == tenant_id).distinct()
+                    select(Order.customer_id)
+                    .where(Order.tenant_id == tenant_id, Order.deleted_at.is_(None))
+                    .distinct()
                 )
             )
             .scalars()
@@ -396,7 +400,9 @@ async def _leads_list() -> list[dict[str, Any]]:
         quote_customer_ids = set(
             (
                 await session.execute(
-                    select(Quote.customer_id).where(Quote.tenant_id == tenant_id).distinct()
+                    select(Quote.customer_id)
+                    .where(Quote.tenant_id == tenant_id, Quote.deleted_at.is_(None))
+                    .distinct()
                 )
             )
             .scalars()
@@ -423,7 +429,7 @@ async def _leads_list() -> list[dict[str, Any]]:
                         func.count().label("pedidos"),
                         func.max(Order.created_at).label("ultima_compra"),
                     )
-                    .where(Order.tenant_id == tenant_id, Order.status != "expirado")
+                    .where(Order.tenant_id == tenant_id, Order.status != "expirado", Order.deleted_at.is_(None))
                     .group_by(Order.customer_id)
                 )
             ).all()
@@ -987,13 +993,17 @@ async def crm_orders(request: Request):
         orders = (
             await session.execute(
                 select(Order)
-                .where(Order.tenant_id == tenant_id, ~Order.customer_id.in_(de_prueba))
+                .where(Order.tenant_id == tenant_id, Order.deleted_at.is_(None), ~Order.customer_id.in_(de_prueba))
                 .order_by(Order.created_at.desc())
                 .limit(200)
             )
         ).scalars().all()
         items = (
-            await session.execute(select(OrderItem).where(OrderItem.tenant_id == tenant_id))
+            await session.execute(
+                select(OrderItem).where(
+                    OrderItem.tenant_id == tenant_id, OrderItem.order_id.in_([o.id for o in orders])
+                )
+            )
         ).scalars().all()
         variants = (
             await session.execute(
@@ -1044,7 +1054,7 @@ async def order_update_status(request: Request, order_id: uuid.UUID, status: str
     if await _require_admin(request) is None:
         return _login_redirect()
     async with get_session() as session:
-        order = await get_owned(session, Order, order_id, get_current_tenant_id())
+        order = await pedido_vivo(session, order_id, get_current_tenant_id())
         if order is not None and status in ("abierto", "despachado", "entregado", "cancelado", "expirado"):
             order.status = status
             order.status_changed_at = datetime.now(UTC)
@@ -1109,6 +1119,15 @@ class CRMModule(BaseModule):
         CatalogSkill,
         OrderSkill,
     ]
+
+    async def ocultar_datos(self, tenant_id: uuid.UUID, *, aplicar: bool) -> dict[str, int]:
+        """HU-AOS-71: oculta (borrado lógico) productos, pedidos y cotizaciones del negocio del scope; sin
+        `aplicar`, solo los cuenta. Lo llama `agent-core tenant ocultar-comercio` tras sus guardas."""
+        from dataclasses import asdict
+
+        from pack_commerce.ocultar import contar_vivos, ocultar_comercio
+
+        return asdict(await ocultar_comercio(tenant_id) if aplicar else await contar_vivos(tenant_id))
 
     async def seed_data(self, tenant_id: uuid.UUID, data: dict[str, Any]) -> list[str]:
         """Catálogo de ejemplo o del negocio (ADR-0083, ADR-0110). Idempotente."""
@@ -1379,6 +1398,8 @@ class CRMModule(BaseModule):
         async with get_session() as session:
             order = (
                 await session.execute(
+                    # Sin filtrar `deleted_at` a propósito (HU-AOS-71): un pago confirmado de un pedido oculto
+                    # se registra igual; el pedido sigue sin verse en ningún lado.
                     select(Order).where(
                         Order.tenant_id == tenant_id,
                         Order.public_order_number == base_reference,

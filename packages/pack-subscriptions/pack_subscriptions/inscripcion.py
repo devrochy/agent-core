@@ -77,7 +77,7 @@ def _verticales() -> tuple[tuple[str, str], ...]:
     """(id, nombre) de los presets del core (ADR-0110): archivos del release, no datos del negocio."""
     from core.presets import list_presets
 
-    return tuple((p.id, p.nombre) for p in list_presets())
+    return tuple((p.id, p.nombre) for p in list_presets() if p.ofrecer_en_alta)
 
 
 def _opciones_de_vertical() -> list[dict[str, str]]:

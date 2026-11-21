@@ -1,0 +1,44 @@
+{
+  "id": "plataforma-suscripciones",
+  "version": 2,
+  "nombre": "Plataforma de suscripciones",
+  "descripcion": "Plataforma que solo vende planes de suscripción: Suscripciones (por defecto) informa, vende y capta leads; Agenda agenda demos. Sin catálogo, pedidos ni cotizaciones (HU-AOS-71).",
+  "ofrecer_en_alta": false,
+  "plan_minimo": "premium",
+  "packs": [
+    "pack_subscriptions",
+    "pack_calendar",
+    "pack_payments",
+    "pack_knowledge"
+  ],
+  "playbooks": [
+    "suscripciones",
+    "planes",
+    "citas",
+    "pagos",
+    "conocimiento"
+  ],
+  "proveedor_suscripciones": "pack_subscriptions",
+  "persona": {
+    "tone": "cercano",
+    "warmth": 4,
+    "emojis": "sparse"
+  },
+  "app_settings": {
+    "split_style": "un_mensaje",
+    "language": "es",
+    "currency": "COP"
+  },
+  "conexiones_requeridas": [
+    "whatsapp"
+  ],
+  "pasos_de_activacion": [
+    "conectar_whatsapp",
+    "configurar_pagos",
+    "configurar_agenda"
+  ],
+  "agentes": [
+    "suscripciones",
+    "agenda"
+  ]
+}

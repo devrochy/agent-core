@@ -75,7 +75,7 @@ def _segmentos_con_pedidos(tid: uuid.UUID, u: dict[str, int]) -> Select[Any]:
             .over(partition_by=Order.customer_id, order_by=Order.created_at)
             .label("anterior"),
         )
-        .where(Order.tenant_id == tid, Order.status != "expirado")
+        .where(Order.tenant_id == tid, Order.deleted_at.is_(None), Order.status != "expirado")
         .subquery()
     )
     stats = (
@@ -101,7 +101,9 @@ async def _filter_query(key: str, value: str) -> Select[Any] | None:
     tid = get_current_tenant_id()
     if key == "clasificacion":
         if value == "nuevo":
-            con_pedidos = select(Order.customer_id).where(Order.tenant_id == tid, Order.status != "expirado")
+            con_pedidos = select(Order.customer_id).where(
+            Order.tenant_id == tid, Order.deleted_at.is_(None), Order.status != "expirado"
+        )
             return select(Customer.id).where(Customer.tenant_id == tid, Customer.id.not_in(con_pedidos))
         seg = _segmentos_con_pedidos(tid, await _umbrales()).subquery()
         return select(seg.c.customer_id).where(seg.c.segmento == value)
@@ -117,7 +119,9 @@ async def _facet_query(key: str) -> Select[Any] | None:
     tid = get_current_tenant_id()
     if key == "clasificacion":
         seg = _segmentos_con_pedidos(tid, await _umbrales()).subquery()
-        con_pedidos = select(Order.customer_id).where(Order.tenant_id == tid, Order.status != "expirado")
+        con_pedidos = select(Order.customer_id).where(
+            Order.tenant_id == tid, Order.deleted_at.is_(None), Order.status != "expirado"
+        )
         return union_all(
             select(seg.c.customer_id.label("customer_id"), seg.c.segmento.label("valor")),
             select(Customer.id.label("customer_id"), literal("nuevo").label("valor")).where(
@@ -148,6 +152,7 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
                     )
                     .where(
                         Order.tenant_id == tid,
+                        Order.deleted_at.is_(None),
                         Order.customer_id.in_(customer_ids),
                         Order.status != "expirado",
                     )
@@ -161,6 +166,7 @@ async def _resolver(customer_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, 
                     select(Quote.customer_id, func.count(Quote.id))
                     .where(
                         Quote.tenant_id == tid,
+                        Quote.deleted_at.is_(None),
                         Quote.customer_id.in_(customer_ids),
                         Quote.status.in_(("draft", "aceptada")),
                     )
@@ -197,7 +203,7 @@ async def _con_datos(ids: list[uuid.UUID] | None) -> Select[Any]:
     fuentes = []
     for modelo in (Order, Quote):
         q = select(modelo.customer_id.label("customer_id")).where(
-            modelo.tenant_id == tid, modelo.customer_id.is_not(None)
+            modelo.tenant_id == tid, modelo.deleted_at.is_(None), modelo.customer_id.is_not(None)
         )
         if ids is not None:
             q = q.where(modelo.customer_id.in_(ids))
@@ -222,6 +228,7 @@ async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -
                 select(Quote)
                 .where(
                     Quote.tenant_id == tid,
+                    Quote.deleted_at.is_(None),
                     Quote.customer_id == customer_id,
                     antes_del_cursor(Quote.created_at, Quote.id, "pack_commerce.cotizacion", cursor),
                 )
@@ -242,6 +249,7 @@ async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -
                 select(Order)
                 .where(
                     Order.tenant_id == tid,
+                    Order.deleted_at.is_(None),
                     Order.customer_id == customer_id,
                     antes_del_cursor(Order.created_at, Order.id, "pack_commerce.pedido", cursor),
                 )
@@ -262,6 +270,7 @@ async def _timeline(customer_id: uuid.UUID, cursor: Cursor | None, limit: int) -
                 select(Order)
                 .where(
                     Order.tenant_id == tid,
+                    Order.deleted_at.is_(None),
                     Order.customer_id == customer_id,
                     Order.status_changed_at.is_not(None),
                     antes_del_cursor(Order.status_changed_at, Order.id, "pack_commerce.pedido_estado", cursor),

@@ -33,7 +33,12 @@ async def ficha(ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
         pedidos = (
             await session.execute(
                 select(Order.customer_id, func.count(Order.id), func.max(Order.created_at))
-                .where(Order.tenant_id == tid, Order.customer_id.in_(ids), Order.status != "expirado")
+                .where(
+                    Order.tenant_id == tid,
+                    Order.deleted_at.is_(None),
+                    Order.customer_id.in_(ids),
+                    Order.status != "expirado",
+                )
                 .group_by(Order.customer_id)
             )
         ).all()
@@ -42,7 +47,12 @@ async def ficha(ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
             ultimos[cid] = (
                 await session.execute(
                     select(Order)
-                    .where(Order.tenant_id == tid, Order.customer_id == cid, Order.status != "expirado")
+                    .where(
+                        Order.tenant_id == tid,
+                        Order.deleted_at.is_(None),
+                        Order.customer_id == cid,
+                        Order.status != "expirado",
+                    )
                     .order_by(Order.created_at.desc())
                     .limit(1)
                 )
@@ -51,7 +61,12 @@ async def ficha(ids: list[uuid.UUID]) -> dict[uuid.UUID, str]:
             (
                 await session.execute(
                     select(Quote.customer_id, func.count(Quote.id))
-                    .where(Quote.tenant_id == tid, Quote.customer_id.in_(ids), Quote.status.in_(_COTIZACION_ABIERTA))
+                    .where(
+                        Quote.tenant_id == tid,
+                        Quote.deleted_at.is_(None),
+                        Quote.customer_id.in_(ids),
+                        Quote.status.in_(_COTIZACION_ABIERTA),
+                    )
                     .group_by(Quote.customer_id)
                 )
             ).all()
@@ -82,7 +97,12 @@ async def detalle(customer_id: uuid.UUID, limite: int) -> list[dict[str, Any]]:
         pedidos = (
             await session.execute(
                 select(Order)
-                .where(Order.tenant_id == tid, Order.customer_id == customer_id, Order.status != "expirado")
+                .where(
+                    Order.tenant_id == tid,
+                    Order.deleted_at.is_(None),
+                    Order.customer_id == customer_id,
+                    Order.status != "expirado",
+                )
                 .order_by(Order.created_at.desc())
                 .limit(limite)
             )
@@ -90,7 +110,7 @@ async def detalle(customer_id: uuid.UUID, limite: int) -> list[dict[str, Any]]:
         cotizaciones = (
             await session.execute(
                 select(Quote)
-                .where(Quote.tenant_id == tid, Quote.customer_id == customer_id)
+                .where(Quote.tenant_id == tid, Quote.deleted_at.is_(None), Quote.customer_id == customer_id)
                 .order_by(Quote.created_at.desc())
                 .limit(limite)
             )
