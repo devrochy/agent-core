@@ -340,10 +340,9 @@ def seed(
         help="Reemplaza la voz de marca guardada por docs/voz-de-marca.md (HU-SH-01).",
     ),
 ) -> None:
-    """Importa TENANTS_ROOT/<slug>/catalog.json a la BD del tenant."""
+    """Siembra TENANTS_ROOT/<slug>/: catálogo de comercio (si hay), `<pack>.json` y voz de marca."""
     from core.db.models import Tenant
     from core.db.session import get_session
-    from core.onboarding import load_tenant_catalog
 
     async def _run() -> None:
         async with get_session() as session:
@@ -352,24 +351,30 @@ def seed(
             ).scalar_one_or_none()
         if tenant is None:
             raise typer.BadParameter(f"Tenant no existe: {slug}. Crea el tenant primero con `tenant create`.")
-        data = load_tenant_catalog(slug)
-        if data is None:
-            console.print(f"[yellow]No hay catalog.json para {slug} (TENANTS_ROOT/{slug}/)[/yellow]")
-            return
-        if data.get("pack") != "pack_commerce":
-            console.print(f"[yellow]catalog.json de {slug}: pack '{data.get('pack')}' sin seed conocido[/yellow]")
-            return
-        steps = await seed_catalog(tenant.id, data)
-        for s in steps:
-            console.print(f"  · {s}")
-        for s in await seed_pack_plugins(slug, tenant.id):
-            console.print(f"  · {s}")
-        from core.onboarding import ensure_brand_voice
-
-        if await ensure_brand_voice(tenant.id, slug, sobrescribir=voz_de_marca):
-            console.print("  · brand_voice sembrada desde docs/voz-de-marca.md")
+        for paso in await sembrar_negocio(tenant.id, slug, sobrescribir_voz=voz_de_marca):
+            console.print(f"  · {paso}")
 
     asyncio.run(_run())
+
+
+async def sembrar_negocio(tenant_id: uuid.UUID, slug: str, *, sobrescribir_voz: bool = False) -> list[str]:
+    """Lo que siembra `tenant seed`: el catálogo de comercio si hay `catalog.json`, y siempre los `<pack>.json`
+    (p. ej. `planes.json`) y la voz de marca. Un negocio sin comercio (HU-AOS-71) no tiene catálogo y aun así
+    necesita sus planes: antes el comando salía al no encontrar `catalog.json` y no sembraba nada."""
+    from core.onboarding import ensure_brand_voice, load_tenant_catalog
+
+    pasos: list[str] = []
+    data = load_tenant_catalog(slug)
+    if data is None:
+        console.print(f"[yellow]Sin catalog.json para {slug}: no se siembra catálogo de comercio[/yellow]")
+    elif data.get("pack") != "pack_commerce":
+        console.print(f"[yellow]catalog.json de {slug}: pack '{data.get('pack')}' sin seed conocido[/yellow]")
+    else:
+        pasos += await seed_catalog(tenant_id, data)
+    pasos += await seed_pack_plugins(slug, tenant_id)
+    if await ensure_brand_voice(tenant_id, slug, sobrescribir=sobrescribir_voz):
+        pasos.append("brand_voice sembrada desde docs/voz-de-marca.md")
+    return pasos
 
 
 # ------------------------------------------------------------------ list
