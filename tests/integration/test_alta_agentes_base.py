@@ -97,9 +97,9 @@ async def test_el_alta_no_tiene_paso_de_runtime() -> None:
     assert not any(p.startswith("runtime v3") for p in pasos)
 
 
-async def test_la_primera_conexion_trae_el_especialista_del_preset_y_su_release() -> None:
-    """D-35: sin conexión no hay especialista; con la primera, el handler del outbox aplica los agentes
-    del preset (el primero queda por defecto) y construye la release 1."""
+async def test_la_primera_conexion_nace_con_el_coordinador_y_su_release() -> None:
+    """ADR-0205 §1–§2: ni el alta con preset ni la primera conexión crean especialistas; el handler del outbox
+    construye la release 1 solo con el Coordinador, que atiende hasta que el dueño cree su agente."""
     from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.events.core_handlers import on_connection_release_1
@@ -126,9 +126,7 @@ async def test_la_primera_conexion_trae_el_especialista_del_preset_y_su_release(
         "where i.connection_id = :c and i.deleted_at is null order by i.role, a.key",
         c=conexion,
     )
-    assert instancias[0] == ("coordinador", "core", False)
-    especialistas = [fila for fila in instancias if fila[1] == "specialist"]
-    assert especialistas and "general" not in {k for k, _r, _d in especialistas}
-    assert sum(1 for _k, _r, d in especialistas if d) == 1
+    assert instancias == [("coordinador", "core", False)]
+    assert await _agentes(tid) == {"coordinador": "core"}
     activa = await _sql(tid, "select active_release_id is not null from channel_connections where id = :c", c=conexion)
     assert activa == [(True,)]

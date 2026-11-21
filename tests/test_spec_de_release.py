@@ -208,8 +208,10 @@ def test_elegir_foco_dueno_valido_luego_por_defecto_luego_unico() -> None:
     assert elegir_foco([core, ventas], {"routing": {"defaultAgent": "general"}}, None) is ventas
     with pytest.raises(ErrorDeRelease):
         elegir_foco([core, ventas, _agente("agenda")], {"routing": {"defaultAgent": "general"}}, None)
+    # Sin especialistas atiende el Coordinador (ADR-0205 §2–§3).
+    assert elegir_foco([core], kernel, None) is core
     with pytest.raises(ErrorDeRelease):
-        elegir_foco([core], kernel, None)
+        elegir_foco([], kernel, None)
     assert ventas.write_namespaces == frozenset({"ventas"}) and core.write_namespaces == frozenset({"ventas"})
 
 

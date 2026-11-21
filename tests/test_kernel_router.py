@@ -232,3 +232,14 @@ def test_el_general_que_declara_todo_no_le_quita_el_procedimiento_al_especialist
     general2 = _agente("general", [PLAN, CITA])
     assert router.orden_de_duenos([general2, ventas], ventas.instance_id, general2.instance_id)[0] == ventas
     assert router.generalista(rel, routing) == general.instance_id
+
+
+def test_sin_especialistas_atiende_el_coordinador_sin_mirar_reglas() -> None:
+    """ADR-0205 §3: la release solo trae al Coordinador; `elegir_foco` lo da como foco y el router no busca a quién
+    enrutar (las reglas y los disparadores no tienen destino)."""
+    coordinador = _agente("coordinador", [], role="core")
+    solo: Any = _Release(coordinador)
+    routing = _routing(rules=[{"id": "boton_plan", "when": {"interactivePayloadPrefix": "plan:"}, "start": PLAN}])
+    ruta = decidir(solo, routing, Entrada(texto="quiero agendar una demo", payload="plan:premium"), coordinador)
+    assert (ruta.agente, ruta.source, ruta.rule_id, ruta.candidates) == (coordinador, "coordinador_receptor", None, ())
+    assert "coordinador_receptor" in router.FUENTES

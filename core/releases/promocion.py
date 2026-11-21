@@ -116,7 +116,7 @@ async def gate_aprobado(
 
     Lee, no mide: corre dentro del `FOR UPDATE` de `promover` y solo cree el último veredicto de
     la candidata medido contra la release activa de ahora (`base_release_id`). Valores de `gate`:
-    `exento_release_1`, `exento_<exencion>`, `forzado`, `sin_cambios`, `aprobado`, `rechazado`,
+    `exento_release_1`, `exento_primer_especialista`, `exento_<exencion>`, `forzado`, `sin_cambios`, `aprobado`, `rechazado`,
     `sin_evaluar`, `sin_medir` y `pendiente`. Un veredicto `rejected` la bloquea. Sin veredicto:
     con la bandera del negocio apagada pasa con `sin_evaluar`; encendida (parte 4) pasa con
     `sin_medir` si la última medición no encontró escenarios (decisión del dueño, 2026-10-25) y
@@ -138,6 +138,8 @@ async def gate_aprobado(
     base = await cargar_release(session, tenant_id, activa)
     if candidata is None:
         raise ReleaseNoEncontrada(str(release_id))
+    if base is not None and await _es_primer_especialista(session, tenant_id, candidata.connection_id, candidata, base):
+        return True, "exento_primer_especialista", {}
     tocados = procedimientos_tocados(candidata, base)
     if not tocados:
         return True, "sin_cambios", tocados
@@ -165,6 +167,36 @@ async def gate_aprobado(
             return True, "sin_evaluar", tocados
         return False, "pendiente", tocados
     return True, "aprobado", tocados
+
+
+def _con_especialistas(release: Any) -> bool:
+    return any(a.role == "specialist" for a in release.componentes)
+
+
+async def _es_primer_especialista(
+    session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID, candidata: Any, base: Any | None
+) -> bool:
+    """ADR-0205 §4 (adenda): la conexión pasa de atenderla solo el Coordinador a su primer especialista. Exenta
+    del gate como la release 1, pero solo si la conexión NUNCA tuvo promovida una release con especialistas: un
+    rollback a la release del Coordinador no reabre la exención para saltarse el gate en cada publicación. Corre
+    bajo el `FOR UPDATE` de la conexión que toma `promover`."""
+    if candidata.connection_id != connection_id:
+        return False
+    if (base is not None and _con_especialistas(base)) or not _con_especialistas(candidata):
+        return False
+
+    tuvo = (
+        await session.execute(
+            text(
+                "SELECT EXISTS (SELECT 1 FROM release_events e JOIN connection_releases r "
+                "ON r.tenant_id = e.tenant_id AND r.id = e.release_id "
+                "WHERE e.tenant_id = :t AND e.connection_id = :c AND e.type = 'promoted' "
+                "AND r.manifest -> 'components' @> '[{\"role\": \"specialist\"}]'::jsonb)"
+            ),
+            {"t": tenant_id, "c": connection_id},
+        )
+    ).scalar()
+    return not tuvo
 
 
 async def _es_negocio_de_prueba(session: Any, tenant_id: uuid.UUID) -> bool:
@@ -307,6 +339,36 @@ async def promover(
             session, tenant_id, connection_id, release_id, activa,
             actor=actor, motivo=motivo, exencion=exencion, forzado_por_master=forzado_por_master,
         )
+
+
+async def promover_primer_especialista(
+    tenant_id: uuid.UUID, connection_id: uuid.UUID, release_id: uuid.UUID, *, actor: str
+) -> bool:
+    """ADR-0205 §4 (adenda, decisión del dueño del 2026-11-21): al publicar el primer especialista en una conexión
+    que atendía solo el Coordinador, su release se activa sola. True si la promovió. No hace nada si la activa ya
+    tiene especialistas, si la candidata no los tiene o si hay un canary en curso (ahí decide el dueño); el gate la
+    deja pasar con `exento_primer_especialista` solo si la conexión nunca tuvo especialistas promovidos."""
+    from core.releases.cargar import cargar_release
+
+    _exigir_scope(tenant_id)
+    async with get_session() as session:
+        activa, canary = await _bloquear(session, tenant_id, connection_id)
+        if canary is not None or activa == release_id:
+            return False
+        candidata = await cargar_release(session, tenant_id, release_id)
+        base = await cargar_release(session, tenant_id, activa) if activa is not None else None
+        if candidata is None or (activa is not None and base is None):
+            return False
+        if not await _es_primer_especialista(session, tenant_id, connection_id, candidata, base):
+            return False
+        try:
+            await promover_en(
+                session, tenant_id, connection_id, release_id, activa, actor=actor, motivo="primer_especialista"
+            )
+        except ConflictoDeRelease as exc:
+            log.warning("primer_especialista_sin_promover", connection_id=str(connection_id), codigo=exc.codigo)
+            return False
+    return True
 
 
 async def promover_en(

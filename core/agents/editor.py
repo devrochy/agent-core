@@ -705,6 +705,8 @@ class ResultadoConexion:
     release_id: uuid.UUID | None = None
     release_number: int | None = None
     release_created: bool | None = None
+    # ADR-0205 §4: la release del primer especialista de una conexión que atendía solo el Coordinador se activa sola.
+    release_activated: bool = False
     error: str | None = None
 
 
@@ -746,14 +748,15 @@ async def publicar_en_conexiones(
     label: str | None = None,
 ) -> ResultadoPublicacion:
     """D-35: valida todo, publica la versión, instala el agente en cada conexión y construye su
-    release candidata sin activarla. `ErrorDelEditor` (409/422) o `versiones.ErroresDeContrato`
+    release candidata sin activarla, salvo la del primer especialista de una conexión que atendía solo el
+    Coordinador, que se activa sola (ADR-0205 §4). `ErrorDelEditor` (409/422) o `versiones.ErroresDeContrato`
     (422 por campo) antes de escribir nada."""
     from core.agents import instancias, versiones
     from core.agents.aviso_retiros import problemas_de_publicacion
     from core.agents.referencias_retiradas import binario_de
     from core.billing.enforcement import QuotaExceeded
     from core.plugin_manager import plugin_manager
-    from core.releases import build
+    from core.releases import build, promocion
 
     _exigir_scope(tenant_id)
     agente = await versiones.obtener_agente(tenant_id, agent_id)
@@ -867,6 +870,9 @@ async def publicar_en_conexiones(
         resultado.release_id = hecha.release_id
         resultado.release_number = hecha.number
         resultado.release_created = hecha.creada
+        resultado.release_activated = await promocion.promover_primer_especialista(
+            tenant_id, cid, hecha.release_id, actor=actor
+        )
     return ResultadoPublicacion(
         version=version,
         created=creada,

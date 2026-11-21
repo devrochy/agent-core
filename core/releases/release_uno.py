@@ -6,7 +6,8 @@ Por cada conexión conversacional viva **sin release activa**: construye la rele
 versión publicada de cada agente de la conexión (Coordinador y especialistas, ADR-0191/0192) y la
 promueve (`reason = 'release_1'`, actor `system:backfill`). Las que ya tienen una release activa no
 se tocan: así una re-corrida cubre solo las conexiones nuevas (idempotente). Una conexión sin
-especialista por defecto se cuenta como `sin_especialista`, no como error. Con `dry_run` no se
+especialista por defecto (con especialistas, ninguno por defecto) se cuenta como `sin_especialista_por_defecto`,
+no como error; sin especialistas la release lleva solo al Coordinador (ADR-0205 §2). Con `dry_run` no se
 escribe nada: se cuentan las conexiones que recibirían su release 1.
 
 Exige `pack_versions` al día (`agent-core db sync-packs`, que corre en el arranque del `api`).
@@ -100,12 +101,12 @@ async def _negocio(tenant_id: uuid.UUID, reporte: ReporteReleases, modulos: list
             )
             await promover(tenant_id, cid, resultado.release_id, actor=ACTOR, motivo="release_1")
         except ErrorDelBuild as exc:
-            if exc.codigo != "sin_especialista":
+            if exc.codigo != "sin_especialista_por_defecto":
                 reporte.errores.append(Problema(tenant_id, cid, _mensaje(exc)[:500]))
                 log.warning("backfill_releases_error", tenant_id=str(tenant_id), connection_id=str(cid),
                             error=_mensaje(exc)[:300])
-            else:  # nadie atiende todavía (ADR-0192 §2): no es un error, llega con su especialista
-                reporte.conexiones["sin_especialista"] += 1
+            else:  # hay agentes y ninguno por defecto: no es un error, lo resuelve el dueño
+                reporte.conexiones["sin_especialista_por_defecto"] += 1
             continue
         except (DBAPIError, LookupError, RuntimeError) as exc:
             reporte.errores.append(Problema(tenant_id, cid, _mensaje(exc)[:500]))

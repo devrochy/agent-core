@@ -175,8 +175,7 @@ def test_procedimientos_por_agente_y_foco_por_defecto() -> None:
     assert _release(agentes=(kernel, general, x)).foco() == general
     assert _release(agentes=(kernel, general, x)).foco(x.instance_id) == x  # el dueño manda
     assert _release(agentes=(core, x)).foco() == x
-    with pytest.raises(ErrorDeRelease):
-        _release(agentes=(core,)).foco()
+    assert _release(agentes=(core,)).foco() == core  # sin especialistas, el Coordinador (ADR-0205 §3)
     with pytest.raises(ErrorDeRelease):
         _release(agentes=(core, general, x)).foco()  # varios y ninguno por defecto
 
@@ -297,9 +296,8 @@ def test_sin_release_disponibles_sigue_el_binario(monkeypatch: Any) -> None:
 
 
 def test_release_sin_agente_en_foco_es_fail_closed() -> None:
-    """Una `release/2` sin especialista en foco no ofrece procedimientos (no cae al binario).
-    En el turno real `elegir_foco` ya falla antes (`ErrorDeRelease`); la ranura es fail-closed
-    igual si alguien la fija sin foco."""
+    """Una `release/2` sin especialista en foco no ofrece procedimientos (no cae al binario). En el turno real
+    el foco sería el Coordinador (ADR-0205 §3); la ranura es fail-closed igual si alguien la fija sin foco."""
     core = _agente("core", "coordinador", role="core", procs=(), contract="kernelspec/1")
     release = _release(agentes=(core,))
 

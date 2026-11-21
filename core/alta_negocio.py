@@ -111,8 +111,8 @@ async def motivo_para_rechazar_alta_de_tester(slug: str, admin_email: str | None
 
 async def _agentes_base_al_alta(tenant_id: uuid.UUID, *, nuevo: bool) -> list[str]:
     """El Coordinador nace con el negocio (ADR-0192 §1), antes del preset: sin General. Sus
-    instancias en las conexiones conversacionales que ya existan; cada una pide su release 1 y, con
-    ella, el primer especialista del preset (con la primera conexión, D-35). Frontera deliberada: un
+    instancias en las conexiones conversacionales que ya existan; cada una pide su release 1, que lleva solo al
+    Coordinador: el alta no crea especialistas (ADR-0205 §1) y el dueño crea el primero en la bienvenida. Frontera deliberada: un
     fallo se registra y el alta sigue. `nuevo` queda por compatibilidad de firma (los tests la parchean)."""
     del nuevo
     from core.agents.base import asegurar_base_del_negocio

@@ -52,7 +52,8 @@ log = get_logger(__name__)
 
 # Tope del texto que miran las reglas (`keywordAny`); el puntaje recorta aún más.
 MAX_TEXTO = 2000
-FUENTES = ("task", "rule", "trigger", "coprocessor", "default")
+# `coordinador_receptor` (ADR-0205 §3): la release no tiene especialistas y atiende el Coordinador.
+FUENTES = ("task", "rule", "trigger", "coprocessor", "default", "coordinador_receptor")
 VENTANA_ESTABILIDAD = 6
 
 
@@ -232,7 +233,11 @@ def decidir(
     cambios_recientes: int | None = None,
 ) -> Ruta:
     """La ruta del turno. `legacy` es el foco de siempre (`elegir_foco`). `cambios_recientes`: los
-    cambios de dueño en los últimos turnos (None = no se sabe, sin freno)."""
+    cambios de dueño en los últimos turnos (None = no se sabe, sin freno). Sin especialistas en la release
+    (`legacy` es el Coordinador, ADR-0205 §3) no hay a quién enrutar: atiende él, sin mirar reglas ni
+    disparadores."""
+    if legacy.role == "core":
+        return Ruta(agente=legacy, source="coordinador_receptor")
     r = _Release(release)
     gen = generalista(release, routing)
     candidatos = _candidatos(release, routing, entrada) if entrada.tarea is None else ()

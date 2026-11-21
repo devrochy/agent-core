@@ -138,3 +138,35 @@ HU-AOS-88 (release y lead base) y HU-AOS-89 (habilidades fijas) van primero, sob
 - Guardas 409 `coordinador_inmutable` en `core/agents/instalaciones_agente.py` y `core/api/routers/agent_editor.py`.
 - Panel y APK: estado «Atendiendo con el Coordinador» de la conexión (HU-AOS-95).
 - Journeys y golden: siembra explícita del especialista donde hoy se supone.
+
+## Adenda de implementación (2026-11-21, HU-AOS-88)
+Son decisiones del dueño del 2026-11-21 y lo que resolvió el diseño revisado por el subagente `arquitecto`.
+
+1. **Ningún alta crea especialistas** (amplía el §1). Tampoco el alta del negocio con preset (`apply_preset`), que
+   usan el panel de master, el CLI y el aprovisionamiento de quien compra un plan (HU-SH-03). El negocio nace con
+   el Coordinador y el dueño crea su primer agente en la bienvenida. `agent-core db presets-v2` (`aplicar_agentes`)
+   sigue disponible como comando explícito para journeys, evals, datos de QA y soporte.
+2. **La conexión nueva sigue heredando** el especialista por defecto que el negocio ya tiene en otras conexiones
+   (`asegurar_instancias_base`). Solo se corta lo que venía del preset.
+3. **El primer especialista se activa solo** (precisa el §4). Al publicarlo desde el editor en una conexión que
+   atendía solo el Coordinador, su release se promueve sola. Por qué y con qué límites:
+   - El gate la exime como `exento_primer_especialista`, igual que la release 1.
+   - La exención solo vale si la conexión **nunca** tuvo promovida una release con especialistas. Así un
+     rollback a la release del Coordinador no la reabre para saltarse el gate en cada publicación.
+   - Con un canary en curso no se promueve: decide el dueño.
+   - Al agregar un agente ya publicado desde Conexiones no hay promoción automática, pero la promoción manual
+     del dueño también queda exenta.
+
+   Enmienda ADR-0117 §4 (la exención nueva, y la release sin especialistas que deja de ser la activa se trata
+   como retirada).
+4. **El lead base se asegura justo después de fijar la release y el foco**, antes de los cortes por pausa, cuota
+   o presupuesto. Corrige el §7, que lo dejaba en el mismo punto que antes: un turno cortado tampoco pierde el
+   prospecto. El aviso sigue usando la definición de Captar leads de ADR-0193 («declara `crear_lead`»).
+5. **Fuente de la ruta.** Sin especialistas, el router devuelve `coordinador_receptor` sin mirar reglas ni
+   disparadores. La migración 0151 amplía el CHECK de `core_decisions.route_source`.
+6. **Las reglas del Coordinador no se aplican al crear el especialista** (difiere el §1). ADR-0139 §4 exige que
+   el agente de una regla esté en todas las conexiones. Con el primer especialista, que es el único y el por
+   defecto, la regla no cambia nada. Los agentes que crea el dueño desde el editor tampoco las recibían antes.
+   Aplicarlas al publicar en todas las conexiones queda para una HU propia.
+7. **Hasta HU-AOS-89**, el turno con el Coordinador en foco sale en silencio, después de asegurar el lead base.
+   HU-AOS-89 trae la vista de recepción y las dos se despliegan juntas.
