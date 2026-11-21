@@ -168,6 +168,7 @@ async def test_intake_crea_y_es_idempotente(app_client, moto_setup) -> None:
     assert n == 1, "el intake debe ser idempotente (mismo email/phone)"
     assert lead.status == "nuevo"
     assert lead.email == EMAIL
+    assert lead.custom.get("negocio") == "Otro"  # HU-AOS-70: el negocio del formulario va a su campo
     assert lead.origen == "landing"
 
 

@@ -282,6 +282,7 @@ async def intake_lead(
                 phone=phone or None,
                 email=email or None,
                 interest=negocio or config.lead_intake_default_interest,
+                negocio=negocio,
                 idempotency_key=idem,
             )
 
