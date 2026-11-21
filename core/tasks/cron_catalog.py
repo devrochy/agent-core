@@ -139,6 +139,9 @@ CATALOGO: dict[str, CronMeta] = dict(
            "Trae todas las plantillas de cada cuenta de Twilio y el estado de su aprobación.", "20 * * * *"),
         _m("core.twilio_health_check", "Canales y Meta", "Salud de las conexiones de Twilio",
            "Revisa la cuenta, el número y los webhooks de cada conexión de WhatsApp vía Twilio.", "*/15 * * * *"),
+        _m("core.twilio_reconciliacion", "Canales y Meta", "Recuperación de mensajes de Twilio",
+           "Trae de Twilio los mensajes de clientes que no llegaron por el webhook (despliegue, túnel caído).",
+           "*/2 * * * *"),
         _m("core.telegram_health_check", "Canales y Meta", "Salud de los bots de Telegram",
            "Revisa el token y el webhook de cada bot de Telegram conectado.", "*/15 * * * *"),
         # ---- Facturación de la plataforma
@@ -239,6 +242,9 @@ CATALOGO: dict[str, CronMeta] = dict(
         _m("core.domain_events_dispatch", "Plataforma", "Despachador de eventos de dominio",
            "Entrega los eventos pendientes del outbox, con reintentos.", None, interval_s=30.0,
            critical=True, reprogramable=False, record_success=False),
+        _m("core.outbound_sweeper", "Plataforma", "Salientes atascadas",
+           "Reencola los mensajes de salida que perdieron su tarea; si no avanzan, los marca "
+           "fallidos y escala la conversación.", "*/5 * * * *"),
         _m("core.cron_runs_retention", "Plataforma", "Mantenimiento del historial de crons",
            "Borra el historial de ejecuciones de más de 30 días y cierra las que quedaron colgadas.",
            "20 4 * * *"),

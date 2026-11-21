@@ -10,8 +10,10 @@
    URL EXACTA registrada en el sender (guardada en `twilio_connections`), no contra la que reconstruye el proxy. El
    `AccountSid` del formulario tiene que ser el de la conexión. Falla: 403.
 4. Negocio no operativo (ciclo de vida o billing): 200 sin procesar, para que Twilio no reintente. Conexión pausada
-   (`active = false`): los entrantes se ignoran con 200, pero los estados de entrega se siguen aplicando (son de
-   mensajes que ya salieron). Los cortes son la pausa y la suspensión del negocio; la bandera `whatsapp_twilio` solo
+   (`active = false`): los entrantes no se procesan (200), pero los estados de entrega se siguen aplicando (son de
+   mensajes que ya salieron). Un entrante no procesado queda en la auditoría con su motivo en `process_error` y
+   avisa una vez por hora: antes se perdía sin rastro (incidente 2026-11-19, la conexión pausada de test recibía
+   mensajes del número de producción). Los cortes son la pausa y la suspensión del negocio; la bandera `whatsapp_twilio` solo
    abre el tipo en el catálogo.
 5. Auditoría en la tabla de webhooks (`twilio:<AccountSid>` + `MessageSid` o `MessageSid:MessageStatus`; solo campos
    de diagnóstico, nunca el texto del mensaje). No deduplica: la idempotencia son `claim_message_once` (Redis, 48 h),
@@ -50,6 +52,8 @@ MAX_BODY_BYTES = 64 * 1024
 # Directo, no por el registry: el webhook es de este proveedor y no depende de que el entry point esté instalado.
 _ADAPTADOR = TwilioInbound()
 _TWIML_VACIO = '<?xml version="1.0" encoding="UTF-8"?><Response/>'
+# Un aviso por conexión y motivo cada hora: una conexión pausada que recibe 20 mensajes no manda 20 alertas.
+_AVISO_DESCARTE_CADA_S = 3600
 # Campos del formulario que se guardan en la auditoría: sirven para diagnosticar sin guardar el mensaje.
 _CAMPOS_DIAGNOSTICO = (
     "MessageSid",
@@ -151,15 +155,98 @@ async def _confirmar_webhook(tenant_id: uuid.UUID, fila_id: uuid.UUID, kind: str
         sandbox.contar("webhook_confirmado")
 
 
-def _evento(kind: str, external_id: str, public_id: str, params: dict[str, str]) -> FlattenedEvent:
+def _evento(
+    kind: str, external_id: str, public_id: str, params: dict[str, str], *, via: str = ""
+) -> FlattenedEvent:
+    value = {k: params[k] for k in _CAMPOS_DIAGNOSTICO if params.get(k)}
+    if via:
+        value["via"] = via
     return FlattenedEvent(
         object_type="twilio",
         field=kind,
         external_id=external_id[:200],
         entry_id=public_id,
         sub_id=None,
-        value={k: params[k] for k in _CAMPOS_DIAGNOSTICO if params.get(k)},
+        value=value,
     )
+
+
+async def _descartar(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    app_id: str,
+    evento: FlattenedEvent,
+    motivo: str,
+    *,
+    avisar: bool = True,
+) -> None:
+    """Un entrante que esta conexión no procesa queda en la auditoría con su motivo (`process_error`) y marcado
+    como procesado (no cuenta como atascado). Antes respondía 200 sin dejar rastro: si el sender apuntaba a un
+    ambiente con la conexión pausada, el mensaje se perdía sin alerta en ningún lado (incidente 2026-11-19).
+    Responde igual 200: un reintento de Twilio volvería a esta misma URL."""
+    from core.gateway.webhooks import _log_webhook_event, _mark_entry_processed
+
+    if await _log_webhook_event(app_id, evento, tenant_id=tenant_id, process_error=motivo):
+        await _mark_entry_processed(app_id, tenant_id, [evento])
+    log.warning(
+        "twilio_entrante_descartado",
+        tenant_id=str(tenant_id),
+        connection_id=str(connection_id),
+        motivo=motivo,
+    )
+    if avisar:
+        from core.shared.alerts import send_alert_once
+
+        await send_alert_once(
+            f"twilio_entrante_descartado:{connection_id}:{motivo}",
+            "WhatsApp vía Twilio: entrantes descartados",
+            f"Negocio {tenant_id}, conexión {connection_id}: llegan mensajes de clientes que no se procesan "
+            f"({motivo}). Revisa a dónde apunta el número en Twilio y el estado de la conexión.",
+            window_s=_AVISO_DESCARTE_CADA_S,
+        )
+
+
+async def ingerir_entrante(
+    tenant_id: uuid.UUID,
+    connection_id: uuid.UUID,
+    twilio: TwilioConnection,
+    params: dict[str, str],
+    public_id: str,
+    *,
+    via: str = "",
+) -> str:
+    """Audita y publica un entrante ya verificado (firma del webhook, o leído de la API de Twilio por la
+    reconciliación). Devuelve `enqueued`, `duplicate`, `dropped`, `ignored`, `descartado` o `sin_auditoria` (la
+    capa 1 falló: el webhook responde 500 para que Twilio reintente). Lo comparten el webhook y
+    `core.gateway.twilio.reconciliacion`, así el mismo mensaje produce el mismo `InboundMessage` y la misma clave de
+    idempotencia venga por donde venga."""
+    from core.gateway.webhooks import (
+        _log_webhook_event,
+        _mark_entry_processed,
+        publish_inbound_message,
+    )
+
+    message_sid = str(params.get("MessageSid") or "")
+    app_id = f"twilio:{twilio.account_sid}"
+    evento = _evento("inbound", message_sid, public_id, params, via=via)
+    mensajes = _ADAPTADOR.parse_inbound(params)
+    if not mensajes:
+        # Sin contenido que el core procese (una ubicación sola): queda auditado, sin aviso.
+        await _descartar(tenant_id, connection_id, app_id, evento, "sin_contenido", avisar=False)
+        return "ignored"
+    if any(m.connection_external_id != twilio.sender_e164 for m in mensajes):
+        # El `To` firmado tiene que ser el número de ESTA conexión: con otro, la conversación nacería sin
+        # conexión y su respuesta podría salir por la primaria o por el número de la plataforma.
+        await _descartar(tenant_id, connection_id, app_id, evento, "to_ajeno")
+        return "descartado"
+    if not await _log_webhook_event(app_id, evento, tenant_id=tenant_id, process_error=None):
+        log.error("twilio_webhook_auditoria_fallida", tenant_id=str(tenant_id), kind="inbound")
+        return "sin_auditoria"
+    resultado = "ignored"
+    for message in mensajes:
+        resultado = await publish_inbound_message(tenant_id, message, connection_id=connection_id)
+    await _mark_entry_processed(app_id, tenant_id, [evento])
+    return resultado
 
 
 async def _recibir(request: Request, public_id: str, kind: str) -> Response:
@@ -168,7 +255,6 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
         _alert_on_invalid_signature,
         _log_webhook_event,
         _mark_entry_processed,
-        publish_inbound_message,
     )
 
     raw_body = await _cuerpo_con_tope(request)
@@ -237,51 +323,38 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
             # `StatusCallback` del envío, así que no prueba que las URL estén pegadas en la consola de Twilio.
             await _confirmar_webhook(tenant_id, twilio.id, kind)
 
+        message_sid = str(params.get("MessageSid") or "")
+        app_id = f"twilio:{twilio.account_sid}"
         if not connection.active and kind == "inbound":
             log.info("twilio_webhook_conexion_pausada", tenant_id=str(tenant_id), kind=kind)
+            if message_sid:
+                await _descartar(
+                    tenant_id,
+                    connection_id,
+                    app_id,
+                    _evento(kind, message_sid, public_id, params),
+                    "conexion_pausada",
+                )
             return _twiml()
         if not await is_tenant_operational(tenant_id):
             log.info("twilio_webhook_negocio_no_operativo", tenant_id=str(tenant_id), kind=kind)
+            if message_sid and kind == "inbound":
+                await _descartar(
+                    tenant_id,
+                    connection_id,
+                    app_id,
+                    _evento(kind, message_sid, public_id, params),
+                    "negocio_no_operativo",
+                )
             return _twiml()
 
-        message_sid = str(params.get("MessageSid") or "")
         if not message_sid:
             return _twiml()
-        app_id = f"twilio:{twilio.account_sid}"
         if kind == "inbound":
-            evento = _evento(kind, message_sid, public_id, params)
-        else:
-            update = parse_status(params)
-            if update is None:
-                log.info(
-                    "twilio_status_desconocido",
-                    tenant_id=str(tenant_id),
-                    status=params.get("MessageStatus"),
-                )
-                return _twiml()
-            evento = _evento(kind, f"{message_sid}:{update['provider_status']}", public_id, params)
-
-        if not await _log_webhook_event(app_id, evento, tenant_id=tenant_id, process_error=None):
-            # Sin la capa 1 no se procesa: 500 para que Twilio pueda reintentar (si su reintento aplica).
-            log.error("twilio_webhook_auditoria_fallida", tenant_id=str(tenant_id), kind=kind)
-            return _twiml(500)
-
-        if kind == "inbound":
-            resultado = "ignored"
-            for message in adapter.parse_inbound(params):
-                if message.connection_external_id != twilio.sender_e164:
-                    # El `To` firmado tiene que ser el número de ESTA conexión: con otro, la conversación nacería sin
-                    # conexión y su respuesta podría salir por la primaria o por el número de la plataforma.
-                    log.warning(
-                        "twilio_webhook_to_ajeno",
-                        tenant_id=str(tenant_id),
-                        connection_id=str(connection_id),
-                    )
-                    resultado = "ignored"
-                    continue
-                resultado = await publish_inbound_message(
-                    tenant_id, message, connection_id=connection_id
-                )
+            resultado = await ingerir_entrante(tenant_id, connection_id, twilio, params, public_id)
+            if resultado == "sin_auditoria":
+                # Sin la capa 1 no se procesa: 500 para que Twilio pueda reintentar (si su reintento aplica).
+                return _twiml(500)
             log.info(
                 "twilio_webhook_received",
                 tenant_id=str(tenant_id),
@@ -289,41 +362,54 @@ async def _recibir(request: Request, public_id: str, kind: str) -> Response:
                 result=resultado,
                 modo=twilio.modo,
             )
-        else:
-            from core.gateway.meta_message_status import apply_status_update
-
-            try:
-                await apply_status_update(
-                    update, expected_tenant_id=tenant_id, phone_number_id=None
-                )
-            except Exception:
-                log.exception("twilio_status_update_failed", tenant_id=str(tenant_id))
-            from core.gateway.twilio.costos import ESTADOS_FINALES
-
-            if update["provider_status"] in ESTADOS_FINALES:
-                # El costo se lee aparte (el precio tarda): no demora la respuesta a Twilio.
-                from core.tasks.twilio_costos import encolar_costo
-
-                encolar_costo(tenant_id, connection_id, message_sid)
-            try:
-                # El mensaje de prueba no está en `messages`: su resultado se sigue aparte para la ficha.
-                from core.gateway.twilio import prueba
-
-                await prueba.aplicar_estado(tenant_id, connection_id, update)
-            except Exception:
-                log.warning("twilio_prueba_estado_fallido", tenant_id=str(tenant_id))
-            if twilio.modo == sandbox.MODO_SANDBOX and str(params.get("ErrorCode") or "") == str(
-                sandbox.CODIGO_NO_UNIDO
-            ):
-                log.info("twilio_sandbox_no_unido", tenant_id=str(tenant_id), via="estado")
-                sandbox.contar("no_unido")
+            return _twiml()
+        update = parse_status(params)
+        if update is None:
             log.info(
-                "twilio_webhook_received",
+                "twilio_status_desconocido",
                 tenant_id=str(tenant_id),
-                kind=kind,
-                status=update["status"],
-                modo=twilio.modo,
+                status=params.get("MessageStatus"),
             )
+            return _twiml()
+        evento = _evento(kind, f"{message_sid}:{update['provider_status']}", public_id, params)
+
+        if not await _log_webhook_event(app_id, evento, tenant_id=tenant_id, process_error=None):
+            # Sin la capa 1 no se procesa: 500 para que Twilio pueda reintentar (si su reintento aplica).
+            log.error("twilio_webhook_auditoria_fallida", tenant_id=str(tenant_id), kind=kind)
+            return _twiml(500)
+
+        from core.gateway.meta_message_status import apply_status_update
+
+        try:
+            await apply_status_update(update, expected_tenant_id=tenant_id, phone_number_id=None)
+        except Exception:
+            log.exception("twilio_status_update_failed", tenant_id=str(tenant_id))
+        from core.gateway.twilio.costos import ESTADOS_FINALES
+
+        if update["provider_status"] in ESTADOS_FINALES:
+            # El costo se lee aparte (el precio tarda): no demora la respuesta a Twilio.
+            from core.tasks.twilio_costos import encolar_costo
+
+            encolar_costo(tenant_id, connection_id, message_sid)
+        try:
+            # El mensaje de prueba no está en `messages`: su resultado se sigue aparte para la ficha.
+            from core.gateway.twilio import prueba
+
+            await prueba.aplicar_estado(tenant_id, connection_id, update)
+        except Exception:
+            log.warning("twilio_prueba_estado_fallido", tenant_id=str(tenant_id))
+        if twilio.modo == sandbox.MODO_SANDBOX and str(params.get("ErrorCode") or "") == str(
+            sandbox.CODIGO_NO_UNIDO
+        ):
+            log.info("twilio_sandbox_no_unido", tenant_id=str(tenant_id), via="estado")
+            sandbox.contar("no_unido")
+        log.info(
+            "twilio_webhook_received",
+            tenant_id=str(tenant_id),
+            kind=kind,
+            status=update["status"],
+            modo=twilio.modo,
+        )
         await _mark_entry_processed(app_id, tenant_id, [evento])
     return _twiml()
 

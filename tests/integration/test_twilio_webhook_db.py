@@ -2,7 +2,8 @@
 
 - Entrante firmado contra la URL registrada: se publica en el stream del core una sola vez (Twilio reintenta).
 - Firma inválida, `AccountSid` ajeno o firma calculada sobre otra URL (la que vería el proxy): 403 y nada se publica.
-- `public_id` desconocido: 404. Conexión pausada: 200 sin publicar.
+- `public_id` desconocido: 404. Conexión pausada: 200 sin publicar, pero el entrante queda auditado con su motivo
+  (`process_error`) y marcado como procesado (incidente 2026-11-19: antes se perdía sin rastro).
 - Status callbacks: el estado del mensaje avanza y nunca retrocede; `undelivered` queda `failed` con su código.
 - La auditoría guarda campos de diagnóstico, nunca el texto del mensaje.
 
@@ -139,6 +140,18 @@ async def _post(
     )
 
 
+async def _auditoria(sid: str) -> tuple[str | None, bool] | None:
+    """`(process_error, procesado)` de la fila de auditoría del entrante, o `None` si no hay fila."""
+    filas = await _sql(
+        None,
+        "select process_error, processed_at is not null from webhook_events"
+        " where meta_app_id = :app and external_id = :sid",
+        app=f"twilio:{AC}",
+        sid=sid,
+    )
+    return (filas[0][0], filas[0][1]) if filas else None
+
+
 async def _encolados(sid: str) -> int:
     from core.gateway.webhooks import INBOUND_STREAM
     from core.memory.working import get_redis
@@ -219,7 +232,9 @@ async def test_conexion_pausada_responde_200_sin_publicar(conexion, app_client) 
         params = _entrante(conexion)
         r = await _post(app_client, conexion, "inbound", params)
         assert r.status_code == 200
-        assert await _encolados(dict(params)["MessageSid"]) == 0
+        sid = dict(params)["MessageSid"]
+        assert await _encolados(sid) == 0
+        assert await _auditoria(sid) == ("conexion_pausada", True)
     finally:
         await _sql(tid, "update channel_connections set active = true where id = :c", c=cid)
 
@@ -289,7 +304,9 @@ async def test_to_ajeno_no_se_publica(conexion, app_client) -> None:
     params = _entrante(conexion, To="whatsapp:+15559990000")
     r = await _post(app_client, conexion, "inbound", params)
     assert r.status_code == 200
-    assert await _encolados(dict(params)["MessageSid"]) == 0
+    sid = dict(params)["MessageSid"]
+    assert await _encolados(sid) == 0
+    assert await _auditoria(sid) == ("to_ajeno", True)
 
 
 AC_B = "AC" + "7" * 32
@@ -538,3 +555,83 @@ async def test_el_rechazo_de_la_prueba_llega_por_el_estado(conexion, app_client)
     assert r is not None
     assert (r.estado, r.provider_status, r.error_code) == ("failed", "undelivered", 63016)
     assert r.motivo is not None and "24 h" in r.motivo
+
+
+def _api_de_mensajes(mensajes: list[dict[str, Any]], c: dict[str, Any]) -> httpx.MockTransport:
+    from core.gateway.twilio.alta import registrada
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/Messages.json"):
+            return httpx.Response(200, json={"messages": mensajes})
+        if request.url.path == f"/v2/Channels/Senders/{XE}":
+            webhook = {
+                "callback_url": registrada(c["inbound_url"]),
+                "status_callback_url": registrada(c["status_url"]),
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "sid": XE,
+                    "sender_id": f"whatsapp:{c['e164']}",
+                    "status": "ONLINE",
+                    "webhook": webhook,
+                },
+            )
+        return httpx.Response(404, json={"code": 20404})
+
+    return httpx.MockTransport(handler)
+
+
+async def test_la_reconciliacion_recupera_lo_que_no_llego_por_el_webhook(
+    conexion, app_client
+) -> None:
+    """Adenda 2 del ADR-0186 (incidente 2026-11-19): un entrante que Twilio no pudo entregar al webhook se lee de su
+    API y se publica una sola vez; uno que sí llegó por el webhook no se vuelve a publicar."""
+    from datetime import UTC, datetime, timedelta
+    from email.utils import format_datetime
+
+    from core.gateway.twilio import reconciliacion
+    from core.shared.tenant import tenant_scope
+
+    tid, cid = conexion["tid"], conexion["connection_id"]
+    await _sql(
+        tid,
+        "update twilio_connections set status = 'connected' where channel_connection_id = :c",
+        c=cid,
+    )
+    llego = _entrante(conexion)
+    r = await _post(app_client, conexion, "inbound", llego)
+    assert r.status_code == 200
+    sid_llego = dict(llego)["MessageSid"]
+    sid_perdido = "SM" + uuid.uuid4().hex
+    hace = format_datetime(datetime.now(UTC) - timedelta(minutes=5))
+    base = {
+        "direction": "inbound",
+        "from": "whatsapp:+573001234567",
+        "to": f"whatsapp:{conexion['e164']}",
+    }
+    transport = _api_de_mensajes(
+        [
+            {
+                **base,
+                "sid": sid_perdido,
+                "body": "Confirmar",
+                "num_media": "0",
+                "date_created": hace,
+            },
+            {**base, "sid": sid_llego, "body": "Hola", "num_media": "0", "date_created": hace},
+        ],
+        conexion,
+    )
+    for _ in range(2):  # la segunda corrida ya no encuentra nada que recuperar
+        async with tenant_scope(tid):
+            await reconciliacion.reconciliar(tid, cid, transport=transport)
+    assert await _encolados(sid_perdido) == 1
+    assert await _encolados(sid_llego) == 1
+    filas = await _sql(
+        None,
+        "select payload->>'via', process_error from webhook_events where meta_app_id = :a and external_id = :e",
+        a=f"twilio:{AC}",
+        e=sid_perdido,
+    )
+    assert [tuple(f) for f in filas] == [("reconciliacion", None)]

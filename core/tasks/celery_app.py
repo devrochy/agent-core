@@ -49,6 +49,9 @@ celery.conf.update(
     task_acks_late=True,          # el mensaje se re-entrega si el worker muere
     task_reject_on_worker_lost=True,
     task_time_limit=300,
+    # Explícito (el default de Celery es 1 h): mayor que `task_time_limit` y que el countdown más
+    # largo de la salida, ver `celery_visibility_timeout_s` en core/config.py.
+    broker_transport_options={"visibility_timeout": settings.celery_visibility_timeout_s},
     beat_schedule={},             # lo llenan los @register_cron de los plugins
 )
 
@@ -168,6 +171,17 @@ def _twilio_health_check() -> Any:
     from core.gateway.twilio.operacion import revisar_todas
 
     return revisar_todas()
+
+
+_TWILIO_RECONCILIACION_TASK = "core.twilio_reconciliacion"
+
+
+@core_cron(_TWILIO_RECONCILIACION_TASK, crontab(minute="*/2"))
+def _twilio_reconciliacion() -> Any:
+    """Recupera de la API de Twilio los entrantes que no llegaron por el webhook (adenda 2 del ADR-0186)."""
+    from core.gateway.twilio.reconciliacion import reconciliar_todas
+
+    return reconciliar_todas()
 
 
 _TELEGRAM_HEALTH_CHECK_TASK = "core.telegram_health_check"
@@ -407,6 +421,18 @@ def _domain_events_dispatch() -> Any:
 
     # Síncrono (usa su propio `run_async`): `run_cron` lo llama sin envolverlo.
     dispatch_domain_events_task()
+
+# Salientes atascadas (H3): reencola el primer `queued` de una conversación que perdió su tarea
+# (fallo de `.delay`, worker caído) y, si no avanza tras varios intentos, lo marca `failed` y escala.
+_OUTBOUND_SWEEPER_TASK = "core.outbound_sweeper"
+
+
+@core_cron(_OUTBOUND_SWEEPER_TASK, crontab(minute="*/5"))
+def _outbound_sweeper() -> Any:
+    from core.tasks.outbound_sweeper import barrer_salientes_atascadas
+
+    return barrer_salientes_atascadas()
+
 
 # Mantenimiento del historial de crons (ADR-0183): borra a los 30 días y cierra las ejecuciones
 # que quedaron colgadas (worker caído a mitad de una tarea).

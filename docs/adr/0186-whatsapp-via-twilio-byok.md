@@ -296,3 +296,29 @@ Según la documentación oficial (docs/whatsapp/sandbox, quickstart y try-out-wh
 6. Si `sync` trae las 3 plantillas preaprobadas y si se pueden mandar fuera de la ventana.
 7. Que la Senders API no liste el sandbox, y que el `StatusCallback` de cada mensaje llegue aunque la consola no tenga la URL de estado.
 8. Que funcione con cuentas Trial y de pago.
+
+## Adenda (2026-11-21) · ningún entrante se pierde sin rastro: descartes auditados y reconciliación
+
+Motivo: el incidente del 2026-11-19 en producción, que el dueño detectó probando con clientes de prueba. Se perdieron 5 mensajes de clientes, y la cola de entrada no tuvo la culpa: la DLQ estaba vacía y cada entrante auditado tenía su fila en `messages`.
+- **Cuatro a test:** Twilio los entregó a la URL vieja del número, que caía en la conexión **pausada** de test. El webhook respondió 200 sin auditar, así que ni Twilio ni nosotros dejamos alerta.
+- **Uno en el despliegue:** llegó durante el despliegue de la API (502 de Cloudflare). Los 3 reintentos de `#rc=3` caben en segundos y la API tarda entre 40 y 60 s en levantar.
+
+### Decisiones
+
+1. **Descarte auditado.** Un entrante que la conexión no procesa queda en `webhook_events` con su motivo en `process_error`, marcado como procesado para que no cuente como atascado. Motivos: `conexion_pausada`, `negocio_no_operativo`, `to_ajeno` y `sin_contenido`. Sale un aviso una vez por hora por conexión y motivo; `sin_contenido` no avisa. Se sigue respondiendo 200, porque un reintento de Twilio volvería a la misma URL. Esas filas guardan solo los campos de diagnóstico (decisión original): se ven, pero no se pueden reprocesar.
+2. **Reconciliación contra la API de Twilio (`core.twilio_reconciliacion`, cada 2 min).** Por cada sender `connected` y activo de un negocio operativo:
+   - lee los entrantes del número (`GET Messages.json?To=…&DateSent>=día`) de la ventana de hace 30 min a hace 90 s;
+   - publica los que no tienen fila de auditoría, por el mismo camino que el webhook (`ingerir_entrante`, con `via=reconciliacion` en la auditoría);
+   - la idempotencia sigue siendo la de siempre (claim por `MessageSid`, `ProcessedEvent` y UNIQUE de `messages`), así que un mensaje que llega por las dos vías entra una vez.
+
+   No toca un sender `degraded`: si el número apunta a otro ambiente, ese ambiente no le responde a los clientes. Si Twilio no responde, no hace nada hasta la próxima corrida. Cuando recupera algo, avisa una vez por hora.
+3. **Límites aceptados del recurso Message:**
+   - no trae `ProfileName`;
+   - no trae `ButtonPayload`: el toque de un botón llega como su texto;
+   - la media sale del subrecurso `Media`;
+   - el mensaje llega hasta unos minutos tarde y no se reordena (se registra `demora_s`).
+
+### Fuera de esta adenda
+
+- Acortar el corte del despliegue: instalar los packs al construir la imagen, o desplegar en paralelo detrás del proxy de Coolify. Es trabajo de infraestructura aparte.
+- Guardar el texto del entrante para reprocesar descartes (H4 del plan de pérdida de mensajes).
