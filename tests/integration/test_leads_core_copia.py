@@ -274,7 +274,9 @@ async def test_la_copia_no_pisa_un_intake_editado_sin_secreto():
         )
         async with get_session() as session:
             await config_leads.asegurar_por_defecto(session, tid)
-            por_defecto = await config_leads.cargar_del_negocio(tid)
+        por_defecto = await config_leads.cargar_del_negocio(tid)
+        assert por_defecto is not None
+        async with get_session() as session:
             await config_leads.guardar(
                 session, tid,
                 por_defecto.model_copy(update={"lead_intake_allowed_origins": ["https://nuevo.ejemplo.co"]}),
