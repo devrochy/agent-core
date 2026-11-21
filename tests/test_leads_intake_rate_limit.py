@@ -120,3 +120,49 @@ async def test_slugs_inexistentes_cortan_por_ip(monkeypatch: pytest.MonkeyPatch,
 
     res = await api.intake_lead("azar-otro", _request("198.51.100.8", "azar-otro"), "secreto")
     assert res.status_code == 404
+
+
+def _get(peer: str, slug: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": f"/api/public/leads/intake-config/{slug}",
+            "headers": [],
+            "client": (peer, 40000),
+        }
+    )
+
+
+async def test_intake_config_tiene_cupo_propio(monkeypatch: pytest.MonkeyPatch, redis) -> None:
+    """`intake-config` corta por cupo antes de tocar la base: sin cupo se podían enumerar slugs sin freno."""
+    monkeypatch.setattr(api, "_CONFIG_LIMIT", 2)
+    resolved: list[str] = []
+
+    async def _unknown(slug: str):
+        resolved.append(slug)
+        return None
+
+    monkeypatch.setattr(api, "resolve_tenant_by_slug", _unknown)
+
+    for _ in range(2):
+        res = await api.intake_config("negocio", _get("198.51.100.9", "negocio"))
+        assert res.status_code == 404
+    res = await api.intake_config("negocio", _get("198.51.100.9", "negocio"))
+    assert res.status_code == 429
+    assert len(resolved) == 2
+
+
+async def test_slug_con_formato_invalido_da_404_sin_tocar_la_base(monkeypatch: pytest.MonkeyPatch, redis) -> None:
+    """Un slug que no puede ser de ningún negocio responde 404 (antes, `resolve_tenant_by_slug` daba 500) y suma al
+    cupo de fallos de la IP."""
+
+    async def _no_llamar(slug: str):
+        raise AssertionError("no debía resolver un slug inválido")
+
+    monkeypatch.setattr(api, "resolve_tenant_by_slug", _no_llamar)
+
+    res = await api.intake_lead("Slug_Raro!", _request("198.51.100.10", "Slug_Raro!"), "secreto")
+    assert res.status_code == 404
+    res = await api.intake_config("Slug_Raro!", _get("198.51.100.10", "Slug_Raro!"))
+    assert res.status_code == 404

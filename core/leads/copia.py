@@ -212,8 +212,13 @@ async def _config_de_commerce(tenant_id: uuid.UUID) -> dict[str, Any] | None:
     return {k: v for k, v in datos.items() if k in _CAMPOS_DE_CONFIG}
 
 
+_POR_DEFECTO = config_leads.a_guardar(config_leads.ConfigCaptarLeads())
+
+
 def _intake_vacio(config: config_leads.ConfigCaptarLeads) -> bool:
-    return not config.lead_intake_enabled and not config.lead_intake_secret.get_secret_value()
+    """Todos los campos del intake siguen con su valor por defecto (nadie los tocó en el core)."""
+    guardado = config_leads.a_guardar(config)
+    return all(guardado[c] == _POR_DEFECTO[c] for c in _CAMPOS_DE_INTAKE)
 
 
 async def _copiar_config(tenant_id: uuid.UUID, *, dry_run: bool) -> bool:

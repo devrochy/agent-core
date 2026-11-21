@@ -26,6 +26,7 @@ host de Cloudflare (anti-SSRF).
 from __future__ import annotations
 
 import re
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Header, Request
@@ -77,6 +78,10 @@ _MISS_WINDOW_S = 60
 _MISS_KEY_PREFIX = "rl:leads:intake_misses"
 _KNOWN_KEY_PREFIX = "rl:leads:intake_known"
 _KNOWN_TTL_S = 900
+# `intake-config` lo pide la landing (server→server, una IP) en cada visita al formulario alojado: cupo propio y más
+# holgado que el de los envíos, con el mismo cupo de slugs inexistentes (no se enumeran slugs sin freno).
+_CONFIG_LIMIT = 120
+_CONFIG_KEY_PREFIX = "rl:leads:intake_config"
 _SLUG_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
@@ -93,6 +98,30 @@ def _miss_bucket(ip: str) -> rate_limit.Bucket:
 
 def _known_key(slug: str) -> str | None:
     return f"{_KNOWN_KEY_PREFIX}:{slug}" if _SLUG_RE.fullmatch(slug or "") else None
+
+
+def _slug_valido(slug: str) -> bool:
+    return bool(_SLUG_RE.fullmatch(slug or ""))
+
+
+async def _resolver(slug: str, ip: str) -> uuid.UUID | None:
+    """El negocio del slug, o None (y suma un fallo al cupo de la IP). Un slug que no puede ser de ningún negocio no
+    llega a la base: `resolve_tenant_by_slug` lo rechazaría con ValueError (500)."""
+    tenant_id = await resolve_tenant_by_slug(slug) if _slug_valido(slug) else None
+    if tenant_id is None:
+        await rate_limit.record(_miss_bucket(ip), name="lead_intake")
+        return None
+    if known := _known_key(slug):
+        await rate_limit.remember(known, _KNOWN_TTL_S, name="lead_intake")
+    return tenant_id
+
+
+async def _config_rate_limited(slug: str, ip: str) -> bool:
+    slug_part = slug if _slug_valido(slug) else "_invalid"
+    bucket = rate_limit.Bucket(f"{_CONFIG_KEY_PREFIX}:{slug_part}:{ip}", _CONFIG_LIMIT, _RATE_WINDOW_S)
+    return await rate_limit.hit(
+        bucket, guards=(_miss_bucket(ip),), known_key=_known_key(slug), name="lead_intake_config"
+    )
 
 
 async def _rate_limited(slug: str, ip: str) -> bool:
@@ -129,14 +158,17 @@ async def _verify_turnstile(token: str, secret: str, ip: str | None) -> bool:
     return isinstance(data, dict) and bool(data.get("success"))
 
 
-async def intake_config(slug: str) -> JSONResponse:
+async def intake_config(slug: str, request: Request) -> JSONResponse:
     """Config **no sensible** del intake para el formulario alojado.
 
     La página embebible (`/f/<slug>`) la usa para aplicar el CSP `frame-ancestors`
     con los orígenes permitidos del tenant. No expone secretos; solo si el intake
     está activo, qué orígenes pueden incrustarlo y si exige Turnstile.
     """
-    tenant_id = await resolve_tenant_by_slug(slug)
+    ip = client_ip(request)
+    if await _config_rate_limited(slug, ip):
+        return JSONResponse({"error": "rate_limited"}, status_code=429)
+    tenant_id = await _resolver(slug, ip)
     if tenant_id is None:
         return JSONResponse({"error": "tenant_unknown"}, status_code=404)
 
@@ -178,12 +210,9 @@ async def intake_lead(
     if not nombre or not (email or phone):
         return JSONResponse({"error": "validation"}, status_code=422)
 
-    tenant_id = await resolve_tenant_by_slug(slug)
+    tenant_id = await _resolver(slug, ip)
     if tenant_id is None:
-        await rate_limit.record(_miss_bucket(ip), name="lead_intake")
         return JSONResponse({"error": "tenant_unknown"}, status_code=404)
-    if known := _known_key(slug):
-        await rate_limit.remember(known, _KNOWN_TTL_S, name="lead_intake")
 
     async with tenant_scope(tenant_id):
         # Sin comercio también (ADR-0193): la config es de Captar leads, del negocio y no de un pack.

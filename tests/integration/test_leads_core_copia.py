@@ -256,6 +256,35 @@ async def test_la_copia_completa_el_intake_de_una_config_por_defecto():
     assert (await _config(tid)).lead_intake_secret.get_secret_value() == "otro"
 
 
+async def test_la_copia_no_pisa_un_intake_editado_sin_secreto():
+    """Si el dueño ya tocó un campo del intake en el core (aquí los orígenes) aunque no haya puesto secreto, la copia
+    no reemplaza su config con la de commerce."""
+    from core.db.session import get_session
+    from core.leads import config as config_leads
+    from core.leads.copia import copiar_leads
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    async with tenant_scope(tid):
+        await plugin_manager.save_config(
+            "pack_commerce",
+            {"lead_intake_enabled": True, "lead_intake_secret": "s3cr3t",
+             "lead_intake_allowed_origins": ["https://viejo.ejemplo.co"]},
+        )
+        async with get_session() as session:
+            await config_leads.asegurar_por_defecto(session, tid)
+            por_defecto = await config_leads.cargar_del_negocio(tid)
+            await config_leads.guardar(
+                session, tid,
+                por_defecto.model_copy(update={"lead_intake_allowed_origins": ["https://nuevo.ejemplo.co"]}),
+            )
+    await copiar_leads(dry_run=False, tenant_id=tid)
+    config = await _config(tid)
+    assert config.lead_intake_allowed_origins == ["https://nuevo.ejemplo.co"]
+    assert not config.lead_intake_secret.get_secret_value()
+
+
 async def _config(tid: uuid.UUID):
     from core.leads import config as config_leads
     from core.shared.tenant import tenant_scope
