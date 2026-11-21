@@ -137,3 +137,19 @@ Decisiones tomadas al implementar, que el texto de arriba no fijaba:
    `commerce.resumen_ventas`) y las fuentes de la línea de tiempo también, por las preferencias y los cursores ya
    guardados.
 8. **Commerce no marca «convertido» por un pedido**: no lo hacía antes y no se inventa aquí.
+
+## Adenda 2026-11-18 — implementación (HU-AOS-70, parte 3)
+
+1. **Intake en el core** (`core/leads/intake.py`): `POST /api/public/leads/{slug}` y
+   `GET /api/public/leads/intake-config/{slug}`, con el alias `/api/pack/pack_commerce/leads/{slug}` e
+   `/api/pack/pack_commerce/intake-config/{slug}` montado por el core (no por el pack). Mismo handler y mismo cupo; ninguno
+   mira si el negocio tiene comercio. Lee la config de `lead_settings`: sin fila o apagado, 403 `intake_disabled`. Las
+   claves del rate limit pasan a `rl:leads:intake*`. `/api/public/leads` entra en la allowlist del middleware.
+2. **Commerce 4.4.0** deja de declarar rutas públicas y salida a red (`network_allowlist` vacía). Los campos de leads de
+   `CRMConfig` (`lead_intake_*`, `auto_create_lead`, reenganche y avisos de seguimiento) quedan **ocultos**: no salen en
+   el formulario y al guardar se conservan, solo para que `copiar-leads` los lea. Su retiro es otra HU.
+3. **Config desde el panel:** `GET/PUT /api/v1/admin/captar-leads/config`, con la forma de la config de una habilidad
+   (esquema, valores con secretos redactados y `configured_secrets`) y el permiso de la sección `plugins`.
+4. **La copia completa el intake:** si el negocio ya tenía config por defecto (la crea el primer lead del chat) con el
+   intake sin configurar, `copiar-leads` le copia solo los campos `lead_intake_*` de commerce. Una config con intake
+   propio no se pisa.

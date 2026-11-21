@@ -31,6 +31,7 @@ class CRMConfig(BasePluginConfig):
     auto_create_lead: bool = Field(
         default=True,
         description="Crear un lead automáticamente cuando inicia una conversación nueva",
+        json_schema_extra={"oculto": True},
     )
     # `le=8760` se mantiene: negocios que guardaron 24 (el default anterior) tienen que seguir cargando
     # su config; fuera de 1..`FOLLOW_UP_HORAS_MAX` el cron usa el valor por defecto.
@@ -40,17 +41,21 @@ class CRMConfig(BasePluginConfig):
             f"Horas sin actividad antes de reenganchar a un lead calificado (1 a {FOLLOW_UP_HORAS_MAX}: "
             "solo se le escribe dentro de las 24 h de WhatsApp desde su último mensaje)"
         ),
+        json_schema_extra={"oculto": True},
     )
     # HU-CRM-22: avisos de seguimiento. Nacen encendidos porque solo se disparan por seguimientos que
     # una persona programó (HU-CRM-21) y van a su propio centro de notificaciones, sin mensajes al cliente.
     seguimiento_recordatorios: bool = Field(
-        default=True, description="Avisar cuando llega la hora de un seguimiento programado"
+        default=True, description="Avisar cuando llega la hora de un seguimiento programado",
+        json_schema_extra={"oculto": True},
     )
     seguimiento_resumen_diario: bool = Field(
-        default=True, description="Mandar cada mañana «Tu día de ventas» con los seguimientos y leads nuevos"
+        default=True, description="Mandar cada mañana «Tu día de ventas» con los seguimientos y leads nuevos",
+        json_schema_extra={"oculto": True},
     )
     seguimiento_resumen_hora: int = Field(
-        default=8, ge=0, le=19, description="Hora del negocio (0-19) desde la que sale el resumen diario"
+        default=8, ge=0, le=19, description="Hora del negocio (0-19) desde la que sale el resumen diario",
+        json_schema_extra={"oculto": True},
     )
     scoring_mode: Literal["manual", "auto"] = Field(
         default="auto", description="Cómo se puntúan los leads (auto = el agente pregunta y califica)"
@@ -185,7 +190,7 @@ class CRMConfig(BasePluginConfig):
             "¿Sigues interesado? Estoy aquí para ayudarte con lo que necesites."
         ),
         description="Mensaje de reenganche de leads ({name}, {interest})",
-        json_schema_extra={"mensaje": "whatsapp"},
+        json_schema_extra={"mensaje": "whatsapp", "oculto": True},
     )
     follow_up_quote_message: str = Field(
         default=(
@@ -251,12 +256,17 @@ class CRMConfig(BasePluginConfig):
     )
 
     # ---------------------------------------------------------------- intake de leads (ADR-0055 superseded)
+    # Captar leads es del core (ADR-0193 §6): estos campos y los del lead de arriba (`auto_create_lead`, reenganche y
+    # seguimiento) ya no los lee nadie de commerce y se editan en la config de Captar leads (`/api/v1/admin/captar-leads/config`).
+    # Quedan OCULTOS (no salen en el formulario y al guardar se conservan) solo para que `agent-core db copiar-leads`
+    # los copie a `lead_settings`; su retiro es otra HU.
     lead_intake_enabled: bool = Field(
         default=False,
         description=(
             "Aceptar leads desde landings externas por la API pública del pack "
             "(/api/pack/pack_commerce/leads/<slug>). Desactivado por defecto."
         ),
+        json_schema_extra={"oculto": True},
     )
     lead_intake_secret: SecretStr = Field(
         default=SecretStr(""),
@@ -264,6 +274,7 @@ class CRMConfig(BasePluginConfig):
             "Secreto compartido del intake. La landing lo envía en el header "
             "X-Intake-Secret. Vacío = intake sin configurar (503)."
         ),
+        json_schema_extra={"oculto": True},
     )
     lead_intake_allowed_origins: list[str] = Field(
         default_factory=list,
@@ -271,6 +282,7 @@ class CRMConfig(BasePluginConfig):
             "Orígenes permitidos para el formulario alojado (iframe). Vacío = sin "
             "restricción de origen."
         ),
+        json_schema_extra={"oculto": True},
     )
     lead_intake_turnstile: SecretStr = Field(
         default=SecretStr(""),
@@ -279,13 +291,17 @@ class CRMConfig(BasePluginConfig):
             "definido, el intake exige y valida el token (siteverify). Vacío = sin "
             "Turnstile."
         ),
+        json_schema_extra={"oculto": True},
     )
     lead_intake_default_status: str = Field(
-        default="nuevo", description="Estado inicial del lead capturado por intake"
+        default="nuevo", description="Estado inicial del lead capturado por intake",
+        json_schema_extra={"oculto": True},
     )
     lead_intake_default_interest: str = Field(
-        default="", description="Interés por defecto si el formulario no lo envía"
+        default="", description="Interés por defecto si el formulario no lo envía",
+        json_schema_extra={"oculto": True},
     )
     lead_intake_source: str = Field(
-        default="landing", description="Origen (source) guardado en el lead del intake"
+        default="landing", description="Origen (source) guardado en el lead del intake",
+        json_schema_extra={"oculto": True},
     )

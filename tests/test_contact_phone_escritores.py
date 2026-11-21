@@ -25,7 +25,7 @@ _ESCRITURA = re.compile(
 # archivo → cuántas escrituras se revisaron.
 ESCRITORES_REVISADOS = {
     "core/orchestrator/consumer.py": 4,  # alta del Customer (wa_id) y teléfono compartido en Telegram
-    "packages/pack-commerce/pack_commerce/api.py": 2,  # intake web, `channel == "web"`
+    "core/leads/intake.py": 2,  # intake web, `channel == "web"`
 }
 
 
