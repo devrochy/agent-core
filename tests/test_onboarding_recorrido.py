@@ -68,6 +68,47 @@ def test_con_un_agente_propio_no_abre_ni_avisa() -> None:
         assert actual.aplica and not actual.avisa and not actual.obliga
 
 
+@pytest.mark.parametrize("estado", ["en_curso", "omitido"])
+def test_con_solo_el_agente_de_la_bienvenida_sigue_avisando(estado: str) -> None:
+    """La bienvenida de 5 estaciones crea su agente al salir de la 1 (SPEC-49): ese agente no es ajeno y el
+    servidor no lo cuenta en `con_agente`, así que el aviso sigue de la 2 a la 5 (decisión del 2026-11-20)."""
+    crudo = _9(estado=estado, paso=3, agente_id="a-bienvenida", conexion_id="c-pruebas")
+    actual = r.desde_crudo(crudo, creado_en=NUEVO, desde=CORTE, con_agente=False)
+    assert (actual.agente_id, actual.avisa, actual.obliga) == ("a-bienvenida", True, False)
+
+
+@pytest.mark.parametrize("estado", ["en_curso", "omitido"])
+def test_un_agente_ajeno_a_la_bienvenida_apaga_el_aviso_aunque_haya_agente_de_la_bienvenida(
+    estado: str,
+) -> None:
+    """Un recorrido omitido (o en curso) cuyo negocio publica luego un agente por «Nuevo agente» deja de
+    insistir: ya eligió otro camino y los endpoints siguen para terminarlo a mano."""
+    crudo = _9(estado=estado, paso=2, agente_id="a-bienvenida")
+    actual = r.desde_crudo(crudo, creado_en=NUEVO, desde=CORTE, con_agente=True)
+    assert actual.aplica and (actual.avisa, actual.obliga) == (False, False)
+
+
+def test_completo_no_avisa_ni_obliga_con_o_sin_agente() -> None:
+    for con_agente in (False, True):
+        actual = r.desde_crudo(
+            _9(estado="completo", paso=5, agente_id="a"), creado_en=NUEVO, desde=CORTE, con_agente=con_agente
+        )
+        assert (actual.estado, actual.avisa, actual.obliga) == ("completo", False, False)
+
+
+def test_pendiente_sin_agente_obliga_y_no_avisa() -> None:
+    actual = r.desde_crudo(None, creado_en=NUEVO, desde=CORTE, con_agente=False)
+    assert (actual.estado, actual.obliga, actual.avisa) == ("pendiente", True, False)
+
+
+def test_la_consulta_de_agente_propio_excluye_al_coordinador_y_al_de_la_bienvenida() -> None:
+    """La regla vive en el SQL; su ejecución real la cubre el test de integración del endpoint."""
+    sql = r._AGENTE_PROPIO_SQL
+    assert "a.tenant_id = tenants.id" in sql
+    assert "a.deleted_at IS NULL" in sql and "a.kind <> 'core'" in sql
+    assert "a.id::text <> coalesce(tenants.settings #>> '{onboarding,agente_id}', '')" in sql
+
+
 @pytest.mark.parametrize("crudo", [None, [], "x", {"estado": "inventado"}, {"estado": 3}])
 def test_datos_mal_formados_se_leen_como_no_guardados(crudo: object) -> None:
     assert _r(crudo).estado == "pendiente"

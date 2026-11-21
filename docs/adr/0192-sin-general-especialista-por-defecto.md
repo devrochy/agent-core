@@ -1,6 +1,7 @@
 # ADR-0192 — Sin General: el Coordinador enruta a un especialista por defecto
 
 - **Estado:** aceptado (2026-11-14, código mergeado en agent-core#754/#757/#758/#761/#762; panel#253/#257/#258/#259/#260 y apk#249/#250/#251/#252)
+- **Nota de estado:** ADR-0205 (propuesto, 2026-11-20): enmienda §1 (el primer especialista ya no nace solo con la conexión), §2 (la conexión tiene release con solo el Coordinador) y §3 (sin especialistas, el foco es el Coordinador).
 - **Fecha:** 2026-11-12
 
 ## Contexto
