@@ -189,6 +189,8 @@ class Quote(TenantMixin, Base):
     applied_promotion_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), default=None)
     follow_up_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Oculta (HU-AOS-71, `crm_0021`): no se lee en el panel, la APK, el agente ni los crons.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class QuoteItem(TenantMixin, Base):
@@ -244,6 +246,9 @@ class Order(TenantMixin, Base):
     payment_status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     payment_status_reason: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Oculto (HU-AOS-71, `crm_0021`): no se lee en el panel, la APK, el agente ni los crons. Los índices
+    # únicos siguen completos: un pedido oculto conserva su número y su clave de idempotencia.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class OrderItem(TenantMixin, Base):

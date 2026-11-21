@@ -26,6 +26,7 @@ AGENTES_POR_PRESET = {
     "restaurante": ["ventas"],
     "cobranza": ["cobranza"],
     "suscripciones": ["ventas", "agenda", "suscripciones"],
+    "plataforma-suscripciones": ["suscripciones", "agenda"],
 }
 
 
@@ -36,6 +37,23 @@ def test_presets_existentes_son_v2_con_sus_agentes() -> None:
         assert manifest.es_v2 and manifest.agentes == agentes and manifest.version >= 2
         for plantilla in plantillas_del_preset(manifest):
             assert set(plantilla.habilidades) <= set(manifest.packs)
+
+
+def test_preset_de_la_plataforma_sin_comercio_y_fuera_del_alta() -> None:
+    """HU-AOS-71: el preset propio no trae comercio, Suscripciones capta leads y no se ofrece como tipo de
+    negocio al inscribirse; el genérico `suscripciones` no cambia."""
+    from pack_subscriptions.inscripcion import _verticales
+    from pack_subscriptions.procedimientos import _presets_con_sinonimos
+
+    propio = load_preset("plataforma-suscripciones")
+    assert "pack_commerce" not in propio.packs and "ventas" not in propio.playbooks
+    assert not propio.ofrecer_en_alta and not propio.sinonimos
+    assert all(p.captar_leads for p in plantillas_del_preset(propio))
+    generico = load_preset("suscripciones")
+    assert generico.ofrecer_en_alta and "pack_commerce" in generico.packs
+    assert "plataforma-suscripciones" not in {pid for pid, _ in _verticales()}
+    assert "plataforma-suscripciones" not in {p[0] for p in _presets_con_sinonimos()}
+    assert "suscripciones" in {pid for pid, _ in _verticales()}
 
 
 def test_manifiesto_sin_agentes_es_v1() -> None:

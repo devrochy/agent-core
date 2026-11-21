@@ -24,6 +24,7 @@ from core.shared.tenant import tenant_scope
 from core.tasks.cron_negocio import debe_correr, registrar
 from core.tasks.decorators import register_cron
 from pack_commerce.models import Quote
+from pack_commerce.vivos import cotizacion_viva
 
 log = get_logger(__name__)
 
@@ -127,6 +128,7 @@ async def _follow_up_quotes_del_negocio(tenant_id: uuid.UUID, config) -> tuple[i
                     Quote.created_at > max_age,
                     Quote.created_at > window_limit,
                     Quote.tenant_id == tenant_id,
+                    Quote.deleted_at.is_(None),
                 )
             )
         ).scalars().all()
@@ -150,7 +152,7 @@ async def _follow_up_quotes_del_negocio(tenant_id: uuid.UUID, config) -> tuple[i
             if not await send_to_conversation(quote.conversation_id, message):
                 continue
             async with get_session() as session:
-                fresh = await get_owned(session, Quote, quote.id, tenant_id)
+                fresh = await cotizacion_viva(session, quote.id, tenant_id)
                 if fresh is not None:
                     fresh.follow_up_sent_at = now
             total_sent += 1

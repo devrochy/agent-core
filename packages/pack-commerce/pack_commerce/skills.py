@@ -180,6 +180,7 @@ async def classify_customer(customer_id) -> str:  # type: ignore[no-untyped-def]
                     Order.customer_id == customer_id,
                     Order.status != "expirado",
                     Order.tenant_id == get_current_tenant_id(),
+                    Order.deleted_at.is_(None),
                 )
                 .order_by(Order.created_at)
             )
@@ -216,6 +217,7 @@ async def _active_customer_order(customer_id) -> Order | None:  # type: ignore[n
                 Order.customer_id == customer_id,
                 Order.status.in_(ORDER_STATUS_ACTIVE),
                 Order.tenant_id == get_current_tenant_id(),
+                Order.deleted_at.is_(None),
             )
             .order_by(Order.created_at.desc())
             .limit(1)
@@ -238,6 +240,7 @@ async def _quote_del_cliente(session, quote_id, customer_id) -> Quote | None:  #
                 Quote.id == quote_id,
                 Quote.customer_id == customer_id,
                 Quote.tenant_id == get_current_tenant_id(),
+                Quote.deleted_at.is_(None),
             )
         )
     ).scalar_one_or_none()
@@ -257,6 +260,7 @@ async def _cotizacion_vigente(session, conversation_id, customer_id) -> Quote | 
                 Quote.customer_id == customer_id,
                 Quote.conversation_id == conversation_id,
                 Quote.status.in_(QUOTE_STATUS_VIGENTE),
+                Quote.deleted_at.is_(None),
             )
             .order_by(Quote.created_at.desc())
             .limit(1)
@@ -320,6 +324,7 @@ async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUI
                     Order.tenant_id == tenant_id,
                     Order.customer_id == customer_id,
                     Order.conversation_id == conversation_id,
+                    Order.deleted_at.is_(None),
                 )
                 .order_by(Order.created_at.desc())
                 .limit(1)
@@ -422,6 +427,7 @@ async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  #
                 Order.id == order_id,
                 Order.customer_id == customer_id,
                 Order.tenant_id == get_current_tenant_id(),
+                Order.deleted_at.is_(None),
             )
         )
     ).scalar_one_or_none()
@@ -1949,6 +1955,7 @@ class OrderSkill(BaseSkill):
                         Order.customer_id == context.customer_id,
                         Order.public_order_number == public_number,
                         Order.tenant_id == tenant_id,
+                        Order.deleted_at.is_(None),
                     )
                 )
             ).scalar_one_or_none()

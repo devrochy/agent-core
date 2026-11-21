@@ -172,7 +172,7 @@ def _presets_con_sinonimos() -> list[tuple[str, str, str, list[str]]]:
     from core.presets import PresetError, list_presets
 
     try:
-        return [(p.id, p.nombre, p.descripcion, list(p.sinonimos)) for p in list_presets()]
+        return [(p.id, p.nombre, p.descripcion, list(p.sinonimos)) for p in list_presets() if p.ofrecer_en_alta]
     except PresetError:
         log.warning("tipos_de_negocio_no_disponibles", exc_info=True)
         return []

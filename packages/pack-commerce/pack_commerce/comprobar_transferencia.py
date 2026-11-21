@@ -127,7 +127,10 @@ async def comprobar(arguments: dict[str, Any], context: Any) -> dict[str, Any]:
         order = (
             await session.execute(
                 select(Order).where(
-                    Order.tenant_id == tenant_id, Order.id == order_uuid, Order.customer_id == context.customer_id
+                    Order.tenant_id == tenant_id,
+                    Order.id == order_uuid,
+                    Order.customer_id == context.customer_id,
+                    Order.deleted_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
