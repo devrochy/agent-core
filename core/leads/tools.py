@@ -46,7 +46,7 @@ GRUPO = "leads"
 
 # Datos que el cliente deja al pedir que lo contacten: son operativos del lead (HU-CRM-16).
 OPERATIVOS_DE_LEAD = ("name", "email", "phone", "crm_lead_id")
-_TOPES = {"name": 200, "email": 254, "phone": 40}
+_TOPES = {"name": 200, "email": 254, "phone": 40, "negocio": 200}
 _ESPACIOS = re.compile(r"\s+")
 
 
@@ -189,6 +189,10 @@ class LeadSkill(BaseSkill):
                         "email": {"type": "string"},
                         "phone": {"type": "string", "description": "Teléfono si lo dio"},
                         "interest": {"type": "string"},
+                        "negocio": {
+                            "type": "string",
+                            "description": "Nombre o tipo del negocio del cliente, solo si lo dijo",
+                        },
                         "status": {"type": "string", "enum": list(ETAPAS)},
                         "loss_reason": {
                             "type": "string",
@@ -270,7 +274,9 @@ class LeadSkill(BaseSkill):
                     return {"error": str(exc), "etapa_actual": lead.status}
             contacto = {k: _limpio(k, arguments.get(k)) for k in ("name", "email", "phone")}
             servicio.fijar_contacto(lead, **contacto, interest=arguments.get("interest"))
+            negocio = _limpio("negocio", arguments.get("negocio"))
+            servicio.fijar_negocio(lead, negocio)
             lead.last_activity_at = datetime.now(UTC)
             lead_id = str(lead.id)
-        await _guardar_en_perfil(context, contacto)
+        await _guardar_en_perfil(context, {**contacto, "negocio": negocio})
         return {"lead_id": lead_id, "status": "actualizado"}

@@ -158,6 +158,16 @@ def fijar_contacto(lead: Lead, *, name: Any = None, phone: Any = None, email: An
     return cambio
 
 
+def fijar_negocio(lead: Lead, negocio: str) -> bool:
+    """Pone en `custom["negocio"]` el negocio que dijo el cliente (vacío no borra). True si cambió."""
+    if not negocio or (lead.custom or {}).get("negocio") == negocio:
+        return False
+    # Diccionario nuevo: SQLAlchemy no detecta la mutación en sitio de un JSONB.
+    lead.custom = {**(lead.custom or {}), "negocio": negocio}
+    lead.last_activity_at = datetime.now(UTC)
+    return True
+
+
 # ------------------------------------------------------------------ entradas por ids (para los packs)
 async def completar_contacto(
     session: Any, tenant_id: uuid.UUID, customer_id: uuid.UUID, *, nombre: Any = None, email: Any = None,

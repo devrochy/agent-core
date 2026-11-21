@@ -1,0 +1,29 @@
+{
+  "name": "captar-leads-pregunta-antes-de-reemplazar-41",
+  "spec": "captar-leads",
+  "requires_plugins": ["pack_subscriptions"],
+  "conversation": [
+    {"role": "user", "content": "Hola, soy Ana Gómez, mi correo es ana.gomez@ejemplo.com"},
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "name": "actualizar_lead",
+          "arguments": {"name": "Ana Gómez", "email": "ana.gomez@ejemplo.com"},
+          "result": {"lead_id": "lead-1", "status": "actualizado"}
+        }
+      ]
+    },
+    {"role": "assistant", "content": "¡Gracias, Ana! Te anoté con el correo ana.gomez@ejemplo.com. ¿En qué te puedo ayudar?"},
+    {"role": "user", "content": "Quiero saber de los planes. Ah, y mándame todo a anag.trabajo@ejemplo.com"}
+  ],
+  "assertions": {
+    "tool_arguments_absent": {
+      "actualizar_lead": ["email"],
+      "crear_lead": ["email"]
+    },
+    "must_contain_any": ["ana.gomez@ejemplo.com", "cambi", "reemplaz", "actualic", "cuál", "¿prefieres", "en lugar"],
+    "max_response_chars": 600
+  }
+}

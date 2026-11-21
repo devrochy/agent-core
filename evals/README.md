@@ -22,6 +22,14 @@ Además de `conversation` y `assertions`, un escenario puede declarar:
   `connection_predicate` de las tools del core, como hace el loop. Por defecto va vacío, como un negocio sin
   conexiones, así que el request de los escenarios que no lo declaran no cambia.
 
+Además de `must_call_tool`, `must_not_call_tools`, `must_not_contain` y las demás, `assertions` acepta
+`tool_arguments_absent`: `{tool: [argumento, ...]}`. Falla si alguna llamada a esa tool trae alguno de esos argumentos
+con valor; sirve para afirmar que el agente no guardó un dato que el cliente no dio (HU-AOS-70, escenarios 40 y 41).
+
+Captar leads (del core, ADR-0193) se ofrece en el golden si el spec trae comercio, como antes de moverla, o si el spec
+del escenario trae el binding de sus acciones: `evals/specs/captar-leads.json` es un agente de Suscripciones sin
+comercio con la habilidad.
+
 Límite: el runner no arma el bloque del perfil del cliente, así que un escenario no puede probar que el cliente ya
 tiene teléfono (`ya_tiene_telefono`). Ese caso lo cubre el resultado de la tool en el historial.
 

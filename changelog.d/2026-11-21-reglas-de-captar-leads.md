@@ -1,0 +1,10 @@
+### Captar leads: reglas del agente y campo «negocio» (HU-AOS-70)
+
+- Playbook del kernel `captar-leads`: el agente confirma el dato con el cliente, pregunta antes de reemplazar uno que
+  contradice y nunca lo deduce. Entra al prompt de todo agente con alguna acción de Captar leads encendida, tenga o no
+  comercio (invariante 3: el texto vive en el `.md`).
+- `actualizar_lead` acepta `negocio` (el negocio del cliente): se guarda en `custom` del lead, sin migración, y se copia
+  al perfil con los `writeNamespaces` del agente.
+- Evals: aserción `tool_arguments_absent` en el golden, spec `captar-leads` (Suscripciones sin comercio) y escenarios
+  40 (no deduce datos) y 41 (pregunta antes de reemplazar el correo). Grabaciones del gate regrabadas.
+- Hay que republicar los agentes con Captar leads para que tomen el playbook.
