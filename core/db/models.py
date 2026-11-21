@@ -563,6 +563,15 @@ class Message(Base):
             unique=True,
             postgresql_where=text("external_message_id is not null"),
         ),
+        # Migración 0150 (H3): cola de salida pendiente, para el barrido y el orden por conversación.
+        Index(
+            "ix_messages_outbound_queued",
+            "tenant_id",
+            "conversation_id",
+            "created_at",
+            "id",
+            postgresql_where=text("direction = 'outbound' AND status = 'queued'"),
+        ),
         CheckConstraint(
             "status in ('queued','sent','delivered','read','failed')", name="ck_messages_status"
         ),
