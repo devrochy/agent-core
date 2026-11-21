@@ -342,6 +342,10 @@ async def test_el_agente_de_la_bienvenida_de_otro_negocio_no_cuenta(app_client) 
     h_b = await _persona(app_client, tid_b, "owner")
     agente_b = await _agente(app_client, h_b)
 
+    # Sin `agente_id` que lo excluya, el agente de B no apaga el aviso de A: se cuenta solo dentro del negocio.
+    await _guardar(tid_a, '{"estado": "omitido", "paso": 2, "pasos": 5}')
+    assert (await _recorrido(app_client, h_a))["avisar"] is True
+
     # A guarda (mal) el agente de B como el de su bienvenida: no lo vuelve propio ni ajeno; A no tiene
     # agentes y sigue avisando.
     await _guardar(tid_a, f'{{"estado": "omitido", "paso": 2, "pasos": 5, "agente_id": "{agente_b}"}}')
