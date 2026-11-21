@@ -326,23 +326,18 @@ async def test_backfill_cli_y_aislamiento() -> None:
         await backfill_presets_v2(preset_id="comercio", modules=_modules())
 
 
-async def test_apply_preset_en_negocio_v3_instala_los_agentes() -> None:
-    """El mismo `apply_preset` del alta y del CLI corre el paso de agentes en un negocio v3."""
+async def test_apply_preset_no_crea_agentes() -> None:
+    """ADR-0205 §1 (adenda): el `apply_preset` del alta y del CLI ya no crea especialistas; el dueño crea su
+    primer agente en la bienvenida. Los agentes del preset se aplican solo con `agent-core db presets-v2`."""
     from core.presets.apply import apply_preset
 
-    tid, cid = await _negocio()
+    tid, _cid = await _negocio()
     resultado = await apply_preset(tid, "comercio", sembrar_ejemplos=False)
-    assert resultado.agentes is not None
-    assert [(a["key"], a["estado"]) for a in resultado.agentes["agentes"]] == [("ventas", "creado")]
-    assert any(p.startswith("agente ventas") for p in resultado.pasos)
+    assert resultado.agentes is None
+    assert not any(p.startswith("agente ") for p in resultado.pasos)
+    assert await _sql(tid, "select count(*) from agents where key = 'ventas'") == [(0,)]
     preset = await _sql(tid, "select settings -> 'preset' from tenants where id = :t", t=tid)
-    assert preset[0][0]["id"] == "comercio" and preset[0][0]["agentes"]["creados"] == ["ventas"]
-    # Reaplicar conserva el registro de agentes y no crea nada.
-    otra = await apply_preset(tid, "comercio", sembrar_ejemplos=False)
-    assert [(a["key"], a["estado"]) for a in otra.agentes["agentes"]] == [("ventas", "ya_estaba")]
-    preset = await _sql(tid, "select settings -> 'preset' -> 'agentes' from tenants where id = :t", t=tid)
-    assert preset[0][0] is not None
-    assert str(cid) in resultado.agentes["releases"]
+    assert preset[0][0]["id"] == "comercio"
 
 
 async def test_agente_borrado_o_key_ajena_no_se_toca() -> None:

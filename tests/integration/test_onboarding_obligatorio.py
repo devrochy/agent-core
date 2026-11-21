@@ -393,7 +393,9 @@ async def test_finalizar_lo_valida_el_servidor_y_dejar_listo_publica_y_activa_si
     assert [(p["clave"], p["estado"]) for p in listo["pasos"]] == [
         ("conexion", "hecho"),
         ("publicar", "hecho"),
-        ("activar", "hecho"),
+        # El primer especialista de una conexión que atendía solo el Coordinador ya queda activo al publicarlo
+        # (adenda de ADR-0205 §3): «activar» lo encuentra hecho.
+        ("activar", "ya_estaba"),
     ]
     assert (listo["recorrido"]["agente_id"], listo["recorrido"]["conexion_id"]) == (agente, listo["conexion_id"])
     # Desde `pendiente` queda en curso en «Habilidades» (2 de 5), no en «Revisar y publicar».
