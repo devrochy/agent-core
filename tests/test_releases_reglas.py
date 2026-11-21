@@ -300,3 +300,16 @@ def test_playbook_y_flujo_salen_de_la_release(tmp_path: Any, monkeypatch: Any) -
     assert tono == "Texto congelado"
     assert identidad is not None  # sin override congelado: el default del core
     assert flujo is not None and any(s.id == "propia" for s in flujo.sections)
+
+
+def test_release_sin_especialistas_cuenta_como_retirada() -> None:
+    """ADR-0205 §4: `asignar` trata como retirada la release del episodio que no trae especialistas (atendía el
+    Coordinador) cuando ya no es la activa: la conversación pasa al primer especialista en el turno siguiente."""
+    from types import SimpleNamespace
+
+    from core.kernel.release_del_turno import _tiene_especialistas
+
+    solo_coordinador = SimpleNamespace(componentes=(SimpleNamespace(role="core"),))
+    con_ventas = SimpleNamespace(componentes=(SimpleNamespace(role="core"), SimpleNamespace(role="specialist")))
+    assert not _tiene_especialistas(solo_coordinador)
+    assert _tiene_especialistas(con_ventas)

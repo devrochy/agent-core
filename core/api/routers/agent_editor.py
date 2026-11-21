@@ -218,6 +218,8 @@ class PublishedConnection(BaseModel):
     release_id: uuid.UUID | None
     release_number: int | None
     release_created: bool | None
+    # ADR-0205 §4: la release del primer especialista de una conexión que atendía solo el Coordinador se activó.
+    release_activated: bool = False
     error: str | None
 
 
@@ -566,6 +568,7 @@ async def publish_to_connections(
                 release_id=c.release_id,
                 release_number=c.release_number,
                 release_created=c.release_created,
+                release_activated=c.release_activated,
                 error=c.error,
             )
             for c in resultado.connections

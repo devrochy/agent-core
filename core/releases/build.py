@@ -145,9 +145,13 @@ async def _componentes(
         ).all()
         if not any(rol == "core" for _i, _a, _k, rol, _d in instancias):
             raise ErrorDelBuild("sin_coordinador", "La conexión no tiene Coordinador.")
-        # ADR-0192 §2: sin un especialista habilitado por defecto no hay release (ni a medias).
-        if not any(rol == "specialist" and defecto for _i, _a, _k, rol, defecto in instancias):
-            raise ErrorDelBuild("sin_especialista", "La conexión no tiene un agente por defecto que atienda.")
+        # ADR-0205 §2 (enmienda ADR-0192 §2): sin especialistas la release lleva solo al Coordinador, que atiende;
+        # con especialistas, uno tiene que ser el por defecto (no hay release a medias).
+        especialistas = [defecto for _i, _a, _k, rol, defecto in instancias if rol == "specialist"]
+        if especialistas and not any(especialistas):
+            raise ErrorDelBuild(
+                "sin_especialista_por_defecto", "La conexión tiene agentes pero ninguno atiende por defecto."
+            )
         # ADR-0190 §5: ids de las habilidades ACTIVAS instaladas en cada agente (solo la referencia, nunca config).
         habilidades_por_agente: dict[uuid.UUID, list[str]] = {}
         for agente_id, pack_id in (

@@ -332,6 +332,11 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Release del turno, sticky por episodio (ADR-0117 §4). El turno (HU-AOS-15) ejecuta la versión congelada del especialista en foco y el
     # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
     asignacion = await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
+    # Lead base (ADR-0205 §7): en toda conversación real, antes de los cortes por pausa, cuota o presupuesto, y
+    # sin depender de que el foco tenga Captar leads. El aviso al dueño sí depende del foco (§9).
+    from core.leads.asegurar import asegurar_en_el_turno
+
+    await asegurar_en_el_turno(release_vigente.agente_del_turno(), customer, conversation)
     if asignacion is not None and asignacion.bloqueo is not None:
         # HU-ARCH-38: el especialista y el de por defecto están en pausa: sin LLM y sin respuesta.
         await bloquear(conversation, asignacion.bloqueo, status="silent")
@@ -340,6 +345,13 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # v3 sin release activa: falla cerrado, sin respuesta (ADR-0191). Ya se registró
         # `release_missing`; la release 1 llega al alta de la conexión.
         log.warning("turno_sin_release", conversation_id=str(conversation.id))
+        return None
+    foco_del_turno = release_vigente.agente_del_turno()
+    if foco_del_turno is not None and foco_del_turno.role == "core":
+        # Conexión atendida solo por el Coordinador (ADR-0205 §2–§3): sin especialistas el foco es el Coordinador.
+        # Hasta que exista su vista de recepción (HU-AOS-89) el turno sale en silencio, como sin release; el lead
+        # base ya quedó asegurado arriba.
+        log.info("turno_coordinador_sin_vista", conversation_id=str(conversation.id))
         return None
     # Lo compilado del agente en foco, una vez por versión (HU-AOS-35, adenda de ADR-0117): la
     # vista v2, el flujo de la release y los bloques fijos del prompt. None sin release o
@@ -440,10 +452,6 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Ficha de lo que cada módulo habilitado ya sabe del cliente (HU-CRM-14): acotada y tolerante a fallos.
     # Apagada por defecto: solo la trae el agente que encendió sus herramientas de datos del cliente.
     agente_del_turno = release_vigente.agente_del_turno()
-    # Captar leads (ADR-0193 §2): el lead del cliente existe antes de que el agente lo enriquezca.
-    from core.leads.asegurar import asegurar_en_el_turno
-
-    await asegurar_en_el_turno(agente_del_turno, customer, conversation)
     packs_del_agente = (
         set(agente_del_turno.packs)
         if agente_del_turno is not None and agente_del_turno.packs is not None

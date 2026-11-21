@@ -61,8 +61,9 @@ def elegir_foco(
     (2) si no, el especialista congelado como `is_default` de la conexión (HU-AOS-16; solo
         `release/2` lo trae: en una `release/1` todos vienen en False y el paso no aplica);
     (3) si no, el especialista cuya key es `routing.defaultAgent` del KernelSpec;
-    (4) si no, el único especialista. Sin especialista (o con varios y ninguno por defecto):
-    `ErrorDeRelease`. El Coordinador nunca atiende (ADR-0112 §1)."""
+    (4) si no, el único especialista. Con varios y ninguno por defecto: `ErrorDeRelease`.
+    Sin ningún especialista, el Coordinador (ADR-0205 §2–§3): la conexión atendida solo por él."""
+    agentes = list(agentes)
     especialistas = [a for a in agentes if a.role == "specialist"]
     if owner_instance_id is not None:
         dueno = next((a for a in especialistas if a.instance_id == owner_instance_id), None)
@@ -78,11 +79,12 @@ def elegir_foco(
         return elegido
     if len(especialistas) == 1:
         return especialistas[0]
-    raise ErrorDeRelease(
-        "sin_especialista_en_foco: la release no tiene un especialista por defecto"
-        if especialistas
-        else "sin_especialista: la release no tiene especialistas"
-    )
+    if not especialistas:
+        coordinador = next((a for a in agentes if a.role == "core"), None)
+        if coordinador is not None:
+            return coordinador
+        raise ErrorDeRelease("sin_especialista: la release no tiene especialistas ni Coordinador")
+    raise ErrorDeRelease("sin_especialista_en_foco: la release no tiene un especialista por defecto")
 
 
 @dataclass

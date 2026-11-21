@@ -74,13 +74,13 @@ async def test_el_handler_fuera_del_negocio_falla_sin_tocar_nada() -> None:
         await on_connection_release_1(connection_id=str(uuid.uuid4()))
 
 
-async def test_sin_especialista_por_defecto_no_hay_release_y_el_primero_que_llega_lo_es(app_client) -> None:
-    """ADR-0192 §1-2: el build falla `sin_especialista` si la conexión solo tiene el Coordinador, y el
-    primer especialista habilitado que se agrega queda por defecto aunque no se pida."""
+async def test_solo_con_el_coordinador_hay_release_y_el_primero_que_llega_es_el_por_defecto(app_client) -> None:
+    """ADR-0205 §2 (enmienda ADR-0192 §2): con solo el Coordinador la release se arma y lo lleva a él; el primer
+    especialista habilitado que se agrega queda por defecto aunque no se pida."""
     from test_instancias_por_conexion_api import _especialista, _instancias
 
     from core.agents.instancias import agregar_instancia
-    from core.releases.build import ErrorDelBuild, construir
+    from core.releases.build import construir
     from core.shared.tenant import tenant_scope
 
     tid, _cuenta, _phone, cid = await _con_agentes()
@@ -90,9 +90,14 @@ async def test_sin_especialista_por_defecto_no_hay_release_y_el_primero_que_lleg
         t=tid, c=cid,
     )
     async with tenant_scope(tid):
-        with pytest.raises(ErrorDelBuild) as error:
-            await construir(tid, cid, actor="test", fijadas={})
-    assert error.value.codigo == "sin_especialista"
+        solo_coordinador = await construir(tid, cid, actor="test", fijadas={})
+    roles = await _sql(
+        tid,
+        "select c ->> 'role' from connection_releases r, jsonb_array_elements(r.manifest -> 'components') c "
+        "where r.tenant_id = :t and r.id = :r",
+        t=tid, r=solo_coordinador.release_id,
+    )
+    assert roles == [("core",)]
 
     ventas = await _especialista(app_client, await api_headers(app_client, tid), "ventas")
     async with tenant_scope(tid):

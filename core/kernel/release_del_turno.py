@@ -139,6 +139,10 @@ def cubeta(canary_id: uuid.UUID, conversation_id: uuid.UUID) -> int:
     return int(digest[:8], 16) % 100
 
 
+def _tiene_especialistas(release: Any) -> bool:
+    return any(a.role == "specialist" for a in release.componentes)
+
+
 def decidir_destino(
     actual: uuid.UUID | None,
     activa: uuid.UUID,
@@ -351,7 +355,9 @@ async def asignar(
     nuevo = episodio is not None and episodio.nuevo
     retirada = False
     if actual is not None and actual not in (activa, canary) and not nuevo:
-        retirada = await _retirada(session, tenant_id, actual)
+        # ADR-0205 §4: una release sin especialistas (atendía el Coordinador) que dejó de ser la activa se trata
+        # como retirada: al publicar el primer especialista, la conversación pasa a él en el turno siguiente.
+        retirada = not _tiene_especialistas(del_episodio) or await _retirada(session, tenant_id, actual)
     destino, motivo = decidir_destino(
         actual, activa, canary, episodio_nuevo=nuevo, retirada=retirada,
         canary_percent=canary_percent, conversation_id=conversation_id,

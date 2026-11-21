@@ -570,7 +570,10 @@ async def test_el_lead_que_asegura_el_turno_avisa_con_destino_al_cliente(app_cli
     assert items[0]["data"]["lead_id"] == str(leads[0].id)
 
 
-async def test_un_agente_sin_captar_leads_no_asegura_lead_ni_avisa(app_client) -> None:
+@pytest.mark.aislamiento
+async def test_un_agente_sin_captar_leads_asegura_el_lead_base_sin_avisar(app_client) -> None:
+    """ADR-0205 §7 y §9: la fila base se crea en toda conversación real, aunque el foco no tenga Captar leads (un
+    cliente que escribe a Cobranza); el aviso «Lead nuevo» no sale."""
     from core.db.models import Conversation, Customer, Lead
     from core.db.session import get_session
     from core.leads.asegurar import asegurar_en_el_turno
@@ -583,12 +586,38 @@ async def test_un_agente_sin_captar_leads_no_asegura_lead_ni_avisa(app_client) -
         async with get_session() as session:
             cliente = await session.get(Customer, cliente_id)
             conv = await session.get(Conversation, conv_id)
-        assert await asegurar_en_el_turno(_agente(("escalate_to_human",)), cliente, conv) is False
-        assert await asegurar_en_el_turno(None, cliente, conv) is False  # sin release en el turno
+        assert await asegurar_en_el_turno(_agente(("escalate_to_human",)), cliente, conv) is True
+        assert await asegurar_en_el_turno(None, cliente, conv) is False  # ya existe: idempotente
         async with get_session() as session:
             leads = (await session.execute(select(Lead).where(Lead.customer_id == cliente_id))).scalars().all()
-    assert leads == []
+    assert len(leads) == 1
 
     h = await api_headers(app_client, tid, email=owner_email, password=PW)
     items = (await app_client.get(BASE, headers=h)).json()["items"]
     assert [i for i in items if i["event_key"] == "commerce.lead_nuevo"] == []
+
+
+@pytest.mark.aislamiento
+async def test_con_el_coordinador_en_foco_asegura_y_avisa(app_client) -> None:
+    """ADR-0205 §9: la conexión la atiende solo el Coordinador; el lead base se crea y el dueño recibe el aviso."""
+    from core.db.models import Conversation, Customer, Lead
+    from core.db.session import get_session
+    from core.leads.asegurar import asegurar_en_el_turno
+    from core.shared.tenant import tenant_scope
+
+    tid, _owner, owner_email = await _tenant_con_owner(uniq("nt-coord"))
+    cliente_id, conv_id = await _cliente_con_conversacion(tid)
+    coordinador = types.SimpleNamespace(role="core", tools=(), declarativas=())
+
+    async with tenant_scope(tid):
+        async with get_session() as session:
+            cliente = await session.get(Customer, cliente_id)
+            conv = await session.get(Conversation, conv_id)
+        assert await asegurar_en_el_turno(coordinador, cliente, conv) is True
+        async with get_session() as session:
+            leads = (await session.execute(select(Lead).where(Lead.customer_id == cliente_id))).scalars().all()
+    assert len(leads) == 1
+
+    h = await api_headers(app_client, tid, email=owner_email, password=PW)
+    items = [i for i in (await app_client.get(BASE, headers=h)).json()["items"] if i["event_key"] == "commerce.lead_nuevo"]
+    assert len(items) == 1

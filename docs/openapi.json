@@ -74364,6 +74364,11 @@
             ],
             "title": "Release Created"
           },
+          "release_activated": {
+            "type": "boolean",
+            "title": "Release Activated",
+            "default": false
+          },
           "error": {
             "anyOf": [
               {
