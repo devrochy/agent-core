@@ -400,6 +400,31 @@ async def test_el_seed_generico_del_core_encuentra_planes_json(tmp_path, monkeyp
         assert [p.codigo for p in await planes.listar(incluir_inactivos=True)] == ["FREE", "BASIC"]
 
 
+async def test_tenant_seed_siembra_planes_sin_catalog_json(tmp_path, monkeypatch) -> None:
+    """HU-AOS-71: solvershub no tiene comercio ni `catalog.json`; `tenant seed` igual siembra `planes.json`.
+    Antes el comando salía al no encontrar el catálogo y el negocio quedaba sin planes."""
+    import json
+
+    from pack_subscriptions import planes
+
+    from cli.commands.tenant import sembrar_negocio
+    from core import onboarding
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    slug = f"s-{uuid.uuid4().hex[:6]}"
+    carpeta = tmp_path / slug
+    carpeta.mkdir()
+    (carpeta / "planes.json").write_text(json.dumps(SEMBRADO), encoding="utf-8")
+    monkeypatch.setattr(onboarding, "tenant_dir", lambda s: tmp_path / s)
+    monkeypatch.setattr(onboarding, "_validate_slug", lambda s: None)
+    assert not (carpeta / "catalog.json").exists()
+    pasos = await sembrar_negocio(tid, slug)
+    assert "planes.json importado" in pasos
+    async with tenant_scope(tid):
+        assert [p.codigo for p in await planes.listar(incluir_inactivos=True)] == ["FREE", "BASIC"]
+
+
 # ============================================================================= consumer: alta y cambio con la misma referencia
 async def test_el_consumer_trata_cambio_de_plan_aunque_la_referencia_sea_la_misma(monkeypatch) -> None:
     """El `numero_publico` es el mismo en el alta y en el cambio: solo la bandera `cambio_de_plan` los distingue."""
