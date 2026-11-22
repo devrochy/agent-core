@@ -20,14 +20,19 @@ from sqlalchemy import select
 
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses_de
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.config import get_settings
 from core.db.session import get_session
+from core.gateway.conexion_canonica import verificar_antes_del_oauth
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
 router = APIRouter(prefix="/admin/meta", tags=["admin · wizard whatsapp"])
+# Alta de un número de WhatsApp: el canal y el tope `conexiones` del plan (ADR-0208 §8-9, HU-BILL-19).
+_PLAN_409 = plan_limit_responses_de("conexiones", canal=True)
 
 
 class WizardState(BaseModel):
@@ -194,7 +199,7 @@ class WizardSessionIn(BaseModel):
     restart: bool = False
 
 
-@router.post("/wizard/session", response_model=WizardSessionOut, status_code=201)
+@router.post("/wizard/session", response_model=WizardSessionOut, status_code=201, responses=_PLAN_409)
 async def wizard_session(
     payload: WizardSessionIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
@@ -219,11 +224,16 @@ async def wizard_session(
         )
         attempt = None
         if wizard.current_step in PRE_EXCHANGE_STEPS:
+            # Antes del popup: el tope de conexiones, sin lock, para no cortar al dueño después del OAuth
+            # (HU-BILL-19). El definitivo es el de `numero_para_conexion`, al guardar el número.
+            await verificar_antes_del_oauth(tenant_id, "whatsapp")
             attempt = await issue_attempt(wizard.id, principal.admin.id)
         elif wizard.current_step not in ("done", "register_number"):
             wizard = await complete_signup(wizard.id)
     except WizardError as exc:
         raise _wizard_api_error(exc) from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from exc
     return await _view_out(wizard, attempt=attempt)
 
 
@@ -297,7 +307,7 @@ def _graph_id(valor: str, campo: str) -> str | None:
     return valor
 
 
-@router.post("/wizard/exchange", response_model=WizardSessionOut)
+@router.post("/wizard/exchange", response_model=WizardSessionOut, responses=_PLAN_409)
 async def wizard_exchange(
     payload: WizardExchangeIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
@@ -342,6 +352,9 @@ async def wizard_exchange(
         )
     except WizardError as exc:
         raise _wizard_api_error(exc) from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        # El número no cabe en el plan (ADR-0208 §8): el guardado del número se deshizo.
+        raise plan_limit_error(exc) from exc
     except GraphError as exc:
         # Meta rechazó el canje (code inválido o vencido): hay que repetir el popup.
         log.warning("embedded_signup_canje_rechazado", wizard_id=str(payload.wizard_id), code=exc.code)
@@ -425,6 +438,9 @@ async def wizard_pin(
         view = await complete_signup(payload.wizard_id)
     except WizardError as exc:
         raise _wizard_api_error(exc) from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        # El número no cabe en el plan (ADR-0208 §8): el guardado del número se deshizo.
+        raise plan_limit_error(exc) from exc
     except GraphError as exc:
         raise ApiError.bad_request(exc.message[:200], "meta_error") from exc
     return await _view_out(view)
@@ -467,7 +483,7 @@ class WizardByokOut(BaseModel):
     reused: bool = False
 
 
-@router.post("/wizard/byok", response_model=WizardByokOut, status_code=201)
+@router.post("/wizard/byok", response_model=WizardByokOut, status_code=201, responses=_PLAN_409)
 async def wizard_byok(
     payload: WizardByokIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
@@ -506,6 +522,8 @@ async def wizard_byok(
         )
     except ByokError as exc:
         raise ApiError.bad_request(str(exc)[:200], "byok_error") from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from exc
 
     status = connection.status
     registration_error: str | None = None
@@ -557,7 +575,7 @@ class ManualConnectionIn(BaseModel):
     business_id: str = ""
 
 
-@router.post("/manual", status_code=201)
+@router.post("/manual", status_code=201, responses=_PLAN_409)
 async def manual_connection(
     payload: ManualConnectionIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
@@ -599,6 +617,8 @@ async def manual_connection(
         connection_id = await _create_manual_connection(principal, payload, app_id, waba_id, numero)
     except MetaAssetError as exc:
         raise ApiError.bad_request(exc.message[:200], exc.code) from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from exc
 
     await meta_token_store.put_token(
         connection_id, TOKEN_KIND, payload.business_id.strip() or str(connection_id), token,

@@ -28,6 +28,7 @@ from core.config import get_settings
 from core.db.models import IgAccount, MetaConnection, utcnow
 from core.db.session import get_session
 from core.gateway import meta_token_store
+from core.gateway.conexion_canonica import exigir_cupo_de_activo, verificar_antes_del_oauth
 from core.gateway.meta_asset_claims import MetaAssetError, claim_messaging_assets
 from core.gateway.meta_errors import GraphError
 from core.gateway.meta_instagram import (
@@ -101,6 +102,8 @@ async def iniciar_login(tenant_id: uuid.UUID, admin_id: uuid.UUID) -> LoginInici
     settings = get_settings()
     _exigir_login(settings)
     await exigir_plan(tenant_id)
+    # Antes de abrir Instagram: el tope de conexiones, sin lock (HU-BILL-19). Levanta `QuotaExceeded`.
+    await verificar_antes_del_oauth(tenant_id, "instagram")
     state = await _iniciar_intento(tenant_id, admin_id, CANAL_DEL_INTENTO)
     return LoginIniciado(url=url_de_autorizacion(state), expires_in=INTENTO_TTL_S)
 
@@ -194,6 +197,8 @@ async def _guardar_cuenta(
     religa la conexión canónica (`activar_ruta`): un alta que falla a la mitad no toca lo que ya funcionaba."""
     async with get_session() as session:
         await claim_messaging_assets(session, tenant_id, ig_user_id=ig_user_id)
+        # El plan antes de escribir la cuenta y su token (HU-BILL-19); el definitivo es el de `activar_ruta`.
+        await exigir_cupo_de_activo(session, tenant_id, "instagram", ig_user_id)
         cuenta = await session.get(MetaConnection, connection_id)
         if cuenta is None or cuenta.deleted_at is not None:
             raise MetaAssetError(

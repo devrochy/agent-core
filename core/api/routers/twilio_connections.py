@@ -19,6 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses_de
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.db.session import get_session
 from core.gateway.twilio import alta as svc
 from core.gateway.twilio import bandera, sandbox
@@ -193,6 +195,10 @@ async def descubrir(
     status_code=201,
     responses={
         **_ERRORES,
+        409: {
+            "description": (_ERRORES.get(409, {}).get("description", "") + " "
+                            + plan_limit_responses_de("conexiones")[409]["description"]).strip()
+        },
         200: {"description": "El número ya estaba conectado en este negocio: se actualizó."},
     },
 )
@@ -218,6 +224,9 @@ async def conectar(
         )
     except svc.AltaError as exc:
         raise _api_error(exc) from None
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        # Tope `conexiones` (ADR-0208 §8, HU-BILL-19): no se guardó nada.
+        raise plan_limit_error(exc) from None
     if not resultado.created:
         response.status_code = 200
     return _out(resultado)
@@ -278,7 +287,8 @@ async def capacidades(
             "description": "Twilio no está habilitado para el negocio o el sandbox no está en este ambiente."
         },
         409: {
-            "description": "`cuenta_en_otro_negocio`, `conexion_pausada`, `twilio_account_suspended` o `conflicto`."
+            "description": "`cuenta_en_otro_negocio`, `conexion_pausada`, `twilio_account_suspended`, `conflicto` o "
+            "`plan_limit_conexiones` (`error.details = {metric, used, limit}`, HU-BILL-19)."
         },
         422: {"description": "`twilio_credentials_invalid` o `join_code_invalido`."},
         502: _ERRORES[502],
@@ -310,6 +320,9 @@ async def conectar_sandbox(
     except svc.AltaError as exc:
         sandbox.contar("alta_rechazada")
         raise _api_error(exc) from None
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        sandbox.contar("alta_rechazada")
+        raise plan_limit_error(exc) from None
     await _auditar(principal, "twilio.sandbox_connected", resultado.connection_id)
     if not resultado.created:
         response.status_code = 200

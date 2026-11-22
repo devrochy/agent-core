@@ -149,8 +149,9 @@ async def _conexiones_por_numero(
                 await session.execute(
                     text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"meta_asset:phone:{phone_number_id}"}
                 )
+                # Reconstruye lo que el negocio ya tenía: no se mide el plan (HU-BILL-19).
                 resultado = await asegurar_conexion_del_numero(
-                    session, tenant_id, phone_number_id, cuenta, aplicar=not reporte.dry_run
+                    session, tenant_id, phone_number_id, cuenta, aplicar=not reporte.dry_run, exigir_plan=False
                 )
                 reporte.numeros[resultado] += 1
                 if resultado == "choque_manual":

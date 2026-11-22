@@ -19,6 +19,9 @@ from typing import Any
 from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.billing.canales_del_plan import exigir_alta_de_conexion
+from core.billing.enforcement import lock_growth
+from core.billing.metrics import metrica_de_canal
 from core.config import get_settings
 from core.db.models import ChannelConnection, utcnow
 from core.db.session import get_session
@@ -368,7 +371,16 @@ async def save_connection_in(
             "Ese número ya está conectado con el asistente de WhatsApp: adminístralo desde esa conexión."
         )
 
+    # Plan (ADR-0208 §8-9, HU-BILL-19): una fila que pasa a contar (nueva, revivida, reactivada o que cambia de
+    # canal) exige el canal del plan y su tope en esta transacción. El lock va después del candado del activo
+    # (`claim_assets`) y antes de buscar la fila existente, para que esa lectura también quede serializada.
+    metrica = metrica_de_canal(ctype.channel)
+    if metrica is not None:
+        await lock_growth(tid, metrica, session=session)
+
     if connection is not None:
+        if not (connection.active and connection.channel == ctype.channel):
+            await exigir_alta_de_conexion(session, tid, ctype.channel)
         connection.label = label
         connection.type_id = type_id
         connection.category = ctype.category
@@ -399,6 +411,10 @@ async def save_connection_in(
         ).scalars().first()
         if existing is not None and administrada_aparte(existing):
             existing = None  # una canónica borrada no se convierte en manual
+        if existing is None or not (
+            existing.deleted_at is None and existing.active and existing.channel == ctype.channel
+        ):
+            await exigir_alta_de_conexion(session, tid, ctype.channel)
         if existing is not None:
             revivida = existing.deleted_at is not None
             existing.label = label
@@ -459,10 +475,14 @@ async def _instancias_de_la_nueva(session: Any, tenant_id: uuid.UUID, connection
 
 
 async def set_active(connection_id: uuid.UUID, active: bool) -> None:
+    """Pausa o reanuda una conexión manual. Reanudar una pausada es un alta para el plan (ADR-0208 §8): exige
+    el canal y el tope en esta transacción (`QuotaExceeded` / `CanalNoIncluido`); pausar nunca se bloquea."""
     async with get_session() as session:
         connection = await session.get(ChannelConnection, connection_id)
         if connection is None or administrada_aparte(connection):
             return
+        if active and not connection.active and connection.deleted_at is None:
+            await exigir_alta_de_conexion(session, connection.tenant_id, connection.channel)
         connection.active = active
         if not active:
             connection.is_primary = False
@@ -487,6 +507,9 @@ async def set_primary(connection_id: uuid.UUID) -> None:
                 )
             )
         ).scalars().all()
+        if not target.active and target.deleted_at is None:
+            # Marcarla principal la reanuda: mismo criterio que `set_active`.
+            await exigir_alta_de_conexion(session, target.tenant_id, target.channel)
         for row in rows:
             row.is_primary = row.id == connection_id
         target.active = True

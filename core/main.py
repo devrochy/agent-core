@@ -24,6 +24,7 @@ from core.admin.permissions import effective_access, pack_prefixes, required_sec
 from core.admin.views import router as admin_router
 from core.api import api_router
 from core.api.errors import ApiError, api_error_handler, validation_error_handler
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.config import get_settings, verificar_clave_secreta
 from core.gateway.telegram.webhook import router as telegram_webhook_router
 from core.gateway.twilio.webhook import router as twilio_webhook_router
@@ -114,6 +115,20 @@ async def acceso_error_handler(_request: Request, exc: AccesoError) -> JSONRespo
 
 
 app.add_exception_handler(AccesoError, acceso_error_handler)
+
+
+async def plan_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Red de seguridad de los topes del plan (HU-BILL-19): un `QuotaExceeded` o `PlanNoIncluye` que llega
+    hasta aquí sin que su ruta lo tradujera sale como el 409 de `plan_limit_error`, no como un 500. Las rutas
+    lo atrapan ellas (y lo documentan en su OpenAPI); esto cubre los caminos profundos del panel clásico."""
+    from core.api.plan_limits import plan_limit_error
+
+    log.info("plan_error_sin_traducir", path=request.url.path, error=type(exc).__name__)
+    return await api_error_handler(request, plan_limit_error(exc))  # type: ignore[arg-type]
+
+
+app.add_exception_handler(QuotaExceeded, plan_error_handler)
+app.add_exception_handler(PlanNoIncluye, plan_error_handler)
 
 app.include_router(webhooks_router)
 # WhatsApp vía Twilio (ADR-0186): `/webhooks/twilio/{public_id}/inbound|status`.

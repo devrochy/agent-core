@@ -10,7 +10,7 @@ Planes v3 por créditos (D-79, SPEC-51, ADR-0208, HU-BILL-18): mismos `plan_id`,
 créditos nuevos. El crédito mensual (`monthly_credits`) es el único tope de consumo: los topes de
 volumen de v1 (`conversaciones`, audio, OCR, `mensajes`, `costo_llm_usd`) y `plugins` salieron del
 registro de métricas. Lo que queda en `limits` son topes estructurales, que solo bloquean un alta
-(clientes, agentes, colaboradores y, en el pack de conocimiento, documentos y MB).
+(clientes, agentes, colaboradores, conexiones, correos y, en el pack de conocimiento, documentos y MB).
 
 `features` (ADR-0208 §9, ADR-0209): `canales` lista con el vocabulario de
 `ChannelConnection.channel` todos los canales conversacionales del plan; `nivel_ia`, `byok`,
@@ -81,6 +81,9 @@ PLANS: tuple[Plan, ...] = (
             "clientes": 100,
             "agentes": 1,
             "colaboradores": 2,
+            # Topes estructurales de canales (ADR-0208 §8, HU-BILL-19).
+            "conexiones": 1,
+            "correos": 0,
             # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
             "documentos": 3,
             "conocimiento_mb": 10,
@@ -107,6 +110,8 @@ PLANS: tuple[Plan, ...] = (
             "clientes": 1_000,
             "agentes": 2,
             "colaboradores": 5,
+            "conexiones": 2,
+            "correos": 1,
             "documentos": 20,
             "conocimiento_mb": 100,
         },
@@ -132,6 +137,8 @@ PLANS: tuple[Plan, ...] = (
             "clientes": 5_000,
             "agentes": 5,
             "colaboradores": 15,
+            "conexiones": 6,
+            "correos": 3,
             "documentos": 100,
             "conocimiento_mb": 500,
         },
@@ -157,6 +164,8 @@ PLANS: tuple[Plan, ...] = (
             "clientes": None,
             "agentes": None,
             "colaboradores": 50,
+            "conexiones": 20,
+            "correos": 10,
             "documentos": 500,
             "conocimiento_mb": 2_000,
         },
@@ -183,6 +192,18 @@ FREE_PLAN_ID = "free"
 
 def get_plan(plan_id: str) -> Plan | None:
     return PLANS_BY_ID.get(plan_id)
+
+
+def plan_alcanza(plan_actual: str | None, plan_minimo: str | None) -> bool:
+    """¿El plan `plan_actual` cubre a `plan_minimo`? Orden del catálogo (`sort_order`): free < basic <
+    premium < empresarial. Un `plan_minimo` vacío o desconocido no exige nada; un `plan_actual`
+    desconocido no alcanza (quien llama decide qué hacer sin suscripción, ver
+    `habilidades_del_plan`)."""
+    requerido = get_plan(plan_minimo) if plan_minimo else None
+    if requerido is None:
+        return True
+    actual = get_plan(plan_actual) if plan_actual else None
+    return actual is not None and actual.sort_order >= requerido.sort_order
 
 
 def public_plans() -> list[Plan]:
@@ -253,6 +274,7 @@ __all__ = [
     "PLANS_BY_ID",
     "Plan",
     "get_plan",
+    "plan_alcanza",
     "plan_limits",
     "public_plans",
     "sync_plans",

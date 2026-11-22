@@ -297,7 +297,7 @@ def _pasos_de_habilidades(settings: Mapping[str, Any], habilitadas: set[str]) ->
 def _requisito_del_preset(preset_id: str, plan_actual: str) -> reglas.RequisitoDePreset | None:
     """Nombre del preset y el plan que necesita (el mayor entre su `plan_minimo` y el
     `min_plan` de sus packs, igual que `apply_preset`), y si el plan actual alcanza."""
-    from core.billing.plans import get_plan
+    from core.billing.plans import get_plan, plan_alcanza
     from core.plugin_manager import plugin_manager
     from core.presets import PresetError, load_preset
 
@@ -314,8 +314,7 @@ def _requisito_del_preset(preset_id: str, plan_actual: str) -> reglas.RequisitoD
     if not planes:
         return None
     requerido = max(planes, key=lambda plan: plan.sort_order)
-    actual = get_plan(plan_actual)
-    alcanza = actual is not None and actual.sort_order >= requerido.sort_order
+    alcanza = plan_alcanza(plan_actual, requerido.id)
     return reglas.RequisitoDePreset(nombre=manifest.nombre, plan_minimo=requerido.name, alcanza=alcanza)
 
 

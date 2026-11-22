@@ -17,8 +17,11 @@ from pydantic import BaseModel, Field, SecretStr
 
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses_de
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.config import get_settings
 from core.gateway import meta_messenger_alta as alta
+from core.gateway.conexion_canonica import verificar_antes_del_oauth
 
 router = APIRouter(prefix="/admin/meta/messenger", tags=["admin · messenger"])
 
@@ -111,23 +114,22 @@ async def messenger_state(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> MessengerState:
     """Si el alta puede completarse aquí (app de Meta configurada y plan que incluye Messenger)."""
-    from core.billing.enforcement import subscription_overview
+    from core.billing.canales_del_plan import canal_permitido
 
     tenant_id = _negocio(principal)
     settings = get_settings()
     faltan = alta.faltan_para_messenger(settings)
-    resumen = await subscription_overview(tenant_id)
     return MessengerState(
         meta_configured=not faltan,
         app_id=settings.meta_app_id or "",
         config_id=alta.config_id_de_messenger(settings),
         graph_api_version=settings.graph_api_version,
         missing_settings=faltan,
-        plan_includes=alta.plan_incluye_messenger(resumen.plan_id),
+        plan_includes=await canal_permitido(tenant_id, "messenger"),
     )
 
 
-@router.post("/attempt", response_model=AttemptOut, status_code=201)
+@router.post("/attempt", response_model=AttemptOut, status_code=201, responses=plan_limit_responses_de("conexiones", canal=True))
 async def messenger_attempt(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> AttemptOut:
@@ -136,8 +138,12 @@ async def messenger_attempt(
     tenant_id = _negocio(principal)
     try:
         await alta.exigir_plan(tenant_id)
+        # Antes del popup: el tope de conexiones, sin lock, para no cortar al dueño después del OAuth (HU-BILL-19).
+        await verificar_antes_del_oauth(tenant_id, "messenger")
     except alta.MessengerAltaError as exc:
         raise _traducir(exc) from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from exc
     return AttemptOut(
         attempt=await alta.iniciar_intento(tenant_id, principal.admin.id), expires_in=alta.INTENTO_TTL_S
     )

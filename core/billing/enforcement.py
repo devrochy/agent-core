@@ -44,6 +44,19 @@ class QuotaExceeded(Exception):
         super().__init__(f"Cuota agotada: {metric} ({used}/{limit})")
 
 
+class PlanNoIncluye(Exception):
+    """El plan del negocio no incluye un canal o una habilidad (ADR-0208 §9-10). Recuperable: el caller
+    responde 409 con `code` (`plan_channel_not_included`, `plan_plugin_not_included`) y `details`, sin
+    escribir nada. Las subclases viven en `canales_del_plan` y `habilidades_del_plan`."""
+
+    code = "plan_not_included"
+
+    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+        self.message = message
+        self.details = dict(details or {})
+        super().__init__(message)
+
+
 @dataclass(frozen=True)
 class QuotaDecision:
     allowed: bool
@@ -122,7 +135,7 @@ async def enforce_metric(tenant_id: uuid.UUID, key: str, *, session=None) -> Non
 # Métricas estructurales de D-35 (ADR-0142): se cuentan en vivo y solo bloquean CRECER. Un
 # negocio que ya está por encima del tope (plan bajado, catálogo nuevo) sigue operando igual;
 # lo único que se rechaza es la siguiente unidad.
-GROWTH_METRICS = ("agentes", "colaboradores")
+GROWTH_METRICS = ("agentes", "colaboradores", "conexiones", "correos")
 
 
 async def lock_growth(tenant_id: uuid.UUID, key: str, *, session) -> None:

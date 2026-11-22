@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
+from core.billing.habilidades_del_plan import exigir_min_plan
 from core.db.models import PluginConfig
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
@@ -152,7 +153,12 @@ async def asegurar_habilidades(
 
     Un pack que no activa (le falta configuración) sigue y queda en `config_pendiente`: no aporta tools mientras
     no esté activo (el runtime intersecta con lo activo) y el dueño lo configura en Habilidades (`requirements[]`,
-    ADR-0155). NO valida `min_plan` (decisión del dueño). Corre dentro del `tenant_scope` del negocio.
+    ADR-0155). Corre dentro del `tenant_scope` del negocio.
+
+    **Exige el `min_plan` de cada pack pedido** (D-79, ADR-0208 §10, HU-BILL-19), también de los que el negocio ya
+    tiene en otro agente: quien llama instala lo pedido en un agente, y una habilidad por encima del plan se conserva
+    donde está pero no se instala en otro. Si no alcanza: `HabilidadNoIncluida` (409 `plan_plugin_not_included`) ANTES
+    de activar o configurar nada. Un negocio sin suscripción no se bloquea (`billing.habilidades_del_plan`).
     """
     from core.agents.instalaciones_agente import packs_instalados
 
@@ -164,6 +170,7 @@ async def asegurar_habilidades(
         raise HabilitacionError(
             "pack_no_instalado", sin_modulo, "Esta habilidad no está instalada en este despliegue."
         )
+    await exigir_min_plan(tenant_id, pedidos)
     instalados = await packs_instalados(tenant_id, con_core=False)
     ya = tuple(p for p in pedidos if p in instalados)
     nuevos = [p for p in pedidos if p not in instalados]

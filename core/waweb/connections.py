@@ -15,6 +15,8 @@ from typing import Any
 
 from sqlalchemy import select
 
+from core.billing.canales_del_plan import exigir_alta_de_conexion
+from core.billing.enforcement import lock_growth
 from core.db.models import ChannelConnection, WaWebSession, utcnow
 from core.db.session import get_session
 from core.shared.crypto import get_secret_box
@@ -29,6 +31,8 @@ WAWEB_PROVIDER = "waweb"
 WAWEB_TYPE_ID = "whatsapp_waweb"
 WAWEB_CATEGORY = "comunicacion"
 WAWEB_LABEL = "WhatsApp (vínculo por QR)"
+# El vínculo por QR es WhatsApp para el plan (ADR-0208 §9).
+WAWEB_CHANNEL = "whatsapp"
 
 
 @dataclass(frozen=True)
@@ -110,10 +114,16 @@ async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
     fila —viva o borrada lógicamente— se REUSA (reactivándola), nunca se crea
     otra: dos conexiones con el mismo `external_id` confunden al connector y
     dejan el QR sin mostrarse (incidente 2026-10-04).
+
+    Crear, revivir o reactivar la fila es un alta para el plan (ADR-0208 §8-9, HU-BILL-19): exige
+    `whatsapp` en el plan y el tope `conexiones` en la misma transacción (`QuotaExceeded` /
+    `CanalNoIncluido`, sin escribir nada). La fila viva y activa se devuelve sin medir.
     """
     external_id = f"waweb:{tenant_id}"
     async with tenant_scope(tenant_id):
         async with get_session() as session:
+            # El lock del tope antes de buscar la fila: dos aperturas del QR a la vez no crean dos.
+            await lock_growth(tenant_id, "conexiones", session=session)
             existing = (
                 await session.execute(
                     select(ChannelConnection)
@@ -127,24 +137,20 @@ async def get_or_create_connection(tenant_id: uuid.UUID) -> ChannelConnection:
                 )
             ).scalars().first()
             if existing is not None:
-                changed = False
                 revivida = existing.deleted_at is not None
-                if revivida:
+                if revivida or not existing.active:
+                    await exigir_alta_de_conexion(session, tenant_id, WAWEB_CHANNEL)
                     existing.deleted_at = None
-                    changed = True
-                if not existing.active:
                     existing.active = True
-                    changed = True
-                if changed:
                     await session.flush()
                 if revivida:
                     await _instancias_de_la_nueva(session, tenant_id, existing.id)
                 return existing
 
-        async with get_session() as session:
+            await exigir_alta_de_conexion(session, tenant_id, WAWEB_CHANNEL)
             connection = ChannelConnection(
                 tenant_id=tenant_id,
-                channel="whatsapp",
+                channel=WAWEB_CHANNEL,
                 provider=WAWEB_PROVIDER,
                 type_id=WAWEB_TYPE_ID,
                 category=WAWEB_CATEGORY,
@@ -251,8 +257,30 @@ def _risk_ok(row: WaWebSession) -> bool:
 
 
 async def session_view(tenant_id: uuid.UUID) -> dict[str, Any]:
-    """Estado completo para la vista del panel."""
-    conn, wa_session = await get_or_create_session(tenant_id)
+    """Estado completo para la vista del panel. Solo lee: verlo no crea ni reactiva la conexión (eso es un alta
+    para el plan, HU-BILL-19, y la hace `accept_risk`). Sin conexión viva devuelve el estado de una sin vincular; una
+    pausada muestra su sesión tal cual, sin reanudarla."""
+    async with tenant_scope(tenant_id):
+        conn = await get_active_connection(tenant_id)
+    if conn is None:
+        return {
+            "connection_id": None,
+            "status": "pending_qr",
+            "jid": None,
+            "phone": None,
+            "push_name": None,
+            "business_name": None,
+            "platform": None,
+            "linked_at": None,
+            "last_connected_at": None,
+            "last_error": None,
+            "risk_ok": False,
+            "risk_ack_at": None,
+            "qr": None,
+            "policy": await load_policy(tenant_id),
+            "risk_version": RISK_ACK_VERSION,
+        }
+    conn, wa_session = await get_or_create_session(tenant_id, conn)
     risk_ok = _risk_ok(wa_session)
     qr = await handoff.read_qr(str(tenant_id)) if risk_ok else None
     policy: WaWebPolicy = await load_policy(tenant_id)

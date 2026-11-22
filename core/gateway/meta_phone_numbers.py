@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.db.models import PhoneNumber, WabaAccount, utcnow
 from core.db.session import get_session
 from core.gateway.meta_graph import graph_fetch
@@ -157,9 +158,19 @@ async def sync_phone_numbers(
                     continue
                 # Alta como las demás (ADR-0115 §6): la fila del número, su conexión canónica y
                 # sus instancias si el negocio ya tiene agentes, en esta misma transacción.
-                nuevo, _ = await numero_para_conexion(
-                    session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_account_id
-                )
+                # Un número nuevo de la WABA es una conexión nueva (ADR-0208 §8): si el plan no da el cupo, no
+                # se guarda y el resto del sync sigue (SAVEPOINT: no queda la fila del número sin su canónica).
+                try:
+                    async with session.begin_nested():
+                        nuevo, _ = await numero_para_conexion(
+                            session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_account_id
+                        )
+                except (QuotaExceeded, PlanNoIncluye) as exc:
+                    log.info(
+                        "sync_numero_fuera_del_plan", tenant_id=str(tenant_id), phone_number_id=phone_number_id,
+                        motivo=getattr(exc, "metric", None) or getattr(exc, "code", None),
+                    )
+                    continue
                 nuevo.display_phone_number = item.get("display_phone_number")
                 nuevo.verified_name = item.get("verified_name")
                 nuevo.quality_rating = item.get("quality_rating")
@@ -175,10 +186,11 @@ async def sync_phone_numbers(
                     from core.gateway.meta_asset_claims import MetaAssetError, numero_para_conexion
 
                     try:
-                        await numero_para_conexion(
-                            session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_account_id
-                        )
-                    except MetaAssetError:
+                        async with session.begin_nested():
+                            await numero_para_conexion(
+                                session, tenant_id, connection_id, phone_number_id, waba_account_id=waba_account_id
+                            )
+                    except (MetaAssetError, QuotaExceeded, PlanNoIncluye):
                         continue
                 existing.display_phone_number = item.get("display_phone_number")
                 existing.verified_name = item.get("verified_name")

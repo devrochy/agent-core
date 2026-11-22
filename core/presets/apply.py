@@ -61,10 +61,13 @@ def _rango(plan_id: str) -> int:
 
 
 def _validar_plan(manifest: PresetManifest, plan: Any, modules: dict[str, Any]) -> None:
-    requerido = max(
-        [_rango(manifest.plan_minimo), *(_rango(getattr(m, "min_plan", "free")) for m in modules.values())]
-    )
-    if plan is None or plan.sort_order < requerido:
+    from core.billing.plans import plan_alcanza
+
+    pedidos = [manifest.plan_minimo, *(getattr(m, "min_plan", "free") for m in modules.values())]
+    for pedido in pedidos:
+        _rango(pedido)  # un plan desconocido en el preset o en un pack es un error del preset
+    # La misma comparación que habilitar una habilidad en un agente (`billing.habilidades_del_plan`, HU-BILL-19).
+    if plan is None or not all(plan_alcanza(plan.id, pedido) for pedido in pedidos):
         nombre = plan.id if plan else "sin plan"
         raise PresetError(
             f"El preset {manifest.id} necesita un plan más alto (plan actual: {nombre})."

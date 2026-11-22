@@ -225,6 +225,11 @@ async def add_number(
     if connection is None or waba is None or creds is None:
         return "No hay conexión/WABA lista todavía"
 
+    # Un número nuevo es una conexión nueva (ADR-0208 §8, HU-BILL-19): se mide ANTES de crearlo en Meta, sin lock
+    # (levanta `QuotaExceeded`, que traduce quien llama). El definitivo es el de `numero_para_conexion`.
+    from core.billing.canales_del_plan import verificar_alta_de_conexion
+
+    await verificar_alta_de_conexion(tenant_id, "whatsapp")
     try:
         await add_phone_number(
             waba.waba_id,

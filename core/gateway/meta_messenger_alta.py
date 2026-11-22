@@ -30,6 +30,13 @@ from typing import Any
 
 from sqlalchemy import select
 
+from core.billing.canales_del_plan import (
+    CanalNoIncluido,
+    codigo_y_mensaje,
+    exigir_canal,
+    plan_incluye_canal,
+)
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.config import get_settings
 from core.db.models import FbPage, MetaConnection, utcnow
 from core.db.session import get_session
@@ -122,30 +129,19 @@ class ResultadoConexion:
 
 
 # ------------------------------------------------------------------ plan
-def plan_incluye_canal(plan_id: str | None, canal: str) -> bool:
-    """¿El plan incluye el canal? (`features.canales`). Desde los planes v3 (D-79, ADR-0208 §9) Messenger e
-    Instagram son de Premium y Empresarial: Basic ya no los da de alta. Solo lo exigen las altas de Messenger e
-    Instagram; generalizarlo a las demás altas de conexión es HU-BILL-19."""
-    from core.billing.plans import get_plan
-
-    plan = get_plan(plan_id) if plan_id else None
-    return bool(plan and canal in (plan.features.get("canales") or []))
-
-
+# `plan_incluye_canal` vive en `core/billing/canales_del_plan.py` desde HU-BILL-19 (ADR-0208 §9): todas las altas
+# de conexión lo exigen. Se reexporta aquí para los importadores de siempre.
 def plan_incluye_messenger(plan_id: str | None) -> bool:
     return plan_incluye_canal(plan_id, "messenger")
 
 
 async def exigir_plan(tenant_id: uuid.UUID) -> None:
-    from core.billing.enforcement import subscription_overview
-
-    resumen = await subscription_overview(tenant_id)
-    if not plan_incluye_messenger(resumen.plan_id):
-        raise MessengerAltaError(
-            f"Tu plan {resumen.plan_name} no incluye Messenger. Mejora tu plan para conectar tus Páginas.",
-            code="plan_channel_not_included",
-            status=409,
-        )
+    """409 `plan_channel_not_included` si el plan no incluye Messenger (Premium y Empresarial, D-79). Un negocio
+    sin suscripción no se bloquea (mismo criterio que el resto del enforcement)."""
+    try:
+        await exigir_canal(tenant_id, "messenger")
+    except CanalNoIncluido as exc:
+        raise MessengerAltaError(exc.message, code=exc.code, status=409) from exc
 
 
 # ------------------------------------------------------------------ paso 1: el intento
@@ -422,6 +418,11 @@ async def conectar_paginas(
             canonica_id = await _guardar_pagina(tenant_id, admin_id, connection_id, candidata)
         except MetaAssetError as exc:
             omitidas.append(PaginaOmitida(page_id, exc.code, exc.message))
+            continue
+        except (QuotaExceeded, PlanNoIncluye) as exc:
+            # Cada Página es una conexión (ADR-0208 §8): la que no cabe en el plan se omite y no se escribe nada
+            # suyo; las anteriores ya quedaron conectadas.
+            omitidas.append(PaginaOmitida(page_id, *codigo_y_mensaje(exc)))
             continue
         try:
             suscrita, campos = await _suscribir_y_verificar(

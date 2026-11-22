@@ -440,7 +440,7 @@ async def _rollback_failed_alta(
                 # Y su conexión canónica vuelve a la cuenta que lo tenía (ADR-0115 §1).
                 from core.gateway.conexion_canonica import asegurar_conexion_del_numero
 
-                await asegurar_conexion_del_numero(session, tenant_id, phone_number_id, previous)
+                await asegurar_conexion_del_numero(session, tenant_id, phone_number_id, previous, exigir_plan=False)
 
         if created_new:
             # Borrado lógico, como `soft_delete_connection` (invariante 8, ADR-0122): si el

@@ -30,6 +30,7 @@ from typing import Any, Literal
 
 from sqlalchemy import select
 
+from core.billing.canales_del_plan import exigir_alta_de_conexion
 from core.db.models import ChannelConnection, utcnow
 from core.gateway.connection_types import CATEGORY_COMMUNICATION, WEBCHAT
 from core.shared.crypto import get_secret_box
@@ -252,6 +253,13 @@ async def guardar_widget(
     config["allowed_origins"] = list(allowed_origins)
     if turnstile_secret is not None:
         config["turnstile_secret"] = turnstile_secret.strip()
+    if enabled:
+        actual = await conexion_del_negocio(session, tenant_id)
+        if actual is None or not actual.active:
+            # Habilitar el widget (nuevo o pausado) es un alta para el plan (ADR-0208 §8-9, HU-BILL-19): exige
+            # `web` en el plan y el tope `conexiones` antes de escribir nada. No va en `sincronizar`, que
+            # también usa el backfill (reconstruye lo que el negocio ya tenía).
+            await exigir_alta_de_conexion(session, tenant_id, CANAL)
     app_settings.web_chat_config = config
     resultado, conexion = await sincronizar(session, tenant_id, desde_app_settings(config))
     if resultado == "creada" and conexion is not None:
@@ -304,6 +312,8 @@ async def establecer_habilitado(
     if app_settings is None or config.get("key") != actual.external_id:
         log.warning("conexion_webchat_desincronizada", tenant_id=str(tenant_id), connection_id=str(connection_id))
         raise WidgetDesincronizado(str(connection_id))
+    if enabled and not previo:
+        await exigir_alta_de_conexion(session, tenant_id, CANAL)  # reanudar es un alta (HU-BILL-19)
     config["enabled"] = bool(enabled)
     app_settings.web_chat_config = config
     await sincronizar(session, tenant_id, desde_app_settings(config))

@@ -22,11 +22,12 @@ RETIRADAS = ("conversaciones", "conversaciones_audio", "conversaciones_ocr", "me
 
 # ------------------------------------------------------------------ catálogo
 CATALOGO_V3 = {
-    # plan_id: (precio, créditos, clientes, agentes, colaboradores, documentos, conocimiento_mb)
-    "free": (0, 1_500, 100, 1, 2, 3, 10),
-    "basic": (129_000, 12_000, 1_000, 2, 5, 20, 100),
-    "premium": (299_000, 40_000, 5_000, 5, 15, 100, 500),
-    "empresarial": (799_000, 120_000, None, None, 50, 500, 2_000),
+    # plan_id: (precio, créditos, clientes, agentes, colaboradores, conexiones, correos, documentos, conocimiento_mb)
+    # `conexiones` y `correos`: HU-BILL-19 (ADR-0208 §8).
+    "free": (0, 1_500, 100, 1, 2, 1, 0, 3, 10),
+    "basic": (129_000, 12_000, 1_000, 2, 5, 2, 1, 20, 100),
+    "premium": (299_000, 40_000, 5_000, 5, 15, 6, 3, 100, 500),
+    "empresarial": (799_000, 120_000, None, None, 50, 20, 10, 500, 2_000),
 }
 
 FEATURES_V3 = {
@@ -87,7 +88,7 @@ def test_mismos_plan_id_que_v2() -> None:
 def test_precios_creditos_y_limites_v3(plan_id: str) -> None:
     from core.billing.plans import PLANS_BY_ID
 
-    precio, creditos, clientes, agentes, colaboradores, documentos, mb = CATALOGO_V3[plan_id]
+    precio, creditos, clientes, agentes, colaboradores, conexiones, correos, documentos, mb = CATALOGO_V3[plan_id]
     plan = PLANS_BY_ID[plan_id]
     assert plan.price_cop == precio
     assert plan.monthly_credits == creditos
@@ -95,6 +96,8 @@ def test_precios_creditos_y_limites_v3(plan_id: str) -> None:
         "clientes": clientes,
         "agentes": agentes,
         "colaboradores": colaboradores,
+        "conexiones": conexiones,
+        "correos": correos,
         "documentos": documentos,
         "conocimiento_mb": mb,
     }
@@ -138,7 +141,7 @@ def test_el_credito_v3_se_espeja_en_features() -> None:
 def test_ninguna_metrica_retirada_queda_en_el_registro() -> None:
     from core.billing.metrics import METRIC_KEYS, get_metric
 
-    assert METRIC_KEYS == {"clientes", "agentes", "colaboradores", "creditos"}
+    assert METRIC_KEYS == {"clientes", "agentes", "colaboradores", "conexiones", "correos", "creditos"}
     for clave in RETIRADAS:
         assert clave not in METRIC_KEYS
         assert get_metric(clave) is None

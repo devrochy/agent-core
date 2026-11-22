@@ -4,12 +4,16 @@
 nacido con el tope de habilidades del P0 de pruebas 2026-10-17, retirado en HU-BILL-18), para que
 el panel explique el límite y ofrezca mejorar el plan sin adivinar el estado. Una sola función
 para todas las entradas que pueden levantar `QuotaExceeded` de un tope estructural o del crédito.
+
+Desde HU-BILL-19 (ADR-0208 §9-10) también traduce lo que el plan no incluye (`PlanNoIncluye`): un canal
+(`plan_channel_not_included`, `details = {channel, plan}`) o una habilidad (`plan_plugin_not_included`,
+`details = {skills, min_plan, plan}`). Los dos son 409 y no escriben nada.
 """
 
 from __future__ import annotations
 
 from core.api.errors import ApiError
-from core.billing.enforcement import QuotaExceeded
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 
 _MENSAJES = {
     "agentes": (
@@ -19,6 +23,14 @@ _MENSAJES = {
     "colaboradores": (
         "Tu plan permite {limit} colaborador(es) y ya tienes {used}, contando las invitaciones "
         "pendientes. Mejora tu plan para invitar a otro. No se envió nada."
+    ),
+    "conexiones": (
+        "Tu plan permite {limit} conexión(es) activa(s) y ya tienes {used}. "
+        "Pausa o elimina una, o mejora tu plan para conectar otra. No se conectó nada."
+    ),
+    "correos": (
+        "Tu plan permite {limit} correo(s) conectado(s) y ya tienes {used}. "
+        "Elimina uno o mejora tu plan para conectar otro. No se conectó nada."
     ),
     "documentos": (
         "Tu plan permite {limit} documento(s) de conocimiento y ya tienes {used}. "
@@ -44,7 +56,9 @@ def plan_limit_message(exc: QuotaExceeded) -> str:
     return plantilla.format(used=exc.used, limit=exc.limit)
 
 
-def plan_limit_error(exc: QuotaExceeded) -> ApiError:
+def plan_limit_error(exc: QuotaExceeded | PlanNoIncluye) -> ApiError:
+    if isinstance(exc, PlanNoIncluye):
+        return ApiError(409, exc.code, exc.message, details=exc.details or None)
     return ApiError(
         409,
         plan_limit_code(exc.metric),
@@ -65,4 +79,41 @@ def plan_limit_responses(metric: str) -> dict[int | str, dict[str, str]]:
     }
 
 
-__all__ = ["plan_limit_code", "plan_limit_error", "plan_limit_message", "plan_limit_responses"]
+def plan_limit_responses_de(*metricas: str, canal: bool = False, habilidad: bool = False) -> dict[int | str, dict[str, str]]:
+    """Documentación OpenAPI del 409 de una ruta que puede levantar varios topes del plan (HU-BILL-19):
+    los `plan_limit_<métrica>` de `metricas`, `plan_channel_not_included` y `plan_plugin_not_included`."""
+    codigos = [f"`{plan_limit_code(m)}`" for m in metricas]
+    if canal:
+        codigos.append("`plan_channel_not_included`")
+    if habilidad:
+        codigos.append("`plan_plugin_not_included`")
+    partes = []
+    if metricas:
+        partes.append("`plan_limit_*` trae `error.details = {metric, used, limit}`")
+    if canal:
+        partes.append("`plan_channel_not_included` trae `error.details = {channel, plan}`")
+    if habilidad:
+        partes.append("`plan_plugin_not_included` trae `error.details = {skills, min_plan, plan}`")
+    return {
+        409: {
+            "description": (
+                f"Tope o alcance del plan: `error.code` es {', '.join(codigos)}; " + "; ".join(partes)
+                + ". No se escribió nada."
+            )
+        }
+    }
+
+
+def plan_conexion_responses() -> dict[int | str, dict[str, str]]:
+    """409 de una ruta que da de alta o activa una conexión (ADR-0208 §8-9)."""
+    return plan_limit_responses_de("conexiones", "correos", canal=True)
+
+
+__all__ = [
+    "plan_conexion_responses",
+    "plan_limit_code",
+    "plan_limit_error",
+    "plan_limit_message",
+    "plan_limit_responses",
+    "plan_limit_responses_de",
+]

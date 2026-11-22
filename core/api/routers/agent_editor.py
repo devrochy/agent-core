@@ -56,7 +56,7 @@ from core.agents import requisitos, versiones
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
-from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.api.plan_limits import plan_limit_error, plan_limit_responses, plan_limit_responses_de
 from core.api.routers.agents import (
     AgentDraft,
     AgentSummary,
@@ -272,10 +272,21 @@ def _question(q: PreguntaDePlantilla) -> Question:
 
 # Errores que no son de un campo del formulario: las habilidades van en `details`, no en `fields` (el
 # panel pinta cada `fields` como error del paso que lo contiene).
-_ERRORES_CON_DETALLE = frozenset({"skills_forbidden", "concurrent_edit", "template_unavailable"})
+_ERRORES_CON_DETALLE = frozenset(
+    {"skills_forbidden", "concurrent_edit", "template_unavailable", "plan_plugin_not_included"}
+)
 
 
 def _error(exc: svc.ErrorDelEditor) -> ApiError:
+    if exc.code == "plan_plugin_not_included":
+        # Mismo `details` que el resto de los 409 de habilidades por plan (HU-BILL-19).
+        skills = [p.strip() for p in exc.campos.get("skills", "").split(",") if p.strip()]
+        return ApiError(
+            409,
+            exc.code,
+            str(exc),
+            details={"skills": skills, "min_plan": exc.campos.get("min_plan") or None, "plan": exc.campos.get("plan") or None},
+        )
     if exc.code in _ERRORES_CON_DETALLE:
         skills = [p.strip() for p in exc.campos.get("skills", "").split(",") if p.strip()]
         return ApiError(exc.status, exc.code, str(exc), details={"skills": skills})
@@ -340,7 +351,7 @@ async def list_templates(
     "/agent-templates/{template_key}/agents",
     response_model=FromTemplateOut,
     status_code=status.HTTP_201_CREATED,
-    responses=plan_limit_responses("agentes"),
+    responses=plan_limit_responses_de("agentes", habilidad=True),
 )
 async def create_from_template(
     template_key: Annotated[str, Path(pattern=r"^[a-z0-9_]{2,40}$")],
@@ -372,7 +383,7 @@ async def create_from_template(
     "/agents/from-script",
     response_model=FromScriptOut,
     status_code=status.HTTP_201_CREATED,
-    responses=plan_limit_responses("agentes"),
+    responses=plan_limit_responses_de("agentes", habilidad=True),
 )
 async def create_from_script(
     payload: FromScriptIn,
@@ -682,7 +693,9 @@ async def list_agent_skills(
     return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
 
 
-@router.put("/agents/{agent_id}/skills/{pack_id}", response_model=AgentSkill)
+@router.put(
+    "/agents/{agent_id}/skills/{pack_id}", response_model=AgentSkill, responses=plan_limit_responses_de(habilidad=True)
+)
 async def put_agent_skill(
     agent_id: uuid.UUID,
     pack_id: Annotated[str, Path(pattern=r"^[a-z0-9_]{2,60}$")],
@@ -697,10 +710,18 @@ async def put_agent_skill(
 
     tid = await _puede_escribir(principal)
     await _especialista_o_409(tid, agent_id)
+    from core.agents.habilitacion import HabilitacionError
+    from core.billing.enforcement import PlanNoIncluye
+
     try:
         h = await hda.configurar(
             tid, agent_id, pack_id, instalada=payload.installed, config=payload.config, actor=principal.admin.id
         )
+    except PlanNoIncluye as exc:
+        # `plan_plugin_not_included`: el plan no alcanza el `min_plan` de la habilidad (HU-BILL-19). No se instaló nada.
+        raise plan_limit_error(exc) from None
+    except HabilitacionError as exc:
+        raise ApiError(409, exc.code, str(exc)) from None
     except hda.HabilidadNoDisponible:
         raise ApiError.not_found("Habilidad no disponible para agentes.") from None
     except InstalacionNoEncontrada:
