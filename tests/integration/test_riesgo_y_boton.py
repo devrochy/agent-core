@@ -277,14 +277,32 @@ async def test_reintento_del_verificador_usa_el_respaldo(negocio: uuid.UUID, mon
         return next(veredictos, Veredicto(texto=borrador))
 
     monkeypatch.setattr(loop, "verificar_seguro", verificar)
-    conv = await _conversacion(negocio, "hola")
-    base = _Guion(["El total es $999.999."])
-    respaldo = _Guion(["Te confirmo el total enseguida."], model="deepseek-v4-pro")
-    resultado = await _turno(conv, _Proveedores(base, respaldo=respaldo), monkeypatch, "hola")
-    assert resultado is not None and resultado.text == "Te confirmo el total enseguida."
-    assert base.llamadas == 1 and respaldo.llamadas == 1
-    modelo, politica = (await _politica_en_ledger(conv))[-1]
-    assert modelo == "deepseek-v4-pro" and politica == {"respaldo_verificador": 1}
+    # El respaldo `deepseek-v4-pro` es del nivel Avanzado: solo un plan que lo incluye lo usa (ADR-0210 §4).
+    async with _scope(negocio) as session:
+        plan_original = (
+            await session.execute(
+                text("select plan_id from tenant_subscriptions where tenant_id = :t and deleted_at is null"), {"t": negocio}
+            )
+        ).scalar_one()
+        await session.execute(
+            text("update tenant_subscriptions set plan_id = 'premium' where tenant_id = :t and deleted_at is null"),
+            {"t": negocio},
+        )
+    try:
+        conv = await _conversacion(negocio, "hola")
+        base = _Guion(["El total es $999.999."])
+        respaldo = _Guion(["Te confirmo el total enseguida."], model="deepseek-v4-pro")
+        resultado = await _turno(conv, _Proveedores(base, respaldo=respaldo), monkeypatch, "hola")
+        assert resultado is not None and resultado.text == "Te confirmo el total enseguida."
+        assert base.llamadas == 1 and respaldo.llamadas == 1
+        modelo, politica = (await _politica_en_ledger(conv))[-1]
+        assert modelo == "deepseek-v4-pro" and politica == {"respaldo_verificador": 1}
+    finally:
+        async with _scope(negocio) as session:
+            await session.execute(
+                text("update tenant_subscriptions set plan_id = :p where tenant_id = :t and deleted_at is null"),
+                {"p": plan_original, "t": negocio},
+            )
 
 
 async def test_boton_con_resumen_del_servidor_y_confirmacion_por_payload(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]

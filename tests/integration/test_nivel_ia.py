@@ -324,8 +324,10 @@ async def test_el_hash_cambia_con_el_nivel_y_volver_reusa_la_version(negocios) -
     await _sql(tid, "update agents set nivel_ia = 'estandar' where id = :a", a=aid)
     estandar, _ = await _republicar(tid)
     await _sql(tid, "update agents set nivel_ia = 'avanzado' where id = :a", a=aid)
-    avanzado, creada = await _republicar(tid, estandar.content)
-    assert creada and avanzado.content_hash != estandar.content_hash
+    avanzado, _ = await _republicar(tid, estandar.content)
+    # Otro nivel, otro hash (si el caso anterior ya publicó Avanzado, se reusa esa versión).
+    assert avanzado.content_hash != estandar.content_hash and avanzado.id != estandar.id
+    assert avanzado.content["model"]["primary"] == "deepseek-v4-pro"
     await _sql(tid, "update agents set nivel_ia = 'estandar' where id = :a", a=aid)
     otra_vez, creada = await _republicar(tid, avanzado.content)
     assert not creada and otra_vez.id == estandar.id

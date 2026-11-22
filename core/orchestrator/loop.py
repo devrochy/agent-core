@@ -534,14 +534,14 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     turnos_sin_resolver = int(conversation.state.get("turnos_sin_resolver", 0))
     # Techo del nivel de IA según el plan (ADR-0210 §4): ningún modelo del turno sube por encima del nivel que el
     # plan incluye. None con llave propia o sin plan. No toca el spec (cacheado por versión) ni su hash.
-    techo = await _techo_del_turno(app_settings)
+    techo_ia = await _techo_del_turno(app_settings)
     routing = route_model(
         message=latest_message,
         turnos_sin_resolver=turnos_sin_resolver,
-        default_model=_resolved_model(app_settings, spec, settings.llm_model, techo=techo),
+        default_model=_resolved_model(app_settings, spec, settings.llm_model, techo=techo_ia),
         # v2.0.0 (ADR-0050): el modelo de razonamiento es por tenant
         # (`spec.model.router`); cae al global del .env si no está seteado.
-        reasoning_model=recortar(spec.model.router or settings.llm_model_reasoning, techo, "router"),
+        reasoning_model=recortar(spec.model.router or settings.llm_model_reasoning, techo_ia, "router"),
         routing_enabled=settings.difficulty_routing,
         requires_tools=bool(active_tools),
         long_message_threshold=difficulty_long_message_threshold,
@@ -552,7 +552,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         app_settings, routing.model, thinking=routing.reason == "complex_signals"
     )
     # Política de modelo por riesgo (HU-AOS-09): None salvo con el motor activo.
-    politica = _politica_del_turno(motor, app_settings, spec, routing, techo=techo)
+    politica = _politica_del_turno(motor, app_settings, spec, routing, techo=techo_ia)
     if politica is not None:
         provider = politica.envolver(provider)
     tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
@@ -664,7 +664,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # falla y el tenant definió `spec.model.fallback` (distinto), se
             # intenta UNA vez con ese modelo antes de escalar.
             metricas_negocio.llm_fallo(routing.model)
-            fallback_model = recortar(spec.model.fallback, techo) if spec.model.fallback else spec.model.fallback
+            fallback_model = recortar(spec.model.fallback, techo_ia) if spec.model.fallback else spec.model.fallback
             recovered = None
             if fallback_model and fallback_model != routing.model:
                 try:
