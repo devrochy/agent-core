@@ -92,16 +92,24 @@ async def _packs(tid: uuid.UUID) -> set[str]:
         return await habilitados_del_negocio(tid)
 
 
-async def _version_del_spec(tid: uuid.UUID) -> str:
-    filas = await _sql(tid, "select version from agent_specs where tenant_id = :t and is_active", t=tid)
-    return filas[0][0]
+async def _huella(tid: uuid.UUID) -> tuple[int, int, int]:
+    """Agentes, versiones e instalaciones del negocio: lo que escribe crear un agente desde una plantilla (antes, una
+    versión del AgentSpec v2, retirado en HU-AOS-91)."""
+    filas = await _sql(
+        tid,
+        "select (select count(*) from agents where tenant_id = :t and deleted_at is null), "
+        "(select count(*) from agent_versions where tenant_id = :t), "
+        "(select count(*) from pack_installations where tenant_id = :t and deleted_at is null)",
+        t=tid,
+    )
+    return tuple(filas[0])  # type: ignore[return-value]
 
 
 async def test_free_sin_packs_ve_los_cuatro_tipos_y_crear_habilita_la_habilidad(app_client) -> None:
     tid = await _negocio_sin_packs()
     h = await _usuario(app_client, tid, secciones={"settings": "write", "plugins": "write"}, dueno=True)
     assert await _packs(tid) == set()
-    version_antes = await _version_del_spec(tid)
+    huella_antes = await _huella(tid)
 
     r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
     assert r.status_code == 200, r.text
@@ -112,8 +120,8 @@ async def test_free_sin_packs_ve_los_cuatro_tipos_y_crear_habilita_la_habilidad(
         assert plantillas[key]["missing_skills"] == []
         assert plantillas[key]["will_enable"] == [pack]
         assert plantillas[key]["superpowers"], key
-    # Mirar las plantillas es solo lectura: no habilita nada ni crea versión de spec.
-    assert await _packs(tid) == set() and await _version_del_spec(tid) == version_antes
+    # Mirar las plantillas es solo lectura: no habilita nada ni crea agentes.
+    assert await _packs(tid) == set() and await _huella(tid) == huella_antes
 
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "ventas", "answers": {}})
     assert r.status_code == 201, r.text
@@ -124,11 +132,11 @@ async def test_free_sin_packs_ve_los_cuatro_tipos_y_crear_habilita_la_habilidad(
     )
     assert len(auditoria) == 1
 
-    # Reintentar no duplica nada: key_taken, y el spec no cambia de versión.
-    version = await _version_del_spec(tid)
+    # Reintentar no duplica nada: key_taken, sin agentes, versiones ni instalaciones nuevas.
+    huella = await _huella(tid)
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "ventas", "answers": {}})
     assert (r.status_code, r.json()["error"]["code"]) == (409, "key_taken")
-    assert await _version_del_spec(tid) == version
+    assert await _huella(tid) == huella
 
     # Ya habilitada, otra plantilla que pide lo mismo no vuelve a habilitar.
     plantillas = {p["key"]: p for p in (await app_client.get("/api/v1/admin/agent-templates", headers=h)).json()["items"]}
@@ -138,13 +146,13 @@ async def test_free_sin_packs_ve_los_cuatro_tipos_y_crear_habilita_la_habilidad(
 async def test_sin_plugins_write_no_habilita_ni_crea(app_client) -> None:
     tid = await _negocio_sin_packs()
     h = await _usuario(app_client, tid, secciones={"settings": "write"})
-    version = await _version_del_spec(tid)
+    huella = await _huella(tid)
 
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "agenda", "answers": {}})
     assert (r.status_code, r.json()["error"]["code"]) == (403, "skills_forbidden")
     # Las habilidades van en `details`, no en `fields` (el panel pintaría `fields` como error de un paso).
     assert r.json()["error"]["details"] == {"skills": ["pack_calendar"]} and not r.json()["error"].get("fields")
-    assert await _packs(tid) == set() and await _version_del_spec(tid) == version
+    assert await _packs(tid) == set() and await _huella(tid) == huella
     assert not await _sql(tid, "select 1 from agents where tenant_id = :t and key = 'agenda'", t=tid)
 
 
@@ -178,25 +186,6 @@ async def test_dos_plantillas_a_la_vez_dejan_las_dos_habilidades(app_client) -> 
     }
     assert {TODAS[k] for k in creadas} <= await _packs(tid)
     assert creadas, "al menos una de las dos tiene que haber entrado"
-
-
-async def test_guardar_el_spec_sobre_una_base_vieja_no_pisa_la_edicion_que_confirmo_antes(app_client) -> None:
-    """La causa de la carrera, sin azar: dos lectores parten del mismo spec y los dos confirman EN SERIE.
-    Sin `base_id` la segunda versión borraba la habilidad de la primera (los índices parciales solo atajan
-    a dos que confirman a la vez). Con `base_id` la segunda devuelve None y no escribe."""
-    from core.agents.spec import leer_spec_activo, save_spec_version
-    from core.shared.tenant import tenant_scope
-
-    tid = await _negocio_sin_packs()
-    async with tenant_scope(tid):
-        base_id, base = await leer_spec_activo(tid)  # type: ignore[misc]
-        primera = await save_spec_version(base.model_copy(update={"packs": ["pack_commerce"]}), tid, base_id=base_id)
-        assert primera is not None
-        segunda = await save_spec_version(base.model_copy(update={"packs": ["pack_calendar"]}), tid, base_id=base_id)
-        assert segunda is None
-        # `spec.packs` ya no es la habilitación (HU-AOS-91): la carrera se mide sobre el spec mismo.
-        _id, final = await leer_spec_activo(tid)  # type: ignore[misc]
-    assert final.packs == ["pack_commerce"]
 
 
 async def test_el_dueno_del_negocio_puede_habilitar_sin_permisos_explicitos(app_client) -> None:

@@ -425,11 +425,11 @@ async def test_catalogo_de_acciones_solo_las_elegibles_del_negocio(app_client, l
     for nombre, tool in extra.items():
         monkeypatch.setitem(mcp_host._tools, nombre, tool)
     await _binding(a.tid)
-    await _agregar_binding(a.tid, "opc_sensible")
-    await _agregar_binding(a.tid, "opc_no_apta")
+    extra_id = await _especialista_con(a.tid, ["opc_sensible", "opc_no_apta"])
     h = await _headers(app_client, a.tid)
 
     r = await app_client.get(f"{URL}/catalogo-acciones", headers=h)
+    await _archivar(a.tid, extra_id)  # archivado, sus bindings dejan de contar para el negocio
 
     assert r.status_code == 200, r.text
     por_nombre = {x["tool"]: x for x in r.json()["acciones"]}
@@ -445,23 +445,56 @@ async def test_catalogo_de_acciones_solo_las_elegibles_del_negocio(app_client, l
     assert TOOL not in {x["tool"] for x in sin}
     hb = await _headers(app_client, b.tid)
     assert (await app_client.get(f"{URL}/catalogo-acciones", headers=hb)).json() == {"acciones": []}
-    await _binding(a.tid)
+    # Volver a habilitar con un contenido nuevo: repetir el de una versión anterior la reutiliza (`publicar` deduplica
+    # por hash) y la última por número seguiría siendo la deshabilitada, que es la que leen el catálogo y el lint.
+    from release_de_prueba import conceder_herramientas
+
+    from core.mcp.host import mcp_host
+
+    await conceder_herramientas(
+        a.tid,
+        [{"tool": TOOL, "enabled": True, "scopes": [], "maxCallsPerConversation": 10_000, "requiresConfirmation": False}],
+        extra=[mcp_host._tools[TOOL]],
+    )
 
 
-async def _agregar_binding(tid: uuid.UUID, tool: str) -> None:
-    from sqlalchemy import select
+async def _especialista_con(tid: uuid.UUID, nombres: list[str]) -> uuid.UUID:
+    """Un especialista desechable publicado con bindings habilitados de estas tools (HU-AOS-91: el catálogo une los
+    bindings de los especialistas activos; antes, los del AgentSpec v2). Va aparte de `atencion` para que su versión
+    no arrastre tools que el test desregistra: la publicación siguiente no validaría."""
+    import types
 
-    from core.agents.spec import load_active_spec
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
+    from core.agents import versiones
+    from core.kernel.procedures import catalogo as _catalogo
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.mcp.host import mcp_host
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    tools = [mcp_host._tools[n] for n in nombres]
+    parche = pytest.MonkeyPatch()
+    originales = _catalogo._core_skills
+    parche.setattr(_catalogo, "_core_skills", lambda: [*originales(), types.SimpleNamespace(get_tools=lambda: tools)])
+    parche.setattr(_catalogo, "_cache", None)
+    try:
+        catalogo = catalogo_de_acciones(plugin_manager.list_modules() or plugin_manager.scan())
+        async with tenant_scope(tid):
+            aid = (await versiones.crear_agente(tid, key=f"extra_{uuid.uuid4().hex[:8]}", kind="specialist", name="Extra")).id
+            contenido = dict((await versiones.obtener_borrador(tid, aid)).content)
+            contenido["tools"] = [{"tool": n, "enabled": True} for n in nombres]
+            await versiones.publicar(tid, aid, catalogo=catalogo, contenido=contenido, notes="test")
+    finally:
+        parche.undo()
+        _catalogo._cache = None
+    return aid
+
+
+async def _archivar(tid: uuid.UUID, agent_id: uuid.UUID) -> None:
+    from core.agents import versiones
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
-        datos = (await load_active_spec()).model_dump(mode="json")
-        datos["tools"].append({"tool": tool, "enabled": True, "scopes": [], "maxCallsPerConversation": None, "requiresConfirmation": False})
-        async with get_session() as s:
-            fila = (await s.execute(select(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tid, AgentSpecRecord.is_active.is_(True)))).scalar_one()
-            fila.spec = datos
+        await versiones.actualizar_agente(tid, agent_id, status="archived")
 
 
 async def test_la_tool_de_otro_negocio_no_es_elegible_en_el_lint_ni_al_publicar(app_client, listo) -> None:

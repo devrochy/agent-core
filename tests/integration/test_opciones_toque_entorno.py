@@ -92,22 +92,6 @@ async def _sql(tid: uuid.UUID | None, sql: str, **params: Any) -> list[Any]:
 
 
 async def _binding(tid: uuid.UUID, *, enabled: bool = True, confirmar: bool = False, ninguno: bool = False) -> None:
-    from sqlalchemy import select
-
-    from core.agents.spec import load_active_spec
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        spec = await load_active_spec()
-        datos = spec.model_dump(mode="json")
-        datos["tools"] = [] if ninguno else [
-            {"tool": TOOL, "enabled": enabled, "scopes": [], "maxCallsPerConversation": None, "requiresConfirmation": confirmar}
-        ]
-        async with get_session() as s:
-            fila = (await s.execute(select(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tid, AgentSpecRecord.is_active.is_(True)))).scalar_one()
-            fila.spec = datos
     # En v3 el binding vive en la versión del agente de la release (ADR-0191): se concede ahí.
     from release_de_prueba import conceder_herramientas
 
@@ -194,7 +178,8 @@ async def test_la_tool_corre_por_el_loop_con_el_binding_real_y_la_idempotencia_d
 
 
 async def test_sin_binding_explicito_la_tool_no_corre_aunque_el_loop_la_dejaria(negocio_opciones, herramienta) -> None:
-    from core.agents.spec import load_active_spec
+    from _turno_sin_release import agente_desde_el_negocio
+
     from core.orchestrator.loop import _tool_denial
     from core.shared.tenant import tenant_scope
 
@@ -204,7 +189,8 @@ async def test_sin_binding_explicito_la_tool_no_corre_aunque_el_loop_la_dejaria(
     conv, cust = await _objetos(tid, conv_id, cliente)
     envio = await crear_envio(tid, conv_id)
     async with tenant_scope(tid):
-        assert await _tool_denial(await load_active_spec(), TOOL, conv_id) is None, "el fail-open transitorio del loop"
+        # Fuera de una release, un agente sin el binding no deniega (el fail-open transitorio del loop).
+        assert await _tool_denial(await agente_desde_el_negocio(), TOOL, conv_id) is None, "el fail-open transitorio del loop"
 
     outcome, salida = await tocar_real(envio, envio.payload(), conv, cust)
 
@@ -252,7 +238,8 @@ async def test_tool_gobernada_por_un_procedimiento_no_corre(negocio_opciones, he
 
 
 async def test_binding_con_requires_confirmation_confirma_con_optc_y_ejecuta_sin_el_pendiente_del_loop(negocio_opciones, herramienta) -> None:
-    from core.agents.spec import load_active_spec
+    from _turno_sin_release import agente_desde_el_negocio
+
     from core.llm.types import LLMToolCall
     from core.orchestrator.loop import _execute_tool_safely
     from core.shared.tenant import tenant_scope
@@ -273,7 +260,9 @@ async def test_binding_con_requires_confirmation_confirma_con_optc_y_ejecuta_sin
 
     # sin `ya_confirmada`, el mismo binding frena a una llamada normal (es lo que el parámetro salta)
     async with tenant_scope(tid):
-        spec = await load_active_spec()
+        spec = await agente_desde_el_negocio(
+            bindings=[{"tool": TOOL, "enabled": True, "scopes": [], "requiresConfirmation": True}]
+        )
         frenada = await _execute_tool_safely(conv, cust, LLMToolCall(id="x", name=TOOL, arguments={"pedido": "A-1"}), spec)
     assert frenada["status"] == "confirmation_required" and len(herramienta.llamadas) == 1
 

@@ -1,4 +1,4 @@
-"""Playbooks de un pack cargados desde el AgentSpec del tenant (allowlist, ADR-0014)."""
+"""Playbooks de un pack cargados desde la allowlist del agente del turno (ADR-0014)."""
 
 from __future__ import annotations
 
@@ -16,15 +16,20 @@ pytestmark = [
 
 
 async def _spec_con_commerce():  # type: ignore[no-untyped-def]
-    """El spec v2 del negocio con los playbooks de pack_commerce: desde HU-AOS-91 el alta ya no los agrega (la
-    habilidad se instala en el agente), y esta es la ruta v2 de la allowlist que borra la parte D."""
-    from core.agents.spec import load_active_spec
+    """El agente del turno del negocio con los playbooks de pack_commerce en su allowlist: desde HU-AOS-91 los
+    playbooks son los de la versión del agente (los base de `defaults_negocio` más los del pack), no los del
+    AgentSpec v2."""
+    from core.agents import defaults_negocio
+    from core.agents.turno import agente_desde_defaults
     from core.onboarding import _pack_playbook_refs
+    from core.shared.tenant import get_current_tenant_id
 
-    spec = await load_active_spec()
-    presentes = {p.name for p in spec.playbooks}
-    extra = [r for r in _pack_playbook_refs(["pack_commerce"]) if r["name"] not in presentes]
-    return spec.model_validate({**spec.model_dump(mode="json"), "playbooks": [*spec.model_dump(mode="json")["playbooks"], *extra]})
+    tid = get_current_tenant_id()
+    assert tid is not None
+    datos = (await defaults_negocio.leer(tid)).model_dump(mode="json")
+    presentes = {p["name"] for p in datos["playbooks"]}
+    datos["playbooks"] += [r for r in _pack_playbook_refs(["pack_commerce"]) if r["name"] not in presentes]
+    return agente_desde_defaults(datos, packs=["pack_commerce"])
 
 
 async def test_playbooks_pack_cargados_por_allowlist(moto_setup) -> None:

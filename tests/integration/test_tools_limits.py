@@ -61,32 +61,6 @@ async def _make_conversation(tid: uuid.UUID) -> uuid.UUID:
             return conv.id
 
 
-async def _set_spec_policies(tid: uuid.UUID, **policies: Any) -> None:
-    import copy
-
-    from sqlalchemy import select
-
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        async with get_session() as session:
-            row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tid,
-                        AgentSpecRecord.is_active.is_(True),
-                    )
-                )
-            ).scalar_one()
-            # deepcopy: mutar JSONB anidado requiere copia profunda para que
-            # SQLAlchemy detecte el cambio.
-            spec = copy.deepcopy(row.spec)
-            spec.setdefault("policies", {}).update(policies)
-            row.spec = spec
-
-
 async def _seed_spent(tid: uuid.UUID, conversation_id: uuid.UUID, cost: float) -> None:
     from core.db.models import UsageLedger
     from core.db.session import get_session

@@ -64,7 +64,7 @@ async def test_escalamiento_por_keyword_entrega_el_texto_del_playbook(
     app_client, tenant_setup, recorded
 ):
     from core.agents.responses import load_response
-    from core.agents.spec import load_active_spec
+    from core.agents.turno import SoloRespuestas
     from core.db.models import Conversation, Customer
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -104,8 +104,8 @@ async def test_escalamiento_por_keyword_entrega_el_texto_del_playbook(
             assert conversation.status == "escalated"
             assert conversation.bot_paused is True
 
-        spec = await load_active_spec(t1)
-        expected_text = await load_response(spec, "escalation")
+        # El ingreso lee `respuestas` con la allowlist mínima (ADR-0206 §4), no con un spec del negocio.
+        expected_text = await load_response(SoloRespuestas(), "escalation")
         assert expected_text is not None, "el tenant de prueba debe tener 'respuestas' allowlisteado"
 
         delivered = await _last_outbound_text(conversation.id)

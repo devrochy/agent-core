@@ -184,8 +184,9 @@ async def test_tabs_cerebro_memoria_habilidades_renderizan(app_client) -> None:
         ("identidad", "Asistente"),
         ("cerebro", "Modelo del agente"),
         ("memoria", "Memoria del agente"),
-        ("habilidades", "Habilidades (tools)"),
-        ("avanzado", "Versiones del AgentSpec"),
+        # Las tools y las versiones del AgentSpec v2 del negocio se retiraron (HU-AOS-91): quedan el flujo y los evals.
+        ("habilidades", "Flujo de atención"),
+        ("avanzado", "Calidad (evals)"),
     ):
         r = await app_client.get(f"/admin/configuracion?tab={tab}", headers={"Cookie": session})
         assert r.status_code == 200, tab

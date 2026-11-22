@@ -228,26 +228,43 @@ async def test_el_catalogo_ofrece_las_tools_marcadas_solo_con_binding_y_pack(app
     # Sin binding explícito no se ofrece nada (aunque la bandera esté encendida y los packs activos).
     assert (await app_client.get(catalogo, headers=ha)).json() == {"acciones": []}
 
-    # El binding del negocio: `PUT /admin/settings/skills` se retiró con el AgentSpec v2 (HU-AOS-91), así que el test
-    # lo escribe en el spec directo (el catálogo por agente usa los bindings de su borrador).
+    # El binding del negocio: sin `agent_id` el catálogo usa la unión de los bindings de la última versión publicada de
+    # los especialistas activos (HU-AOS-91; `PUT /admin/settings/skills` se retiró con el AgentSpec v2). El test
+    # publica un especialista de prueba con esos bindings.
     def binding(nombre: str, plugin: str, habilitada: bool = True) -> dict[str, Any]:
         return {"name": nombre, "plugin_id": plugin, "enabled": habilitada}
 
     async def _bindings(tid: uuid.UUID, tools: list[dict[str, Any]]) -> None:
+        from sqlalchemy import select
+
+        from core.agents import versiones
         from core.agents.instalaciones_agente import packs_del_negocio
-        from core.agents.spec import load_active_spec, save_spec_if_changed
+        from core.db.models import AgentRecord
+        from core.db.session import get_session
+        from core.kernel.procedures import catalogo_de_acciones
         from core.mcp.host import mcp_host
+        from core.plugin_manager import plugin_manager
         from core.shared.tenant import tenant_scope
 
+        catalogo = catalogo_de_acciones(plugin_manager.list_modules() or plugin_manager.scan())
         async with tenant_scope(tid):
             habilitados = await packs_del_negocio(tid)
             editables = {x.name for x in mcp_host.get_tools() if x.plugin_id in habilitados}
-            spec = await load_active_spec()
-            data = spec.model_dump(mode="json")
-            data["tools"] = [
+            async with get_session() as session:
+                aid = (
+                    await session.execute(
+                        select(AgentRecord.id).where(
+                            AgentRecord.tenant_id == tid, AgentRecord.key == "opciones", AgentRecord.deleted_at.is_(None)
+                        )
+                    )
+                ).scalar_one_or_none()
+            if aid is None:
+                aid = (await versiones.crear_agente(tid, key="opciones", kind="specialist", name="Opciones")).id
+            contenido = dict((await versiones.obtener_borrador(tid, aid)).content)
+            contenido["tools"] = [
                 {"tool": x["name"], "enabled": x["enabled"], "scopes": []} for x in tools if x["name"] in editables
             ]
-            await save_spec_if_changed(spec, data, tid)
+            await versiones.publicar(tid, aid, catalogo=catalogo, contenido=contenido, notes="test")
 
     cuerpo = {
         "tools": [

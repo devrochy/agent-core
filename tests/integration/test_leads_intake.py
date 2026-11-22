@@ -396,12 +396,12 @@ async def _leads_vivos(tenant_id) -> list:
 async def test_intake_sin_comercio_por_la_ruta_nueva_y_el_alias(app_client) -> None:
     """Gherkin «Intake sin comercio» y «Ruta vieja como alias»: un negocio sin `pack_commerce` recibe el lead por las
     dos rutas, deduplicado en un solo cliente y un solo lead con origen `landing`."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.shared.tenant import tenant_scope
 
     tid, slug = await _negocio_sin_comercio()
     async with tenant_scope(tid):
-        assert "pack_commerce" not in enabled_packs(await load_active_spec(tid))
+        assert "pack_commerce" not in await packs_del_negocio(tid)
 
     # Sin config de Captar leads: el intake está apagado (403), y la config pública lo dice.
     r = await app_client.post(f"/api/public/leads/{slug}", headers={"X-Intake-Secret": SECRET}, json=_payload())

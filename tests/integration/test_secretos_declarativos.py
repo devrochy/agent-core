@@ -8,7 +8,6 @@ negocio en `/api/v1` se retiró con el AgentSpec v2 (HU-AOS-91): su 410 lo prueb
 
 from __future__ import annotations
 
-import json
 import os
 import uuid
 from typing import Any
@@ -42,10 +41,8 @@ def _tool(headers: dict[str, Any], dominios: list[str] | None = None, nombre: st
     }
 
 
-async def _negocio(tools: list[dict[str, Any]] | None = None) -> uuid.UUID:
-    from core.agents.spec import DEFAULT_SPEC
+async def _negocio() -> uuid.UUID:
     from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
 
     tid = uuid.uuid4()
     async with get_session() as session:
@@ -53,16 +50,6 @@ async def _negocio(tools: list[dict[str, Any]] | None = None) -> uuid.UUID:
             text("insert into tenants (id, name, slug) values (:id, :n, :s)"),
             {"id": tid, "n": "AOS-12 secretos", "s": uniq("aos12-sec")},
         )
-    spec = DEFAULT_SPEC | {"tenantId": str(tid), "extensions": {"tools": tools or []}}
-    async with tenant_scope(tid):
-        async with get_session() as session:
-            await session.execute(
-                text(
-                    "insert into agent_specs (id, tenant_id, version, is_active, spec) "
-                    "values (gen_random_uuid(), :t, '1.0.0', true, cast(:s as jsonb))"
-                ),
-                {"t": tid, "s": json.dumps(spec)},
-            )
     return tid
 
 
