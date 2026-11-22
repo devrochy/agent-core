@@ -5,11 +5,9 @@
 <h1 class="fs-3 mb-4">Plugins</h1>
 
 <p class="text-secondary small mb-4">
-  Activar o desactivar acá es <b>solo para el tenant que tenés seleccionado</b>
-  arriba — no afecta a los demás. La primera vez que algún tenant activa un pack,
-  su código se carga en el servidor; desactivarlo para este tenant no se lo apaga
-  a otros que lo sigan usando. Si una tool de un plugin falla en una conversación
-  real, tampoco se apaga para nadie más — solo para este tenant (columna "Salud"),
+  Una habilidad es del negocio cuando algún agente activo la tiene instalada: se instala o se quita
+  en el agente que la usa, no acá. Si una tool de un plugin falla en una conversación
+  real, no se apaga para nadie más — solo para este tenant (columna "Salud"),
   y podés reintentarlo acá una vez corregida la causa.
 </p>
 
@@ -64,15 +62,6 @@
           {% if p.tenant_health_error %}
           <form method="post" action="/admin/plugins/{{ p.id }}/reintentar" class="d-inline">
             <button class="btn btn-outline-danger" title="Reintentar para este tenant"><i class="bi bi-arrow-clockwise"></i></button>
-          </form>
-          {% endif %}
-          {% if p.enabled_for_tenant %}
-          <form method="post" action="/admin/plugins/{{ p.id }}/desactivar" class="d-inline">
-            <button class="btn btn-outline-warning" title="Desactivar para este tenant"><i class="bi bi-stop-circle"></i></button>
-          </form>
-          {% else %}
-          <form method="post" action="/admin/plugins/{{ p.id }}/activar" class="d-inline">
-            <button class="btn btn-outline-success" title="Activar para este tenant"><i class="bi bi-play-circle"></i></button>
           </form>
           {% endif %}
         </div>

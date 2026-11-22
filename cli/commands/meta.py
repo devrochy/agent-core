@@ -396,7 +396,6 @@ async def _create_minimal_tenant(slug: str):
         language="es",
         persona={"role": "asistente", "tone": "cercano"},
         escalation_triggers=["asesor", "humano", "persona real", "reclamo", "queja"],
-        packs=[],
     )
     console.print(f"[green]✓ Tenant '{slug}' creado.[/green]")
     return tid

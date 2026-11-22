@@ -3,13 +3,12 @@
 `pack_installations` (0069) guarda qué habilidad está instalada para el negocio (`scope =
 'tenant'`) o solo para una conexión (`scope = 'connection'`). En esta parte de la HU:
 
-- el scope de NEGOCIO sigue siendo `enabled_business_packs(spec activo)` (ADR-0019): no se
-  escriben filas `tenant` (la fila `core` de secretos, ADR-0118 §5, es aparte);
+- las habilidades del NEGOCIO son las instaladas en sus agentes activos (`packs_del_negocio`, ADR-0206 §5,
+  HU-AOS-91): no se escriben filas `tenant` (la fila `core` de secretos, ADR-0118 §5, es aparte);
 - las filas `connection` las escribe la API (`/api/v1/admin/skills/installations`) y las lee el
   build de releases (`core/releases/build.py`): si la conexión tiene instalaciones propias
   vivas, la release congela SOLO esas (reemplazo entero, sin merge); si no, las del negocio.
-  Precondición: el pack está habilitado en el negocio (la activación del código, la config y
-  las tools siguen colgando de `spec.packs` hasta la parte 2). Instalar o quitar "aplica con la
+  Precondición: el pack es del negocio (algún agente activo lo tiene instalado). Instalar o quitar "aplica con la
   próxima release" de la conexión (ADR-0117 §2: la release fija el conjunto).
 - la instalación no lleva versión: la fija la release (ADR-0118 §2, ADR-0113 §4).
 

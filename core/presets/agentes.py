@@ -7,8 +7,8 @@ fin» de un preset v2 (`PresetManifest.agentes`, plantillas en `core/presets/pla
 2. **Precondiciones (D-35: un agente publicado tiene al menos una conexión):** el Coordinador y el
    General del backfill de HU-AOS-13 con versión publicada y al menos una conexión conversacional
    con Coordinador vivo. Sin eso no crea ningún agente.
-3. **Agente por plantilla** (si sus `habilidades` están habilitadas en el negocio, única lectura
-   de la habilitación: `packs_del_negocio`, ADR-0206 §5):
+3. **Agente por plantilla** (si sus `habilidades` están en el negocio o entre los `packs` del preset que el
+   despliegue trae: `packs_del_negocio`, ADR-0206 §5; las del preset se instalan en el agente que crea):
    - si NO existe un agente con esa `key`, lo crea (`specialist`) y publica su versión 1 con un
      contenido `agentspec/3` DERIVADO de la última versión del General (`derivar_contenido`);
    - si existe y lo creó el preset (registro en `tenants.settings["preset"]["agentes"]`), no
@@ -725,8 +725,13 @@ async def _aplicar(
     if leido is None:
         reporte.omitido = "sin_spec"
         return reporte
-    habilitados = await packs_del_negocio(tenant_id, con_core=False)
     del leido  # el v2 puede llevar literales de las declarativas
+    modulos = list(modules) if modules is not None else plugin_manager.list_modules()
+    # Una habilidad es del negocio si algún agente activo la tiene instalada (ADR-0206, HU-AOS-91): las del preset
+    # todavía no lo están (las instala `_instalar_plantilla` en el agente que crea), así que cuentan las que el
+    # despliegue trae.
+    traidas = {m.id for m in modulos}
+    habilitados = await packs_del_negocio(tenant_id, con_core=False) | {p for p in manifest.packs if p in traidas}
     # Sin General (ADR-0192 §4): la base de cada especialista sale de los valores por defecto del negocio (ADR-0206 §6).
     base_del_negocio = contenido_base(await defaults_negocio.leer(tenant_id), playbooks_de_packs=_playbooks_de_packs())
     async with get_session() as session:
@@ -740,7 +745,6 @@ async def _aplicar(
         reporte.omitido = "sin_conexion"
         return reporte
 
-    modulos = list(modules) if modules is not None else plugin_manager.list_modules()
     catalogo = catalogo_de_acciones(modulos)
     publicados = _publicados(habilitados)
     playbooks_de_packs = _playbooks_de_packs()

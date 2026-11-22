@@ -34,9 +34,9 @@ from core.admin.settings_service import (
 )
 from core.agents import defaults_negocio
 from core.agents.defaults_negocio import DefaultsDelNegocio
+from core.agents.instalaciones_agente import packs_del_negocio
 from core.agents.spec import (
     con_tenant_de_la_fila,
-    enabled_packs,
     load_active_spec,
     save_spec_if_changed,
 )
@@ -308,11 +308,10 @@ async def _load_app_settings(tenant_id) -> AppSettings | None:
         ).scalar_one_or_none()
 
 
-def _available_guardrails(spec) -> list[str]:
-    """Guardrails de los packs habilitados más los interruptores del verificador
-    del core (ADR-0119): sin ellos, guardar la configuración borraría lo que el
-    negocio había apagado."""
-    enabled = enabled_packs(spec)
+def _available_guardrails(enabled: set[str]) -> list[str]:
+    """Guardrails de los packs del negocio (`packs_del_negocio`, ADR-0206 §5) más los interruptores del
+    verificador del core (ADR-0119): sin ellos, guardar la configuración borraría lo que el negocio había
+    apagado."""
     return sorted({g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled} | set(TOGGLES))
 
 
@@ -443,10 +442,10 @@ async def get_settings_api(
     app_settings = await _load_app_settings(principal.tenant_id)
     defaults = _defaults_de(app_settings)
     return SettingsResponse(
-        identity=_identity_out(app_settings, _available_guardrails(spec)),
+        identity=_identity_out(app_settings, _available_guardrails(await packs_del_negocio())),
         brain=_brain_out(defaults),
         memory=MemorySettings(**read_memory(defaults)),
-        skills=[SkillBinding(**item) for item in read_skills(spec)],
+        skills=[SkillBinding(**item) for item in read_skills(spec, await packs_del_negocio())],
     )
 
 
@@ -457,10 +456,9 @@ async def get_catalog_api(
     """Catálogo de opciones de Identidad y comportamiento (SPEC-37, ADR-0166): qué es cada una,
     qué valores acepta, qué cambia y quién la edita. Las del master solo las ve el master; la lista
     de guardrails se calcula con los packs habilitados del negocio activo."""
-    spec = await load_active_spec()
     return catalogo_para(
         es_master=actua_como_master(principal.admin),
-        guardrails_disponibles=_available_guardrails(spec),
+        guardrails_disponibles=_available_guardrails(await packs_del_negocio()),
         guardrails_info={g.name: (g.etiqueta, g.explicacion) for g in mcp_host.get_guardrails()},
     )
 
@@ -471,8 +469,7 @@ async def save_identity(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> IdentitySettings:
     _exigir_negocio(principal)
-    spec = await load_active_spec()
-    available = _available_guardrails(spec)
+    available = _available_guardrails(await packs_del_negocio())
 
     async with get_session() as session:
         app_settings = (
@@ -574,17 +571,16 @@ class AsistenteAplicar(AsistenteRespuestas):
     huella: str
 
 
-def _actuales_del_registro(app_settings: AppSettings | None, spec) -> dict[str, Any]:
+def _actuales_del_registro(app_settings: AppSettings | None, enabled: set[str]) -> dict[str, Any]:
     """Los valores de hoy con las claves del registro (las de `IdentitySettings` son las mismas)."""
-    identidad = _identity_out(app_settings, _available_guardrails(spec))
+    identidad = _identity_out(app_settings, _available_guardrails(enabled))
     return {k: v for k, v in identidad.model_dump().items() if k in POR_CLAVE}
 
 
 async def _proponer(seccion: str, respuestas: dict[str, Any], tenant_id) -> Propuesta:
-    spec = await load_active_spec()
     app_settings = await _load_app_settings(tenant_id)
     try:
-        return resolver(seccion, respuestas, _actuales_del_registro(app_settings, spec))
+        return resolver(seccion, respuestas, _actuales_del_registro(app_settings, await packs_del_negocio()))
     except RespuestasInvalidas as exc:
         raise ApiError(422, "validation_error", "Revisa las respuestas marcadas.", fields=exc.por_pregunta) from None
     except ValueError as exc:
@@ -1064,7 +1060,7 @@ async def save_skills_settings(
         tools=[tool.model_dump() for tool in payload.tools],
     )
     spec = await load_active_spec()
-    return [SkillBinding(**item) for item in read_skills(spec)]
+    return [SkillBinding(**item) for item in read_skills(spec, await packs_del_negocio())]
 
 
 # ------------------------------------------------------------------ avanzado

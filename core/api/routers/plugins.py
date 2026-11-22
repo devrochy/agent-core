@@ -4,10 +4,11 @@
   tenant activo (mismos datos que `/admin/plugins`).
 - `GET /api/v1/admin/plugins/{plugin_id}/config` — JSON Schema de la config +
   valores actuales, con los secretos **redactados** (nunca salen del backend).
-- `PUT .../config` — valida, cifra, activa y habilita el pack para el tenant.
+- `PUT .../config` — valida, cifra y activa el código del pack para el tenant.
+- `POST .../action` — `retry` limpia la salud de error; `activate`/`deactivate` responden 410: una
+  habilidad es del negocio si algún agente activo la tiene instalada (ADR-0206, HU-AOS-91).
 
-Reusa `configure_plugin_for_tenant` de `core.admin.views` para no duplicar la
-lógica de activación/cuota (el import es local para no acoplar el paquete API).
+Reusa `configure_plugin_for_tenant` de `core.agents.habilitacion` para no duplicar la lógica de activación.
 
 Requiere la sección `plugins`.
 """
@@ -25,7 +26,6 @@ from core.agents.spec import CORE_PACK_ID
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.forms import coerce_schema_values, hide_fields, redact_secrets
-from core.billing.enforcement import QuotaExceeded
 from core.db.models import PluginConfig, PluginRecord, PluginTenantState
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
@@ -72,32 +72,6 @@ class PluginConfigSave(BaseModel):
 
 class PluginAction(BaseModel):
     action: Literal["activate", "deactivate", "retry"]
-
-
-# Contrato del tope del plan (P0 de pruebas 2026-10-17): 409 con el estado real, para que el
-# panel deje el toggle apagado en vez de "habilitado" con un error al lado.
-PLAN_LIMIT_CODE = "plan_limit_plugins"
-_PLAN_LIMIT_RESPONSE = {
-    409: {
-        "description": (
-            "El plan no permite habilitar más habilidades: `error.code = plan_limit_plugins`, "
-            "`error.details = {metric, used, limit, enabled: false}`; la habilidad queda deshabilitada."
-        )
-    }
-}
-
-
-def _plan_limit_error(exc: QuotaExceeded) -> ApiError:
-    message = (
-        f"Tu plan permite {exc.limit} habilidad(es) activa(s) y ya tienes {exc.used}: "
-        "deshabilita otra o mejora tu plan. La habilidad sigue deshabilitada."
-    )
-    return ApiError(
-        409,
-        PLAN_LIMIT_CODE,
-        message,
-        details={"metric": exc.metric, "used": exc.used, "limit": exc.limit, "enabled": False},
-    )
 
 
 async def _stored_previous(plugin_id: str, tenant_id) -> dict[str, Any]:
@@ -170,36 +144,38 @@ async def list_plugins(
     return result
 
 
-@router.post("/{plugin_id}/action", status_code=204, responses=_PLAN_LIMIT_RESPONSE)
+_ACTIVACION_RETIRADA = {
+    410: {
+        "description": (
+            "`activate`/`deactivate` retirados (ADR-0206, HU-AOS-91): `error.code = business_activation_retired`. "
+            "Una habilidad es del negocio si algún agente activo la tiene instalada; se instala en el agente."
+        )
+    }
+}
+
+
+@router.post("/{plugin_id}/action", status_code=204, responses=_ACTIVACION_RETIRADA)
 async def plugin_action(
     plugin_id: str,
     payload: PluginAction,
     principal: Annotated[Principal, Depends(require("plugins", write=True))],
 ) -> Response:
-    """Habilita/deshabilita el pack para el tenant, o limpia su salud de error.
+    """Limpia la salud de error del pack para el tenant (`retry`, ADR-0024).
 
-    Habilitar aplica la cuota del plan (409 `plan_limit_plugins` con `used`/`limit` y
-    `enabled: false`: nada cambia y `GET /admin/plugins` la sigue mostrando deshabilitada);
-    deshabilitar no toca a otros tenants; y `retry` reinicia la salud (ADR-0024). Reusa el
-    servicio del panel SSR.
+    `activate` y `deactivate` responden 410 `business_activation_retired`: ya no hay interruptor del negocio, la
+    habilidad se instala o se quita en el agente que la usa (`/admin/agents/{id}/skills`).
     """
     module = plugin_manager.get(plugin_id)
     if module is None or module.id == CORE_PACK_ID:
         raise ApiError.not_found("Habilidad no encontrada.")
 
-    if payload.action == "retry":
-        await plugin_manager.reactivate_for_tenant(principal.tenant_id, plugin_id)
-        return Response(status_code=204)
-
-    # Import local: la lógica de activación/cuota vive en el panel SSR.
-    from core.admin.views import set_pack_for_tenant
-
-    try:
-        error = await set_pack_for_tenant(plugin_id, payload.action == "activate")
-    except QuotaExceeded as exc:
-        raise _plan_limit_error(exc) from exc
-    if error:
-        raise ApiError.bad_request(error, "plugin_error")
+    if payload.action != "retry":
+        raise ApiError(
+            410,
+            "business_activation_retired",
+            "Las habilidades se instalan por agente: instálala en el agente que la usa.",
+        )
+    await plugin_manager.reactivate_for_tenant(principal.tenant_id, plugin_id)
     return Response(status_code=204)
 
 
@@ -233,7 +209,7 @@ async def get_plugin_config(
     )
 
 
-@router.put("/{plugin_id}/config", response_model=PluginConfigResponse, responses=_PLAN_LIMIT_RESPONSE)
+@router.put("/{plugin_id}/config", response_model=PluginConfigResponse)
 async def save_plugin_config(
     plugin_id: str,
     payload: PluginConfigSave,
@@ -247,16 +223,13 @@ async def save_plugin_config(
     previous = await _stored_previous(plugin_id, principal.tenant_id)
     values = coerce_schema_values(schema, payload.values, previous)
 
-    # Import local: la lógica de activación/cuota vive en el panel SSR.
-    from core.admin.views import configure_plugin_for_tenant
+    from core.agents.habilitacion import configure_plugin_for_tenant
 
-    """Valida, guarda y habilita. Valores inválidos (p. ej. un número negativo) responden 422
-    `invalid_config` con `fields` por campo; al tope del plan, 409 `plan_limit_plugins` y no se
-    guarda nada (la cuota se decide antes de persistir)."""
+    """Valida, guarda y activa el código del pack. Valores inválidos (p. ej. un número negativo)
+    responden 422 `invalid_config` con `fields` por campo. Ya no habilita la habilidad en el negocio:
+    eso pasa al instalarla en un agente (ADR-0206, HU-AOS-91), y ahí se cobra la cuota."""
     try:
         await configure_plugin_for_tenant(plugin_id, values)
-    except QuotaExceeded as exc:
-        raise _plan_limit_error(exc) from exc
     except PluginConfigError as exc:
         raise ApiError(
             422,

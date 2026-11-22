@@ -115,11 +115,12 @@ async def _lo_que_se_ve(n: dict[str, uuid.UUID]) -> dict[str, Any]:
 
 
 async def _poner_comercio(tid: uuid.UUID, encendido: bool) -> None:
-    from core.agents.habilitacion import set_pack_for_tenant
-    from core.shared.tenant import tenant_scope
+    from _habilidades import dar_habilidades, quitar_habilidades
 
-    async with tenant_scope(tid):
-        assert await set_pack_for_tenant("pack_commerce", encendido) is None
+    if encendido:
+        await dar_habilidades(tid, ["pack_commerce"])
+    else:
+        await quitar_habilidades(tid, ["pack_commerce"])
 
 
 async def test_ocultar_no_se_ve_sigue_en_la_base_no_reaparece_y_no_toca_otro_negocio() -> None:

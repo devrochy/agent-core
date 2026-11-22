@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from agentcore_contracts import AgentSpec, Procedure
+from agentcore_contracts import Procedure
 
 from core.kernel.procedures.catalogo import CORE_OWNER
 
@@ -27,15 +27,14 @@ def declarados(publicados: Iterable[Procedure], ya: set[str]) -> list[dict[str, 
         if pid not in ya
     ][:60]
 
-def procedimientos_publicados(spec: AgentSpec) -> list[Procedure]:
-    """Los procedimientos `procedure/1` que publican los packs habilitados del spec (de sus
-    carpetas `procedures/`, el mismo cargador que los registra), solo los ofrecibles: su
+def procedimientos_publicados(habilitados: set[str]) -> list[Procedure]:
+    """Los procedimientos `procedure/1` que publican los packs `habilitados` del negocio (`packs_del_negocio`,
+    ADR-0206 §5; de sus carpetas `procedures/`, el mismo cargador que los registra), solo los ofrecibles: su
     habilidad y todo su `requires` habilitados (ADR-0113 §1)."""
-    from core.agents.spec import enabled_packs
     from core.kernel.procedures.de_pack import cargar
     from core.releases.procedimientos import ofrecible
 
-    habilitados = enabled_packs(spec)
+    habilitados = set(habilitados) | {CORE_OWNER}
     salida: list[Procedure] = []
     for pack_id in sorted(habilitados - {CORE_OWNER}):
         salida.extend(p for p in cargar(pack_id) if ofrecible(p, habilitados))

@@ -1,8 +1,9 @@
-"""Habilitación de packs ("habilidades") por negocio: fuente única SSR + API + editor de agentes.
+"""Habilidades ("packs") del negocio: activación, configuración y chequeo previo a instalarlas en un agente.
 
-La habilitación vive en `AgentSpec.packs` (ADR-0019/0118). Antes estas funciones estaban en
-`core.admin.views` (capa SSR) y el editor de agentes no podía importarlas sin cruzar capas; viven
-aquí y `core.admin.views` las reexporta con sus nombres de siempre.
+Una habilidad es del negocio solo si algún agente activo la tiene instalada (`pack_installations` con
+`scope = 'agent'`, ADR-0206, HU-AOS-91): ya no hay interruptor a nivel negocio ni se escribe en `AgentSpec.packs`.
+Lo que queda aquí es lo previo a instalar (despliegue, cuota y activación del código) y la configuración del
+negocio. `core.admin.views` reexporta estas funciones con sus nombres de siempre.
 """
 
 from __future__ import annotations
@@ -13,12 +14,6 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
-from core.agents.spec import (
-    count_tenant_packs,
-    leer_spec_activo,
-    load_active_spec,
-    save_spec_version,
-)
 from core.billing.enforcement import QuotaExceeded, quota_decision
 from core.db.models import PluginConfig
 from core.db.session import get_session
@@ -33,7 +28,7 @@ log = get_logger(__name__)
 
 class HabilitacionError(RuntimeError):
     """Un pack no se pudo habilitar. `code` estable: `pack_no_instalado` (el despliegue no trae el
-    módulo) o `concurrent_edit` (otra edición del spec ganó la carrera dos veces seguidas)."""
+    módulo)."""
 
     def __init__(self, code: str, packs: Iterable[str], mensaje: str) -> None:
         super().__init__(mensaje)
@@ -118,50 +113,14 @@ async def _config_del_negocio(pack: str) -> str | None:
 
 
 async def configure_plugin_for_tenant(plugin_id: str, values: dict[str, object]) -> None:
-    """Guarda la config del plugin, lo activa y lo habilita para el tenant actual.
+    """Guarda la config del plugin en el negocio y lo activa.
 
-    Punto ÚNICO compartido por el panel SSR y la API `/api/v1` (ADR-0076/0077): la
-    lógica de cifrado, activación y cuota del pack no se duplica. Levanta
-    `QuotaExceeded` si el plan no permite habilitar otro pack.
+    Punto ÚNICO compartido por el panel SSR y la API `/api/v1` (ADR-0076/0077): la lógica de cifrado y
+    activación no se duplica. Ya no habilita nada: una habilidad es del negocio solo si algún agente activo la
+    tiene instalada (ADR-0206, HU-AOS-91), y la cuota `plugins` se cobra al instalarla.
     """
-    # La cuota se decide ANTES de persistir: al tope del plan no se guarda nada (P0 de
-    # pruebas 2026-10-17; antes quedaba la config guardada con el pack deshabilitado).
-    await verificar_cuota_si_no_habilitado(plugin_id)
     await plugin_manager.save_config(plugin_id, values)
     await plugin_manager.activate(plugin_id)
-    await enable_pack_for_tenant(plugin_id)
-
-
-async def verificar_cuota_si_no_habilitado(pack: str) -> None:
-    spec = await load_active_spec()
-    if pack in spec.packs:
-        return
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return
-    decision = await quota_decision(tenant_id, "plugins")
-    if not decision.allowed:
-        raise QuotaExceeded("plugins", count_tenant_packs(spec), decision.limit or 0)
-
-
-async def enable_pack_for_tenant(pack: str) -> str | None:
-    """Agrega `pack` a `AgentSpec.packs` del tenant actual (nueva versión).
-
-    Aplica la cuota de plugins del plan (ADR-0045): si ya está en el límite y el
-    pack no estaba habilitado, levanta `QuotaExceeded`.
-    """
-    spec = await load_active_spec()
-    if pack in spec.packs:
-        return None
-    tenant_id = get_current_tenant_id()
-    if tenant_id is not None:
-        decision = await quota_decision(tenant_id, "plugins")
-        if not decision.allowed:
-            raise QuotaExceeded("plugins", count_tenant_packs(spec), decision.limit or 0)
-    new_spec = spec.model_copy(update={"packs": sorted({*spec.packs, pack})})
-    version = await save_spec_version(new_spec)
-    await seed_flow_for_current_tenant(pack)
-    return version
 
 
 async def seed_flow_for_current_tenant(pack: str) -> None:
@@ -185,93 +144,42 @@ async def seed_flow_for_current_tenant(pack: str) -> None:
         log.warning("tenant_flow_seed_failed", plugin=pack, exc_info=True)
 
 
-async def disable_pack_for_tenant(pack: str) -> str | None:
-    """Quita `pack` de `AgentSpec.packs` del tenant actual (nueva versión).
-
-    NO desactiva el código globalmente — otro tenant puede seguir usándolo.
-    """
-    spec = await load_active_spec()
-    if pack not in spec.packs:
-        return None
-    new_spec = spec.model_copy(update={"packs": sorted(set(spec.packs) - {pack})})
-    return await save_spec_version(new_spec)
-
-
-async def set_pack_for_tenant(pack: str, enabled: bool) -> str | None:
-    """Habilita/deshabilita un pack para el tenant actual (fuente única SSR + API).
-
-    Devuelve un mensaje de error, o `None` si quedó aplicado. Levanta
-    `QuotaExceeded` si el plan no permite habilitar otro pack.
-    """
-    if enabled:
-        error = await ensure_pack_activated(pack)
-        if error is not None:
-            return error
-        await enable_pack_for_tenant(pack)
-        return None
-    await disable_pack_for_tenant(pack)
-    return None
-
-
 async def asegurar_habilidades(
     tenant_id: uuid.UUID, packs: Iterable[str], *, actor: uuid.UUID | None
 ) -> ResultadoHabilitacion:
-    """Deja habilitados en `AgentSpec.packs` los `packs` dados (el alta del asistente los necesita).
+    """Deja listos para instalar en un agente los `packs` dados: el despliegue los trae, la cuota `plugins` del
+    plan alcanza y su código queda activo. NO escribe la habilitación: una habilidad es del negocio solo si algún
+    agente activo la tiene instalada (ADR-0206, HU-AOS-91), así que quien llama la instala en el agente después.
 
-    Habilitar es un conjunto: lo que ya estaba no se toca ni crea versión de spec. Todo lo nuevo entra en
-    UNA sola versión de spec. Un pack que no activa (le falta configuración) se habilita igual y queda en
-    `config_pendiente`: no aporta tools mientras no esté activo (el runtime intersecta con lo activo) y el
-    dueño lo configura en Habilidades (`requirements[]`, ADR-0155). NO valida `min_plan` (decisión del
-    dueño); sí la cuota `plugins`, que hoy el plan no define. Corre dentro del `tenant_scope` del negocio.
+    Un pack que no activa (le falta configuración) sigue y queda en `config_pendiente`: no aporta tools mientras
+    no esté activo (el runtime intersecta con lo activo) y el dueño lo configura en Habilidades (`requirements[]`,
+    ADR-0155). NO valida `min_plan` (decisión del dueño). Corre dentro del `tenant_scope` del negocio.
     """
+    from core.agents.instalaciones_agente import packs_instalados
+
     if get_current_tenant_id() != tenant_id:
         raise PermissionError("habilitación de packs: fuera del tenant_scope del negocio")
     pedidos = sorted(set(packs))
-    # Todo lo que puede fallar sin efectos va antes de escribir.
     sin_modulo = [p for p in pedidos if plugin_manager.get(p) is None]
     if sin_modulo:
         raise HabilitacionError(
             "pack_no_instalado", sin_modulo, "Esta habilidad no está instalada en este despliegue."
         )
-    spec = await load_active_spec()
-    ya = tuple(p for p in pedidos if p in spec.packs)
-    nuevos = [p for p in pedidos if p not in spec.packs]
+    instalados = await packs_instalados(tenant_id, con_core=False)
+    ya = tuple(p for p in pedidos if p in instalados)
+    nuevos = [p for p in pedidos if p not in instalados]
     if not nuevos:
         return ResultadoHabilitacion(ya_estaban=ya)
     decision = await quota_decision(tenant_id, "plugins")
     if not decision.allowed:
-        raise QuotaExceeded("plugins", count_tenant_packs(spec), decision.limit or 0)
+        raise QuotaExceeded("plugins", len(instalados), decision.limit or 0)
 
     config_pendiente: dict[str, str] = {}
     for pack in nuevos:
         error = await ensure_pack_activated(pack) or await _config_del_negocio(pack)
         if error is not None:
             config_pendiente[pack] = error
-    habilitados: list[str] = []
-    for intento in range(2):  # un reintento si otra edición del spec ganó la carrera
-        # Fila e id en UNA lectura, y se guarda solo si esa fila sigue activa: sin eso, dos plantillas a la
-        # vez leían el mismo spec, ambas confirmaban y la segunda borraba la habilidad de la primera.
-        leido = await leer_spec_activo(tenant_id)
-        if leido is None:
-            await load_active_spec()  # negocio sin spec: se siembra el default y se relee
-            continue
-        base_id, actual = leido
-        habilitados = [p for p in nuevos if p not in actual.packs]
-        if not habilitados:
-            break
-        version = await save_spec_version(
-            actual.model_copy(update={"packs": sorted({*actual.packs, *habilitados})}), tenant_id, base_id=base_id
-        )
-        if version is not None:
-            for pack in habilitados:
-                await seed_flow_for_current_tenant(pack)
-            break
-        log.warning("habilitacion_reintento_spec", tenant_id=str(tenant_id), packs=habilitados, intento=intento)
-    else:
-        log.warning("habilitacion_conflicto", tenant_id=str(tenant_id), packs=nuevos)
-        raise HabilitacionError(
-            "concurrent_edit", nuevos, "Otra edición del negocio ganó la carrera: vuelve a intentarlo."
-        )
+        await seed_flow_for_current_tenant(pack)
     log.info(
         "pack_habilitado_por_plantilla",
         tenant_id=str(tenant_id),

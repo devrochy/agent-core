@@ -7756,7 +7756,7 @@
           "admin · habilidades"
         ],
         "summary": "Plugin Action",
-        "description": "Habilita/deshabilita el pack para el tenant, o limpia su salud de error.\n\nHabilitar aplica la cuota del plan (409 `plan_limit_plugins` con `used`/`limit` y\n`enabled: false`: nada cambia y `GET /admin/plugins` la sigue mostrando deshabilitada);\ndeshabilitar no toca a otros tenants; y `retry` reinicia la salud (ADR-0024). Reusa el\nservicio del panel SSR.",
+        "description": "Limpia la salud de error del pack para el tenant (`retry`, ADR-0024).\n\n`activate` y `deactivate` responden 410 `business_activation_retired`: ya no hay interruptor del negocio, la\nhabilidad se instala o se quita en el agente que la usa (`/admin/agents/{id}/skills`).",
         "operationId": "plugin_action_api_v1_admin_plugins__plugin_id__action_post",
         "parameters": [
           {
@@ -7815,8 +7815,8 @@
           "204": {
             "description": "Successful Response"
           },
-          "409": {
-            "description": "El plan no permite habilitar más habilidades: `error.code = plan_limit_plugins`, `error.details = {metric, used, limit, enabled: false}`; la habilidad queda deshabilitada."
+          "410": {
+            "description": "`activate`/`deactivate` retirados (ADR-0206, HU-AOS-91): `error.code = business_activation_retired`. Una habilidad es del negocio si algún agente activo la tiene instalada; se instala en el agente."
           },
           "422": {
             "description": "Validation Error",
@@ -7975,9 +7975,6 @@
                 }
               }
             }
-          },
-          "409": {
-            "description": "El plan no permite habilitar más habilidades: `error.code = plan_limit_plugins`, `error.details = {metric, used, limit, enabled: false}`; la habilidad queda deshabilitada."
           },
           "422": {
             "description": "Validation Error",
@@ -80538,14 +80535,6 @@
             "type": "string",
             "title": "Tone",
             "default": "cercano"
-          },
-          "packs": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Packs",
-            "default": []
           },
           "escalation_triggers": {
             "items": {

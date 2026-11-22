@@ -121,20 +121,14 @@ async def packs_del_negocio(tenant_id: uuid.UUID | None = None, *, con_core: boo
     incluye `core`, como `enabled_packs`; sin él es la cuenta del plan. `tenant_id` por defecto es el del
     `tenant_scope`.
 
-    TRANSITORIO (HU-AOS-91, parte B): todavía lee `agent_specs.packs`, porque el alta, los presets y «activar» siguen
-    escribiendo ahí. La parte C mueve esos escritores y cambia esta función a `packs_instalados` (decisión del dueño
-    del 2026-11-22: una habilidad es del negocio solo si algún agente activo la tiene instalada), con
-    `agent-core db packs-sin-instalacion` en cero en cada entorno antes del despliegue."""
-    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    Una habilidad es del negocio solo si algún agente activo la tiene instalada (decisión del dueño del
+    2026-11-22, HU-AOS-91): es `packs_instalados`. `agent_specs.packs` ya no se lee ni se escribe."""
     from core.shared.tenant import get_current_tenant_id
 
     tid = tenant_id or get_current_tenant_id()
     if tid is None:
         raise PermissionError("packs_del_negocio fuera de un tenant_scope")
-    _exigir_scope(tid)
-    leido = await leer_spec_activo(tid)
-    packs = set(enabled_business_packs(leido[1])) if leido is not None else set()
-    return packs | {CORE_PACK_ID} if con_core else packs
+    return await packs_instalados(tid, con_core=con_core)
 
 
 async def packs_instalados(tenant_id: uuid.UUID, *, con_core: bool = True) -> set[str]:

@@ -6,7 +6,7 @@ los datos del tenant (catalog.json) que viven en TENANTS_ROOT (gitignored).
 
 Uso:
   agent-core tenant create                # wizard interactivo paso a paso
-  agent-core tenant create --non-interactive --name "Mi Bot" --packs pack_commerce
+  agent-core tenant create --non-interactive --name "Mi Bot" --preset restaurante
   agent-core tenant create -y --name "Mi Restaurante" --preset restaurante --plan basic
   agent-core tenant presets               # presets de negocio disponibles (ADR-0110)
   agent-core tenant seed <slug>           # importa TENANTS_ROOT/<slug>/catalog.json
@@ -47,7 +47,6 @@ def create(
     business: str = typer.Option("", "--business", help="Descripción del negocio"),
     language: str = typer.Option("es", "--language", help="Idioma principal (es/en/pt)"),
     tone: str = typer.Option("cercano", "--tone", help="formal | neutral | cercano | informal"),
-    packs: str = typer.Option("", "--packs", help="Coma-separado, ej: pack_commerce"),
     preset: str = typer.Option("", "--preset", help="Preset de negocio (ver `tenant presets`), ej: restaurante"),
     plan: str = typer.Option("", "--plan", help="Plan inicial (free, basic, premium, empresarial)"),
     sin_ejemplos: bool = typer.Option(
@@ -68,11 +67,6 @@ def create(
     """Wizard paso a paso: da de alta un cliente nuevo como tenant."""
     console.print(Panel.fit("🤖 [bold]agent-core tenant create[/bold] — nuevo cliente", border_style="cyan"))
 
-    from core.plugin_manager import plugin_manager
-
-    plugin_manager.scan()
-    available = [m.id for m in plugin_manager.list_modules() if m.id != "core"]
-
     if non_interactive:
         answers = {
             "name": name,
@@ -80,7 +74,6 @@ def create(
             "business": business,
             "language": language,
             "tone": tone,
-            "packs": [p.strip() for p in packs.split(",") if p.strip()],
             "preset": preset.strip() or None,
             "plan": plan.strip() or None,
             "sembrar_ejemplos": not sin_ejemplos,
@@ -98,7 +91,7 @@ def create(
             else None,
         }
     else:
-        answers = _ask_interactive(available)
+        answers = _ask_interactive()
 
     if not answers["escalation_triggers"]:
         answers["escalation_triggers"] = list(DEFAULT_TRIGGERS)
@@ -151,7 +144,7 @@ def create(
     console.print(Panel("\n".join(lines), border_style="green", title="✓ tenant listo"))
 
 
-def _ask_interactive(available_packs: list[str]) -> dict:
+def _ask_interactive() -> dict:
     name = questionary.text("Nombre del negocio / asistente:").ask() or ""
     business = questionary.text("Describe el negocio (1-2 frases):").ask() or ""
     language = questionary.select("Idioma principal:", choices=["es", "en", "pt"], default="es").ask()
@@ -162,11 +155,6 @@ def _ask_interactive(available_packs: list[str]) -> dict:
     ).ask()
 
     slug = questionary.text("Slug del tenant:", default=slugify(name)).ask() or slugify(name)
-
-    pack_choices = [questionary.Choice(title=p, value=p) for p in available_packs]
-    selected_packs = (
-        questionary.checkbox("Packs a habilitar (espacio para marcar):", choices=pack_choices).ask() or []
-    )
 
     admin_email = questionary.text(
         "Email del administrador del tenant (Enter para omitir):"
@@ -194,7 +182,6 @@ def _ask_interactive(available_packs: list[str]) -> dict:
         "business": business,
         "language": language,
         "tone": tone,
-        "packs": selected_packs,
         "escalation_triggers": list(DEFAULT_TRIGGERS),
         "admin_email": admin_email,
         "admin_password": admin_password,
@@ -229,7 +216,6 @@ async def _onboard(answers: dict) -> tuple[uuid.UUID, list[str]]:
         language=answers["language"],
         persona={"role": "asistente", "tone": answers["tone"]},
         escalation_triggers=answers["escalation_triggers"],
-        packs=answers["packs"],
         admin_email=admin_email,
         admin_password=admin_password,
         whatsapp=answers["whatsapp"],
@@ -381,7 +367,8 @@ async def sembrar_negocio(tenant_id: uuid.UUID, slug: str, *, sobrescribir_voz: 
 @app.command("list")
 def list_() -> None:
     """Lista los tenants del sistema con su estado y packs."""
-    from core.db.models import AgentSpecRecord, Tenant
+    from core.agents.instalaciones_agente import packs_instalados
+    from core.db.models import Tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -397,17 +384,9 @@ def list_() -> None:
         table.add_column("Estado")
         table.add_column("Packs")
         for t in tenants:
-            packs: list[str] = []
+            # Las habilidades del negocio son las instaladas en sus agentes activos (ADR-0206, HU-AOS-91).
             async with tenant_scope(t.id):
-                async with get_session() as session:
-                    row = (
-                        await session.execute(
-                            select(AgentSpecRecord)
-                            .where(AgentSpecRecord.tenant_id == t.id, AgentSpecRecord.is_active.is_(True))
-                        )
-                    ).scalar_one_or_none()
-                    if row is not None:
-                        packs = (row.spec or {}).get("packs", []) or []
+                packs = sorted(await packs_instalados(t.id, con_core=False))
             table.add_row(t.slug, t.name or "—", t.status, ", ".join(packs) or "—")
         console.print(table)
 

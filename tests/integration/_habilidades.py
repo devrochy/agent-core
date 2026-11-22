@@ -56,3 +56,27 @@ async def onboard_tenant(*args: Any, packs: list[str] | None = None, **kwargs: A
         await dar_habilidades(tenant_id, packs)
         pasos = [*pasos, *(f"pack {p} instalado en {KEY_DE_PRUEBA}" for p in sorted(set(packs)))]
     return tenant_id, pasos
+
+
+async def quitar_habilidades(tenant_id: uuid.UUID, packs: Iterable[str], *, key: str = KEY_DE_PRUEBA) -> None:
+    """Quita `packs` del especialista de prueba: dejan de ser del negocio si ningún otro agente activo los tiene."""
+    from sqlalchemy import select
+
+    from core.agents.instalaciones_agente import desinstalar_de_agente
+    from core.db.models import AgentRecord
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            agent_id = (
+                await session.execute(
+                    select(AgentRecord.id).where(
+                        AgentRecord.tenant_id == tenant_id, AgentRecord.key == key, AgentRecord.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+        if agent_id is None:
+            return
+        for pack in sorted(set(packs)):
+            await desinstalar_de_agente(tenant_id, agent_id, pack)

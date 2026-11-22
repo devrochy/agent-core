@@ -193,7 +193,8 @@ async def _vendedor(*, con_pagos: bool = False) -> uuid.UUID:
         name=f"Vendedor {slug}", slug=slug, packs=["pack_commerce", "pack_subscriptions"], plan="empresarial"
     )
     if con_pagos:
-        from core.admin.views import set_pack_for_tenant
+        from _habilidades import dar_habilidades
+
         from core.plugin_manager import plugin_manager
 
         async with tenant_scope(tid):
@@ -206,7 +207,7 @@ async def _vendedor(*, con_pagos: bool = False) -> uuid.UUID:
                     "sandbox": True,
                 },
             )
-            assert await set_pack_for_tenant("pack_payments", True) is None
+            await dar_habilidades(tid, ["pack_payments"])
     return tid
 
 

@@ -61,9 +61,9 @@ async def _negocio() -> uuid.UUID:
             "pack_payments",
             {"public_key": "pub_test_x", "private_key": "prv_test_x", "events_secret": "test_x", "sandbox": True},
         )
-        from core.admin.views import set_pack_for_tenant
+        from _habilidades import dar_habilidades
 
-        assert await set_pack_for_tenant("pack_payments", True) is None
+        await dar_habilidades(tid, ["pack_payments"])
     return tid
 
 

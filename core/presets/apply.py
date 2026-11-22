@@ -16,7 +16,6 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 
 from core.agents import defaults_negocio
-from core.agents.spec import load_active_spec, save_spec_if_changed
 from core.db.models import AppSettings, Tenant
 from core.db.session import get_session
 from core.presets import PresetError, PresetManifest, load_fragment, load_preset
@@ -108,7 +107,7 @@ async def _configurar_pack(pack_id: str, module: Any, vertical: str) -> tuple[bo
     return True, "configurado"
 
 
-# ------------------------------------------------------------------ spec y settings
+# ------------------------------------------------------------------ valores por defecto y settings
 def _playbook_refs(packs: list[str], nombres: list[str]) -> list[dict[str, str]]:
     from core.onboarding import _pack_playbook_refs
 
@@ -118,15 +117,17 @@ def _playbook_refs(packs: list[str], nombres: list[str]) -> list[dict[str, str]]
     return refs
 
 
-async def _actualizar_spec(manifest: PresetManifest, habilitados: list[str], tenant_id: uuid.UUID) -> str | None:
-    spec = await load_active_spec()
-    data: dict[str, Any] = spec.model_dump(mode="json")
-    data["packs"] = sorted({*data.get("packs", []), *habilitados})
-    existentes = {p["name"] for p in data.get("playbooks", [])}
-    for ref in _playbook_refs(habilitados, manifest.playbooks):
-        if ref["name"] not in existentes:
-            data["playbooks"].append(ref)
-    return await save_spec_if_changed(spec, data, tenant_id)
+async def _actualizar_playbooks(manifest: PresetManifest, configurados: list[str], tenant_id: uuid.UUID) -> bool:
+    """Los playbooks de los packs del preset van a los valores por defecto de los agentes (`agent_defaults`,
+    ADR-0206 §6): los recibe cada agente nuevo. No habilita nada: las habilidades se instalan en el agente que
+    las usa (HU-AOS-91). Devuelve si agregó alguno."""
+    actuales = await defaults_negocio.leer(tenant_id)
+    existentes = {p.name for p in actuales.playbooks}
+    nuevos = [r for r in _playbook_refs(configurados, manifest.playbooks) if r["name"] not in existentes]
+    if not nuevos:
+        return False
+    await defaults_negocio.guardar(tenant_id, {"playbooks": [*(p.model_dump() for p in actuales.playbooks), *nuevos]})
+    return True
 
 
 async def _actualizar_persona(manifest: PresetManifest, tenant_id: uuid.UUID) -> None:
@@ -240,7 +241,7 @@ async def apply_preset(tenant_id: uuid.UUID, preset_id: str, *, sembrar_ejemplos
                 resultado.pendientes.append({"pack": pack_id, "paso": f"configurar_{pack_id}", "detalle": detalle})
                 resultado.pasos.append(f"{pack_id} pendiente de configurar ({detalle})")
 
-        resultado.spec_version = await _actualizar_spec(manifest, resultado.habilitados, tenant_id)
+        await _actualizar_playbooks(manifest, resultado.habilitados, tenant_id)
         await _actualizar_persona(manifest, tenant_id)
         await _actualizar_app_settings(manifest, tenant_id)
         if manifest.proveedor_suscripciones in resultado.habilitados:

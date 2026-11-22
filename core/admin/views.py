@@ -96,10 +96,7 @@ from core.admin.waweb_service import (
     session_state as waweb_session_state,
 )
 from core.agents import defaults_negocio
-from core.agents.habilitacion import (
-    configure_plugin_for_tenant,
-    set_pack_for_tenant,
-)
+from core.agents.habilitacion import configure_plugin_for_tenant
 from core.agents.habilitacion import ensure_pack_activated as _ensure_pack_activated
 from core.agents.instalaciones_agente import packs_del_negocio
 from core.agents.spec import (
@@ -509,7 +506,6 @@ async def tenants_new(request: Request):
         return _login_redirect()
     if not await _require_master(request):
         return RedirectResponse("/admin?flash=requiere_admin_master&flash_type=danger", status_code=303)
-    ctx["available_packs"] = sorted({m.id for m in plugin_manager.list_modules()} - {CORE_PACK_ID})
     return _render("tenants_new.html", ctx)
 
 
@@ -521,7 +517,6 @@ async def tenants_create(
     business: str = Form(default=""),
     language: str = Form(default="es"),
     tone: str = Form(default="cercano"),
-    packs: list[str] = Form(default=[]),  # noqa: B008
     escalation_triggers: str = Form(default=""),
     connect_whatsapp: bool = Form(default=False),
     wa_app_id: str = Form(default=""),
@@ -571,7 +566,6 @@ async def tenants_create(
             language=language,
             persona={"role": "asistente", "tone": tone},
             escalation_triggers=triggers or None,
-            packs=packs or None,
             # Un tester no queda como owner del negocio (ADR-0134): ya los ve todos.
             admin_email=admin_email or (None if es_tester(admin) else admin.email),
             admin_password=admin_password or None,
@@ -1488,11 +1482,9 @@ async def escalations_list(request: Request):
 async def plugins_list(request: Request):
     """Packs disponibles y si están habilitados para el TENANT ACTUAL.
 
-    Activar/desactivar acá edita `AgentSpec.packs` de este tenant únicamente
-    (nueva versión del spec, igual que antes hacía el formulario de AgentSpec —
-    esa sección se eliminó de ahí por redundante). El estado "instalado"/"error"
-    es informativo y de sistema (¿está el código cargado en el servidor?); no
-    determina el botón, que refleja el consentimiento de este tenant.
+    Habilitado = algún agente activo del negocio la tiene instalada (`packs_del_negocio`, ADR-0206 §5); aquí ya no
+    se activa ni se desactiva (HU-AOS-91). El estado "instalado"/"error" es informativo y de sistema (¿está el código
+    cargado en el servidor?).
     """
     ctx = await _base_context(request, "plugins")
     if ctx is None:
@@ -1618,27 +1610,13 @@ def _quota_redirect(exc: QuotaExceeded) -> RedirectResponse:
 
 
 @router.post("/plugins/{plugin_id}/activar")
-async def plugin_activate(request: Request, plugin_id: str):
-    """Habilita `plugin_id` para el TENANT ACTUAL únicamente (AgentSpec.packs)."""
-    if await current_admin(request) is None:
-        return _login_redirect()
-    try:
-        error = await set_pack_for_tenant(plugin_id, True)
-    except QuotaExceeded as exc:
-        return _quota_redirect(exc)
-    if error is not None:
-        return RedirectResponse(f"/admin/plugins?flash=Error: {error}&flash_type=danger", status_code=303)
-    return RedirectResponse("/admin/plugins?flash=Plugin activado para este tenant", status_code=303)
-
-
 @router.post("/plugins/{plugin_id}/desactivar")
-async def plugin_deactivate(request: Request, plugin_id: str):
-    """Deshabilita `plugin_id` para el TENANT ACTUAL únicamente. El código sigue
-    cargado en el servidor por si otro tenant lo usa."""
+async def plugin_activacion_retirada(request: Request, plugin_id: str):
+    """Retirado (ADR-0206, HU-AOS-91): una habilidad es del negocio si algún agente activo la tiene instalada; se
+    instala o se quita en el agente que la usa."""
     if await current_admin(request) is None:
         return _login_redirect()
-    await set_pack_for_tenant(plugin_id, False)
-    return RedirectResponse("/admin/plugins?flash=Plugin desactivado para este tenant", status_code=303)
+    return HTMLResponse("Las habilidades se instalan por agente: instálala en el agente que la usa.", status_code=410)
 
 
 @router.post("/plugins/{plugin_id}/reintentar")
