@@ -37,8 +37,7 @@ PREFIJO_RECEPCION = "coordinador@recepcion"
 
 
 class TienePlaybooks(Protocol):
-    """Lo que necesita `load_playbook` para la allowlist: el agente del turno, un `AgentSpec` (evals) o
-    `SoloRespuestas`."""
+    """Lo que necesita `load_playbook` para la allowlist: el agente del turno o `SoloRespuestas`."""
 
     @property
     def playbooks(self) -> Sequence[Any]: ...
@@ -205,7 +204,8 @@ def agente_desde_defaults(
     datos: Any, *, packs: Sequence[str] = (), key: str = "evals", tenant_plugins: Sequence[str] = ()
 ) -> AgenteDelTurno:
     """Un agente del turno armado como en una release desde un dict con la forma de los valores por defecto del
-    negocio (`persona`, `model`, `memory`, `policies`, `playbooks`, más `tools` con sus bindings): el contenido
+    negocio (`persona`, `model`, `memory`, `policies`, `playbooks`, más `tools` con sus bindings y `declarativeTools`
+    en la forma de `AgentSpecV3`): el contenido
     `agentspec/3` sale de `contenido_base`, y el `KernelSpec`, de la misma voz. Para evals y tests: el turno real lo
     arma `agente_del_turno` desde la release."""
     import uuid
@@ -219,6 +219,7 @@ def agente_desde_defaults(
         {"tool": b["tool"], "enabled": bool(b.get("enabled", True)), "scopes": list(b.get("scopes") or [])}
         for b in (datos.get("tools") or [])
     ]
+    contenido["declarativeTools"] = list(datos.get("declarativeTools") or [])
     cero = uuid.UUID(int=0)
     agente = AgenteCongelado(
         instance_id=cero, agent_id=cero, key=key, role="specialist", version_id=cero, version=1,

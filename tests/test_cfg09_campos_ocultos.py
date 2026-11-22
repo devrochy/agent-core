@@ -95,13 +95,13 @@ def test_los_rangos_de_cerebro_y_memoria_son_los_que_valida_la_api() -> None:
         assert _limites(modelo, clave) == (o.minimo, o.maximo), clave
 
 
-def test_los_defectos_salen_del_spec_por_defecto() -> None:
-    from core.agents.spec import DEFAULT_SPEC
+def test_los_defectos_salen_de_los_valores_por_defecto_del_negocio() -> None:
+    from core.agents.defaults_negocio import POR_DEFECTO
     from core.config_registro import POR_CLAVE
 
-    assert POR_CLAVE["model_primary"].por_defecto == DEFAULT_SPEC["model"]["primary"]
-    assert POR_CLAVE["policy_budget"].por_defecto == DEFAULT_SPEC["policies"]["budgetUsdPerConversation"]
-    assert POR_CLAVE["short_term_turns"].por_defecto == DEFAULT_SPEC["memory"]["shortTermTurns"]
+    assert POR_CLAVE["model_primary"].por_defecto == POR_DEFECTO.model.primary
+    assert POR_CLAVE["policy_budget"].por_defecto == POR_DEFECTO.policies.budgetUsdPerConversation
+    assert POR_CLAVE["short_term_turns"].por_defecto == POR_DEFECTO.memory.shortTermTurns
 
 
 def test_el_catalogo_ya_no_dice_el_runtime() -> None:

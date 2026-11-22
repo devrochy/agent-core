@@ -29,9 +29,10 @@ log = get_logger(__name__)
 
 async def _load_spec_and_slug(slug: str):  # type: ignore[no-untyped-def]
     """Devuelve (spec, slug, packs) del tenant o lanza typer.BadParameter si no existe. `packs` son las
-    habilidades del negocio, con core: `packs_del_negocio` (ADR-0206 §5)."""
-    from core.agents.instalaciones_agente import packs_del_negocio
-    from core.agents.spec import load_active_spec
+    habilidades del negocio, con core: `packs_del_negocio` (ADR-0206 §5); `spec` es lo único que `resolve_flow` lee
+    de ellas (sin el AgentSpec v2, HU-AOS-91)."""
+    from core.admin.advanced_service import _PacksDelNegocio
+    from core.agents.instalaciones_agente import CORE_PACK_ID, packs_del_negocio
     from core.db.models import Tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -43,9 +44,8 @@ async def _load_spec_and_slug(slug: str):  # type: ignore[no-untyped-def]
     if tenant is None:
         raise typer.BadParameter(f"Tenant no existe: {slug}")
     async with tenant_scope(tenant.id):
-        spec = await load_active_spec(tenant.id)
         packs = await packs_del_negocio(tenant.id)
-    return spec, slug, packs
+    return _PacksDelNegocio(tuple(sorted(packs - {CORE_PACK_ID}))), slug, packs
 
 
 def _available_tool_names(spec, enabled: set[str], provider_ids: frozenset[str] = frozenset()) -> set[str]:  # type: ignore[no-untyped-def]

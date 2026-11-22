@@ -267,12 +267,11 @@ async def run_test_turn(
     try:
         result = await process_conversation(conversation.id, text)
     except ValueError as exc:
-        # `load_active_spec` levanta ValueError("Sin AgentSpec para el tenant").
         raise PlaygroundError(str(exc)) from exc
     if result is None:
         raise PlaygroundError(
-            "No se pudo procesar el turno. Verificá que el tenant tenga un AgentSpec "
-            "activo y que el bot no esté pausado."
+            "No se pudo procesar el turno. Verificá que el agente esté publicado en la conexión "
+            "y que el bot no esté pausado."
         )
     if result.text:
         await _guardar_mensaje(tenant_id, conversation.id, "outbound", result.text)

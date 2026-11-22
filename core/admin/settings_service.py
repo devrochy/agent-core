@@ -1,9 +1,8 @@
-"""Configuración avanzada del agente (memoria, herramientas y horario).
+"""Configuración avanzada del agente (memoria y horario).
 
-Fuente única del panel SSR y la API (ADR-0076/0077). Las herramientas se persisten como una
-versión nueva del `AgentSpec` (versionable, ADR-0050/0051/0052) reusando
-`core.agents.spec.save_spec_if_changed`; la memoria es un valor por defecto de los agentes del
-negocio y vive en `app_settings.agent_defaults` (ADR-0206 §6, `core.agents.defaults_negocio`).
+Fuente única del panel SSR y la API (ADR-0076/0077). La memoria es un valor por defecto de los agentes del negocio y
+vive en `app_settings.agent_defaults` (ADR-0206 §6, `core.agents.defaults_negocio`). Las herramientas del negocio
+se retiraron con el AgentSpec v2 (ADR-0206, HU-AOS-91).
 """
 
 from __future__ import annotations
@@ -14,8 +13,6 @@ from typing import Any
 
 from core.agents import defaults_negocio
 from core.agents.defaults_negocio import DefaultsDelNegocio
-from core.agents.spec import load_active_spec, save_spec_if_changed
-from core.mcp.host import mcp_host
 
 # ------------------------------------------------------------------ horario
 _RANGE_RE = re.compile(r"^([0-6])\s+(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})$")
@@ -89,56 +86,3 @@ async def save_memory(
 
 
 # ------------------------------------------------------------------ habilidades (tools)
-def read_skills(spec, enabled: set[str]) -> list[dict[str, Any]]:  # type: ignore[no-untyped-def]
-    """Herramientas editables (de los packs del negocio, `packs_del_negocio`) con su binding actual."""
-    data = spec.model_dump(mode="json")
-    bindings = {b.get("tool"): b for b in (data.get("tools") or [])}
-    items: list[dict[str, Any]] = []
-    for tool in mcp_host.get_tools():
-        if tool.plugin_id not in enabled:
-            continue
-        binding = bindings.get(tool.name) or {}
-        items.append(
-            {
-                "name": tool.name,
-                "plugin_id": tool.plugin_id,
-                "description": tool.description,
-                "enabled": bool(binding.get("enabled", True)),
-                "max_calls_per_conversation": binding.get("maxCallsPerConversation"),
-                "requires_confirmation": bool(binding.get("requiresConfirmation", False)),
-            }
-        )
-    items.sort(key=lambda t: (t["plugin_id"], t["name"]))
-    return items
-
-
-async def save_skills(
-    tenant_id: uuid.UUID | None,
-    *,
-    tools: list[dict[str, Any]],
-) -> str | None:
-    """Aplica on/off y límites SOLO a las tools de packs habilitados."""
-    from core.agents.instalaciones_agente import packs_del_negocio
-
-    spec = await load_active_spec()
-    data = spec.model_dump(mode="json")
-    enabled = await packs_del_negocio()
-    editable = {t.name for t in mcp_host.get_tools() if t.plugin_id in enabled}
-
-    bindings_by_tool = {b["tool"]: dict(b) for b in data.get("tools", [])}
-    for item in tools:
-        name = str(item.get("name") or "")
-        if name not in editable:
-            continue
-        try:
-            max_calls = int(item.get("max_calls_per_conversation") or 0)
-        except (TypeError, ValueError):
-            max_calls = 0
-        binding = bindings_by_tool.get(name, {"tool": name, "scopes": []})
-        binding["enabled"] = bool(item.get("enabled", True))
-        binding["maxCallsPerConversation"] = max_calls if max_calls > 0 else None
-        binding["requiresConfirmation"] = bool(item.get("requires_confirmation", False))
-        bindings_by_tool[name] = binding
-    data["tools"] = list(bindings_by_tool.values())
-    await save_spec_if_changed(spec, data, tenant_id)
-    return None

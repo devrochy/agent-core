@@ -351,87 +351,9 @@
   </div>
 </div>
 
-<div class="card mt-3">
-  <div class="card-header fw-semibold">Habilidades (tools)</div>
-  <div class="card-body">
-    <p class="text-secondary small">
-      Habilitá o deshabilitá tools del asistente y poné límites. Los <b>packs</b>
-      (conjuntos de capacidades) se gestionan en <a href="/admin/plugins">Plugins</a>.
-    </p>
-    <form method="post" action="/admin/configuracion/habilidades">
-      <div class="table-responsive">
-        <table class="table table-sm align-middle">
-          <thead>
-            <tr><th>Tool</th><th>Pack</th><th>Activa</th><th>Máx./conversación</th><th>Requiere confirmar</th></tr>
-          </thead>
-          <tbody>
-            {% set bindings = {} %}
-            {% for b in spec['tools'] %}{% set _ = bindings.update({b['tool']: b}) %}{% endfor %}
-            {% for t in all_tools %}
-            {% set b = bindings.get(t.name, {}) %}
-            <tr>
-              <td>
-                <code>{{ t.name }}</code>
-                <div class="text-secondary small">{{ t.description[:90] }}</div>
-              </td>
-              <td><span class="badge text-bg-secondary">{{ t.plugin_id }}</span></td>
-              <td>
-                <input type="checkbox" class="form-check-input" name="tool_enabled:{{ t.name }}"
-                       {% if b.get('enabled', true) %}checked{% endif %}>
-              </td>
-              <td>
-                <input type="number" class="form-control form-control-sm" style="max-width:100px"
-                       min="0" name="tool_maxcalls:{{ t.name }}"
-                       value="{{ b.get('maxCallsPerConversation') or 0 }}">
-              </td>
-              <td>
-                <input type="checkbox" class="form-check-input" name="tool_requires:{{ t.name }}"
-                       {% if b.get('requiresConfirmation') %}checked{% endif %}>
-              </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="5" class="text-secondary">No hay tools registradas.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      <button class="btn btn-primary">Guardar habilidades</button>
-    </form>
-  </div>
-</div>
-
-<div class="card mt-3">
-  <div class="card-header fw-semibold">Tools declarativas (HTTP)</div>
-  <div class="card-body">
-    <p class="text-secondary small">
-      Definí tools del negocio sin escribir código (ADR-0052): cada una llama a un
-      endpoint HTTP autorizado. JSON con <code>name</code>, <code>description</code>,
-      <code>method</code> (GET/POST), <code>url</code> (con <code>{param}</code>),
-      <code>allowed_domains</code>, y opcional <code>headers</code>/<code>parameters</code>/<code>body</code>.
-    </p>
-    <form method="post" action="/admin/configuracion/habilidades">
-      <textarea name="declarative_tools_json" class="form-control font-monospace" rows="8"
-                placeholder='[{"name": "consultar_pedido", "description": "Estado de pedido", "method": "GET", "url": "https://api.negocio.com/orders/{order_id}", "allowed_domains": ["api.negocio.com"]}]'>{{ declarative_tools_json }}</textarea>
-      <button class="btn btn-primary mt-2">Guardar tools declarativas</button>
-    </form>
-  </div>
-</div>
-
-<div class="card mt-3">
-  <div class="card-header fw-semibold">Guardrails propios del negocio</div>
-  <div class="card-body">
-    <p class="text-secondary small">
-      Reglas propias además de los guardrails de los packs. Una regla por línea:
-      <code>forbidden_phrase | frase1, frase2 | retry|escalate</code>,
-      <code>required_tool | frase que afirma | nombre_tool | retry|escalate</code> o
-      <code>max_length | 500 | retry|escalate</code>. Se guardan en el AgentSpec.
-    </p>
-    <form method="post" action="/admin/configuracion/habilidades">
-      <textarea name="guardrails_text" class="form-control font-monospace" rows="5"
-                placeholder="forbidden_phrase | garantizado, 100% seguro | retry">{{ guardrails_text }}</textarea>
-      <button class="btn btn-primary mt-2">Guardar guardrails</button>
-    </form>
-  </div>
+<div class="alert alert-light border small mt-3 mb-0">
+  Los guardrails y las tools de cada agente se configuran en el agente (las del negocio eran del AgentSpec v2,
+  retirado en HU-AOS-91).
 </div>
 {% endif %}
 
@@ -439,60 +361,6 @@
 <div class="row g-3">
   <div class="col-lg-7">
     <div class="card">
-      <div class="card-header fw-semibold">AgentSpec (JSON crudo) <span class="text-secondary small">— modo avanzado</span></div>
-      <div class="card-body">
-        <p class="text-secondary small">
-          La configuración normal del agente se edita en las pestañas
-          <a href="/admin/configuracion">Identidad</a>, <a href="/admin/configuracion?tab=cerebro">Cerebro</a>,
-          <a href="/admin/configuracion?tab=memoria">Memoria</a> y <a href="/admin/configuracion?tab=habilidades">Habilidades</a>.
-          Este editor es para ajustes finos: si lo llenás, <b>reemplaza todo el formulario</b>
-          (debe ser un AgentSpec válido, contrato v2). Guardar crea y activa una versión nueva.
-        </p>
-        <form method="post" action="/admin/spec">
-          <textarea class="form-control font-monospace" name="raw_json" rows="14"
-                    placeholder='{"id": "...", "version": "1.0.0", "tenantId": "...", "persona": {...}, ...}'></textarea>
-          <div class="d-flex justify-content-between align-items-center mt-3">
-            <span class="text-secondary small">Guardar y activar nueva versión</span>
-            <button class="btn btn-primary">Guardar AgentSpec</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  </div>
-  <div class="col-lg-5">
-    <div class="card">
-      <div class="card-header fw-semibold">Versiones del AgentSpec</div>
-      <div class="card-body p-0">
-        <table class="table table-sm table-hover mb-0">
-          <thead><tr><th>Versión</th><th>Activa</th><th>Creada</th><th></th></tr></thead>
-          <tbody>
-            {% for v in versions %}
-            <tr>
-              <td>{{ v.version }}</td>
-              <td>{% if v.is_active %}<span class="badge bg-success">activa</span>{% else %}—{% endif %}</td>
-              <td class="text-secondary small">{{ v.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-              <td class="text-end">
-                {% if not v.is_active %}
-                <form method="post" action="/admin/configuracion/spec/activar" class="d-inline"
-                      onsubmit="return confirm('¿Activar la versión {{ v.version }}? Reemplaza la activa.');">
-                  <input type="hidden" name="record_id" value="{{ v.id }}">
-                  <button class="btn btn-sm btn-outline-primary py-0">Activar</button>
-                </form>
-                {% endif %}
-              </td>
-            </tr>
-            {% else %}
-            <tr><td colspan="4" class="text-secondary small">Sin versiones.</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <div class="alert alert-light border small mt-3 mb-0">
-      Las <b>extensions</b> (personalización por tenant) y otros campos sin UI se editan
-      aquí en el JSON. Los <b>packs</b> se habilitan en <a href="/admin/plugins">Plugins</a>.
-    </div>
-    <div class="card mt-3">
       <div class="card-header fw-semibold">Calidad (evals)</div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0">

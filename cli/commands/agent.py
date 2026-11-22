@@ -1,7 +1,7 @@
-"""agent-core agent: release y rollback de AgentSpec (ADR-0009/0016) y linter de v3.
+"""agent-core agent: linter de `agentspec/3` y `kernelspec/1` (ADR-0113).
 
-El rollback es un flip de `is_active` en `agent_specs` (un paso). El canary se
-resuelve por el gate de evals + tenant staging (ADR-0016).
+Las versiones y el rollback del AgentSpec v2 se retiraron (ADR-0206, HU-AOS-91): las versiones son de cada agente
+y las releases se revierten desde Conexiones.
 
 `agent-core agent lint <archivo.json> ...` valida `agentspec/3` y `kernelspec/1` con el mismo
 validador y linter de CI y de la API (ADR-0113, HU-AOS-12). No toca la base de datos.
@@ -9,7 +9,6 @@ validador y linter de CI y de la API (ADR-0113, HU-AOS-12). No toca la base de d
 
 from __future__ import annotations
 
-import asyncio
 import builtins
 import json
 from pathlib import Path
@@ -18,74 +17,16 @@ from typing import Annotated
 import typer
 from rich.console import Console
 from rich.markup import escape
-from rich.table import Table
-from sqlalchemy import select
-
-from cli.tenant_ref import resolve_tenant as _resolve_tenant
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
-def _playbooks_count(spec: dict) -> int:
-    return len((spec or {}).get("playbooks", []) or [])
+@app.callback()
+def _grupo() -> None:
+    """Linter de agentspec/3 y kernelspec/1 (ADR-0113)."""
+    # Con un solo comando, Typer lo volvería el comando por defecto: el callback mantiene `agent lint`.
 
-
-@app.command()
-def list(ref: str = typer.Argument("tenant-1", help="Tenant (slug o UUID)")) -> None:
-    """Lista las versiones del AgentSpec del tenant."""
-
-    async def _run() -> None:
-        from core.db.models import AgentSpecRecord
-        from core.db.session import get_session
-        from core.shared.tenant import tenant_scope
-
-        tid = await _resolve_tenant(ref)
-        async with tenant_scope(tid):
-            async with get_session() as session:
-                rows = (
-                    await session.execute(
-                        select(AgentSpecRecord)
-                        .where(AgentSpecRecord.tenant_id == tid)
-                        .order_by(AgentSpecRecord.created_at)
-                    )
-                ).scalars().all()
-        table = Table(title=f"AgentSpec · {ref}")
-        table.add_column("Versión")
-        table.add_column("Activa")
-        table.add_column("Playbooks")
-        table.add_column("Creada")
-        for r in rows:
-            table.add_row(
-                r.version,
-                "SÍ" if r.is_active else "no",
-                str(_playbooks_count(r.spec)),
-                r.created_at.strftime("%Y-%m-%d %H:%M") if r.created_at else "—",
-            )
-        console.print(table)
-
-    asyncio.run(_run())
-
-
-@app.command()
-def activate(
-    version: str = typer.Argument(..., help="Versión a activar (publicar)"),
-    ref: str = typer.Argument("tenant-1", help="Tenant (slug o UUID)"),
-) -> None:
-    """Retirado: el AgentSpec v2 ya no se lee (ADR-0206, HU-AOS-91). Publica y revierte versiones de cada agente."""
-    console.print("[red]Retirado con el AgentSpec v2: las versiones son de cada agente (panel → Agentes).[/red]")
-    raise typer.Exit(2)
-
-
-@app.command()
-def rollback(
-    ref: str = typer.Argument("tenant-1", help="Tenant (slug o UUID)"),
-    version: str | None = typer.Option(None, "--version", "-v", help="Versión exacta a revertir"),
-) -> None:
-    """Retirado: el AgentSpec v2 ya no se lee (ADR-0206, HU-AOS-91). La release de cada conexión se revierte desde
-    el panel."""
-    console.print("[red]Retirado con el AgentSpec v2: revierte la release de la conexión (panel → Conexiones).[/red]")
-    raise typer.Exit(2)
 
 def _leer_spec(path: Path) -> tuple[object | None, str | None]:
     from core.agents.contrato_v3 import MAX_SPEC_BYTES

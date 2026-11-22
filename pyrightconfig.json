@@ -16,7 +16,6 @@
     "packages/contracts/agentcore_contracts/kernelspec.py",
     "core/agents/contrato_v3.py",
     "core/agents/turno.py",
-    "core/agents/declarativas.py",
     "core/agents/secretos.py",
     "core/agents/versiones.py",
     "core/api/routers/agents.py",

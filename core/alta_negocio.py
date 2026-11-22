@@ -1,6 +1,6 @@
 """Alta de un negocio: tenant + asistente + cuenta del admin (ADR-0001, ADR-0048, ADR-0110).
 
-Dar de alta un cliente en agent-core es 100% configuración: tenant + AgentSpec +
+Dar de alta un cliente en agent-core es 100% configuración: tenant + Coordinador +
 AppSettings (con la persona inicial en `agent_defaults`, ADR-0206 §6) + conexión de canal +
 preset (solo configuración). Las habilidades no se eligen en el alta: se instalan en el agente que
 las usa (ADR-0206, HU-AOS-91). Cero código por cliente.
@@ -14,17 +14,13 @@ plataforma y CLI) y el consumidor de aprovisionamiento del core.
 from __future__ import annotations
 
 import uuid
-from copy import deepcopy
 
-from agentcore_contracts import AgentSpec
 from sqlalchemy import select
 
 from core import onboarding
 from core.agents import defaults_negocio
-from core.agents.spec import DEFAULT_SPEC
 from core.db.models import (
     Admin,
-    AgentSpecRecord,
     AppSettings,
     ChannelConnection,
     Tenant,
@@ -37,21 +33,6 @@ from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 
 log = get_logger(__name__)
-
-
-def _default_spec_for(slug: str, tenant_id: uuid.UUID) -> dict:
-    """El spec v2 del negocio nuevo, sin packs: el alta no elige habilidades (ADR-0206, HU-AOS-91), se instalan en
-    el agente que las usa. La persona ya no va aquí: es un valor por defecto de los agentes
-    (`app_settings.agent_defaults`, ADR-0206 §6) y la escribe `onboard_tenant`."""
-    spec = deepcopy(DEFAULT_SPEC)
-    spec["tenantId"] = str(tenant_id)
-    # El contrato congelado es rey: un spec inválido NO llega a la BD (evita que
-    # /admin/spec reviente al renderizar con model_validate).
-    try:
-        AgentSpec.model_validate(spec)
-    except Exception as exc:
-        raise ValueError(f"AgentSpec inválido para {slug}: {exc}") from exc
-    return spec
 
 
 async def _resolve_admin(email: str | None) -> Admin | None:
@@ -216,9 +197,7 @@ async def onboard_tenant(
                     assistant_name=name,
                     business_description=business_description,
                     language=language,
-                    # `escalation.triggers` del AgentSpec nunca se lee en runtime
-                    # (core/orchestrator/consumer.py lee este campo) -- ver
-                    # `_default_spec_for`, que ya NO escribe ahí.
+                    # Las palabras de escalamiento viven aquí (core/orchestrator/consumer.py lee este campo).
                     escalation_config={"keywords": list(escalation_triggers)}
                     if escalation_triggers
                     else {},
@@ -236,28 +215,6 @@ async def onboard_tenant(
                     campos = sorted({".".join(str(p) for p in e.get("loc", ())) for e in exc.errors()}) if hasattr(exc, "errors") else []
                     raise ValueError(f"Persona inválida para {slug}: {', '.join(campos) or 'revisa los valores'}") from None
                 steps.append("persona inicial guardada")
-
-            spec_row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tenant_id,
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if spec_row is None:
-                session.add(
-                    AgentSpecRecord(
-                        tenant_id=tenant_id,
-                        version="1.0.0",
-                        is_active=True,
-                        spec=_default_spec_for(slug, tenant_id),
-                    )
-                )
-                steps.append("agent_spec creado")
-            else:
-                steps.append("agent_spec ya existía")
 
             if admin is not None:
                 link = (

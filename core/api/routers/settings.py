@@ -4,9 +4,9 @@
 `PUT .../identity` y `PUT .../brain` la actualizan, y `PUT .../bot-paused` pausa
 o reactiva el asistente sin tocar el resto de la identidad. La persona, el modelo,
 la memoria y las políticas son los valores por defecto de los agentes del negocio
-(`app_settings.agent_defaults`, ADR-0206 §6, `core.agents.defaults_negocio`); las
-habilidades y el modo avanzado siguen en el `AgentSpec` (`core.agents.spec`), con
-la misma maquinaria que el panel SSR. Requiere la sección `settings`.
+(`app_settings.agent_defaults`, ADR-0206 §6, `core.agents.defaults_negocio`). Lo que
+era del AgentSpec v2 (tools del negocio, versiones, guardrails, editor crudo) responde 410
+(HU-AOS-91). Requiere la sección `settings`.
 
 Nota de alcance: cubre Identidad (incl. persona) y Cerebro. Las pestañas Memoria,
 Habilidades y Avanzado del panel SSR quedan pendientes.
