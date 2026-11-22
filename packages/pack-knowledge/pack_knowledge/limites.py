@@ -3,6 +3,9 @@
 `documentos` son los documentos vivos del negocio (sin `deleted_at`) y `conocimiento_mb`, la
 suma de sus `bytes` en MB. El core solo aporta los límites del plan (`core/billing/plans.py`) y
 el advisory lock con el 409 `plan_limit_<clave>` (`enforcement.enforce_pack_growth`).
+
+Embeber consume créditos (ADR-0208 §16): antes de gastar se verifica el saldo del mes con
+`creditos.alcanza` (409 `plan_limit_creditos`), con la cota de `embeddings.creditos_de_ingesta`.
 """
 
 from __future__ import annotations
@@ -12,7 +15,9 @@ from typing import Any
 
 from sqlalchemy import func, select
 
+from core.billing.creditos import alcanza
 from core.billing.enforcement import enforce_pack_growth
+from core.llm.embeddings import creditos_de_ingesta
 from core.shared.tenant import get_current_tenant_id
 from pack_knowledge.models import KnowledgeDocument
 
@@ -52,3 +57,15 @@ async def exigir_cupo(session: Any, *, bytes_nuevos: int) -> None:
 
     await enforce_pack_growth(tenant_id, "documentos", _documentos, session=session)
     await enforce_pack_growth(tenant_id, "conocimiento_mb", _mb, incremento=bytes_nuevos / MB, session=session)
+
+
+async def exigir_creditos(session: Any, *, bytes_a_embeber: int) -> None:
+    """Levanta `QuotaExceeded("creditos", …)` si el saldo del mes no alcanza para embeber un
+    documento de `bytes_a_embeber` (ADR-0208 §16). La cota toma un carácter por byte: sobreestima
+    (un PDF pesa más que su texto) para no gastar sin saldo. Corre en la sesión que va a escribir,
+    dentro del `tenant_scope`, y toma el tenant de ese scope. Con `BILLING_BLOQUEAR_POR_CREDITOS`
+    apagado `alcanza` solo mide."""
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        raise RuntimeError("exigir_creditos requiere un tenant_scope")
+    await alcanza(session, tenant_id, creditos_de_ingesta(bytes_a_embeber))

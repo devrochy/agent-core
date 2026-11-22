@@ -262,10 +262,18 @@ async def test_ciclo_queda_en_el_ledger_y_avisa_y_el_gasto_es_agent_run() -> Non
     )
     assert (estado_a2a, llamadas, profundidad, gastado) == ("loop_blocked", 2, 2, Decimal("0.004200"))
     assert len(avisos) == 1 and avisos[0]["call_id"] == str(vuelta.call_id) and "sku" not in str(avisos[0])
-    ((kind, call, instancia, costo),) = await _sql(
-        tid, "select kind, a2a_call_id, agent_instance_id, cost_usd from usage_ledger where turn_id = :t", t=turno
+    ((kind, call, instancia, costo, creditos, llave, version, trm),) = await _sql(
+        tid,
+        "select kind, a2a_call_id, agent_instance_id, cost_usd, credits, key_mode, tarifario_version, trm_cop "
+        "from usage_ledger where turn_id = :t",
+        t=turno,
     )
     assert (kind, call, instancia, costo) == ("agent_run", ida.call_id, agenda, Decimal("0.004200"))
+    # Créditos congelados al escribir, igual que `turn` (HU-BILL-21, ADR-0208 §11): costo real sin fee.
+    from core.billing.tarifario import TARIFARIO_V2, creditos_variables
+
+    assert (llave, version) == ("platform", "v2")
+    assert creditos == creditos_variables(Decimal("0.0042"), trm, TARIFARIO_V2)
 
 
 async def test_sin_cabecera_del_turno_no_se_escribe_nada() -> None:

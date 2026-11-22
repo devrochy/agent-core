@@ -54,7 +54,7 @@ async def credito_del_mes(
     """Crédito consumido en el mes del ciclo (HU-BILL-04/06, ADR-0144), o None si no se pudo
     medir (sin suscripción, schema sin migrar o fallo): el panel muestra «medición pendiente» en
     vez de una barra falsa. Ventana: `periodos.ventana_mensual` desde `period_start`."""
-    from core.billing.creditos import creditos_enteros, medir_creditos
+    from core.billing.creditos import PLAYGROUND_GRATIS_POR_CICLO, creditos_enteros, medir_creditos
     from core.billing.periodos import ventana_mensual
 
     if overview is None or overview.period_start is None:
@@ -76,6 +76,13 @@ async def credito_del_mes(
         "by_agent": [
             {"agent_id": a.agent_id, "name": a.name, "used": float(a.used)} for a in consumo.por_agente
         ],
+        # Playground (ADR-0208 §15): consumo del ciclo, gratuito restante y lo que ya se cobra.
+        "playground": {
+            "used": float(consumo.playground_usado),
+            "free_limit": float(PLAYGROUND_GRATIS_POR_CICLO),
+            "free_remaining": float(consumo.playground_gratis_restante),
+            "charged": float(consumo.por_concepto.get("playground", 0)),
+        },
     }
 
 

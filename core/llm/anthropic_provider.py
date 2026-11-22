@@ -41,6 +41,13 @@ PRICING: dict[str, tuple[float, float]] = {
     "claude-sonnet-4-5": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
 }
+# USD por millón de tokens (lectura, escritura de 5 min) de la caché (ADR-0208 §13): lectura 0,1× y
+# escritura 1,25× la entrada. Anthropic NO incluye lo cacheado en `input_tokens`: se suma aparte.
+# Fuente: https://platform.claude.com/docs/en/about-claude/pricing (2026-11-22).
+PRECIOS_CACHE: dict[str, tuple[float, float]] = {
+    "claude-sonnet-4-5": (0.30, 3.75),
+    "claude-haiku-4-5": (0.10, 1.25),
+}
 
 
 class AnthropicProvider(BaseLLMProvider):
@@ -50,6 +57,8 @@ class AnthropicProvider(BaseLLMProvider):
         self.api_key = api_key
         self.model = model
         self.pricing_per_mtok = PRICING.get(model, (3.00, 15.00))
+        self.cache_pricing_per_mtok = PRECIOS_CACHE.get(model)
+        self.input_includes_cache = False
 
     # ------------------------------------------------------------ serialización
     @staticmethod

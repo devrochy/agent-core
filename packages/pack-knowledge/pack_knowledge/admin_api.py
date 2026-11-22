@@ -88,7 +88,7 @@ async def listar_documentos(
     response_model=DocumentoOut,
     status_code=status.HTTP_202_ACCEPTED,
     responses={
-        **plan_limit_responses("documentos"),
+        **plan_limit_responses("documentos", "conocimiento_mb", "creditos"),
         413: {"description": "El archivo supera 20 MB (`error.code = muy_grande`)."},
         422: {"description": "Tipo o contenido no admitido (`error.code = formato | vacio`)."},
     },
@@ -143,6 +143,7 @@ async def borrar_documento(
     "/agents/{agent_id}/documents/{document_id}/reprocess",
     response_model=DocumentoOut,
     status_code=status.HTTP_202_ACCEPTED,
+    responses=plan_limit_responses("creditos"),
 )
 async def reprocesar_documento(
     agent_id: uuid.UUID,
@@ -153,3 +154,5 @@ async def reprocesar_documento(
         return _out(await ingesta.reprocesar(agent_id, document_id))
     except ingesta.DocumentoNoEncontrado:
         raise ApiError.not_found(_NO_DOCUMENTO) from None
+    except QuotaExceeded as exc:
+        raise plan_limit_error(exc) from None

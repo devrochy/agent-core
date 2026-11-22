@@ -67,7 +67,7 @@ def test_creditos_del_turno_al_escribir() -> None:
 
     usage = _TurnUsage(cost_usd=0.0069, llamadas=1)
     assert _creditos_del_turno(usage) == {
-        "credits": Decimal("8.5"), "key_mode": "platform", "tarifario_version": "v1", "trm_cop": Decimal("4000.0"),
+        "credits": Decimal("8.5"), "key_mode": "platform", "tarifario_version": "v2", "trm_cop": Decimal("4000.0"),
     }
     usage.key_mode = "byok"
     assert _creditos_del_turno(usage)["credits"] == Decimal("0.2")

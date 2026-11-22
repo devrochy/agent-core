@@ -38,7 +38,7 @@ from core.shared.tenant import get_current_tenant_id, tenant_scope, tenant_slug
 from core.tasks.queue import task_queue
 from pack_knowledge import archivos
 from pack_knowledge.extraccion import ExtraccionError, extraer_texto
-from pack_knowledge.limites import exigir_cupo
+from pack_knowledge.limites import exigir_creditos, exigir_cupo
 from pack_knowledge.models import CHUNKER_VERSION, KnowledgeChunk, KnowledgeDocument
 from pack_knowledge.troceado import DemasiadosFragmentos, trocear
 
@@ -138,7 +138,8 @@ async def crear_documento(
 ) -> KnowledgeDocument:
     """Valida, aplica el tope del plan, guarda el original y deja el documento `pendiente`.
 
-    Levanta `ArchivoInvalido`, `AgenteNoEncontrado`, `DocumentoDuplicado` o `QuotaExceeded`. Si la
+    Levanta `ArchivoInvalido`, `AgenteNoEncontrado`, `DocumentoDuplicado` o `QuotaExceeded` (tope
+    del plan o saldo de créditos para embeberlo, ADR-0208 §16). Si la
     transacción falla, el original escrito se borra."""
     tenant_id = _tenant()
     archivos.validar(tipo, contenido)
@@ -157,6 +158,7 @@ async def crear_documento(
             if existente is not None:
                 raise DocumentoDuplicado(existente)
             await exigir_cupo(session, bytes_nuevos=len(contenido))
+            await exigir_creditos(session, bytes_a_embeber=len(contenido))
             ruta = archivos.guardar(slug, doc_id, tipo, contenido)
             doc = KnowledgeDocument(
                 id=doc_id,
@@ -202,10 +204,12 @@ async def borrar_documento(agent_id: uuid.UUID, document_id: uuid.UUID) -> None:
 
 
 async def reprocesar(agent_id: uuid.UUID, document_id: uuid.UUID) -> KnowledgeDocument:
-    """Vuelve a `pendiente` y encola la extracción (documento fallido o con un troceado viejo)."""
+    """Vuelve a `pendiente` y encola la extracción (documento fallido o con un troceado viejo).
+    Levanta `DocumentoNoEncontrado` o `QuotaExceeded` (sin saldo para volver a embeber)."""
     tenant_id = _tenant()
     async with get_session() as session:
         doc = await _documento(session, agent_id, document_id)
+        await exigir_creditos(session, bytes_a_embeber=int(doc.bytes or 0))
         doc.estado = "pendiente"
         doc.error_codigo = None
         doc.error_detalle = None
