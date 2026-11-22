@@ -1,0 +1,5 @@
+## Tras el «Sí, confirmo» se ejecuta lo que vio el cliente (2026-11-22)
+
+- Cuando el kernel pide confirmar una acción de un procedimiento guarda sus argumentos efectivos en `conversations.state` (`accion_por_confirmar`, junto a la tarea y al hash). Si el cliente confirmó y el modelo vuelve a llamar la acción con otros argumentos (reescribió el título o el detalle: chat web de Estudio Aurora, 2026-11-19), el motor la ejecuta con los argumentos confirmados, ligados otra vez a los datos de la tarea, en vez de pedir otra confirmación. Si un dato cambió desde entonces, el hash no coincide y se pide otra vez como siempre.
+- Cubre el riesgo que dejó anotado ADR-0113 («después del toque, el modelo tiene que repetir la acción con los mismos argumentos y el historial es solo texto»). La clave se borra al ejecutarse la acción: lleva datos personales y por eso no va en `task_events` (append-only).
+- `motor.hash_confirmado`: el hash del `confirmed` vigente de una acción (mismo recorrido que `accion_confirmada`).

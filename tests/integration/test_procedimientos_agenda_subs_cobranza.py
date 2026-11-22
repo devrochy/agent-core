@@ -26,7 +26,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 pytestmark = [
     pytest.mark.aislamiento,
@@ -276,6 +276,50 @@ async def test_agendar_rechaza_un_horario_no_ofrecido_y_ofrece_los_disponibles(p
     assert len(citas) == 1
     _tarea_final, estado = await _tarea(conv, proc)
     assert estado == "completed"
+
+
+async def test_tras_el_si_confirmo_se_ejecuta_lo_que_vio_el_cliente_aunque_el_modelo_reescriba(packs_registrados, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Felipe (Estudio Aurora, 2026-11-19): confirmó «Limpieza facial profunda con Felipe Ocampo» y
+    al volver a llamar `create_calendar_event` el modelo escribió otro título y otro detalle; el
+    hash cambió y el kernel le pidió confirmar de nuevo. Ahora corre con los args confirmados."""
+    from pack_calendar.models import Appointment
+
+    from core.plugin_manager import plugin_manager
+
+    tid = await _negocio(["pack_calendar"])
+    async with _scope(tid):
+        await plugin_manager.save_config("pack_calendar", {
+            "source": "interno", "business_hours": HORAS, "timezone": "America/Bogota",
+            "slot_minutes": 60, "buffer_minutes": 0, "event_duration_minutes": 60,
+        })
+    dia = (datetime.now(ZoneInfo("America/Bogota")) + timedelta(days=7)).date().isoformat()
+    proc = "pack_calendar.agendar_cita"
+    conv = await _conversacion(tid)
+    vistos = {"title": "Limpieza facial profunda con Felipe", "start_datetime": f"{dia}T10:00:00",
+              "description": "Limpieza facial profunda (60 min).", "attendee_email": "felipe@example.com"}
+    guion = _Guion([
+        ("iniciar_procedimiento", {"procedure_id": proc}),
+        ("actualizar_tarea", {"slots": {"horario": f"{dia}T10:00:00", "correo": "felipe@example.com"}}),
+        ("create_calendar_event", vistos),
+        "Te agendo la limpieza el martes a las 10, ¿confirmas?",
+    ])
+    resultado = await _turno(conv, guion, monkeypatch, "limpieza facial el martes a las 10, felipe@example.com")
+    assert resultado is not None and resultado.confirmacion is not None
+    assert "Limpieza facial profunda con Felipe" in resultado.confirmacion.confirmacion.texto
+
+    reescritos = {**vistos, "title": "Limpieza facial con Felipe", "description": "Solicitada por el cliente."}
+    guion = _Guion([("confirmar_tarea", {}), ("create_calendar_event", reescritos), "Listo, quedó agendada."])
+    final = await _turno(conv, guion, monkeypatch, "Sí, confirmo")
+    assert final is None or final.confirmacion is None  # no se vuelve a pedir
+    assert any("ya había confirmado create_calendar_event" in v for v in guion.vistos)  # el modelo lo sabe
+    async with _scope(tid) as s:
+        citas = (await s.execute(select(Appointment).where(Appointment.tenant_id == tid))).scalars().all()
+    assert [c.title for c in citas] == ["Limpieza facial profunda con Felipe"]
+    _t, estado = await _tarea(conv, proc)
+    assert estado == "completed"
+    async with _scope(tid) as s:
+        estado_conv = (await s.execute(text("select state from conversations where id = :c"), {"c": conv.id})).scalar_one()
+    assert "accion_por_confirmar" not in (estado_conv or {})  # se borra al ejecutarse (lleva datos personales)
 
 
 # ---------------------------------------------------------------- Gherkin: cambio de plan

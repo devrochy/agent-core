@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -158,6 +159,9 @@ class Previo:
     # ligados de la tarea (`motor.ligar_argumentos`). El loop ejecuta, audita y registra ESTOS;
     # None = los del modelo tal cual.
     args: dict[str, Any] | None = None
+    # `args` son los que el cliente confirmó, no los que pidió el modelo (adenda 2026-11-22 de
+    # ADR-0113): el resultado le avisa al modelo.
+    con_lo_confirmado: bool = False
 
     @property
     def gobernada(self) -> bool:
@@ -431,7 +435,7 @@ async def _eventos(session: AsyncSession, foco: _Foco) -> list[Evento]:
 async def _registrar(
     session: AsyncSession, fila: ConversationTask, tipo: str, data: Mapping[str, Any], actor: str
 ) -> ConversationTask:
-    return await state.registrar(
+    registrada = await state.registrar(
         session,
         tenant_id=fila.tenant_id,
         conversation_id=fila.conversation_id,
@@ -441,6 +445,58 @@ async def _registrar(
         actor=actor,
         turn_id=turno_vigente.turno_id(),
     )
+    if tipo in _VENCEN_ARGS_PEDIDOS:
+        await _borrar_args_de_la_tarea(session, fila)
+    return registrada
+
+
+# Args de la última confirmación de acción que pidió el kernel (`conversations.state`): el modelo
+# relee solo texto (ADR-0130) y al volver a llamar la acción tras el «Sí, confirmo» puede reescribir
+# un argumento libre; con esto se ejecuta lo que el cliente vio. Es mutable (no `task_events`, que
+# es append-only) porque lleva datos personales: se borra al ejecutarse la acción.
+_CLAVE_ARGS_PEDIDOS = "accion_por_confirmar"
+
+
+async def _leer_args_pedidos(s: AsyncSession, foco: _Foco) -> Any:
+    return (
+        await s.execute(
+            text("SELECT state -> :k FROM conversations WHERE tenant_id = :t AND id = :c"),
+            {"k": _CLAVE_ARGS_PEDIDOS, "t": foco.fila.tenant_id, "c": foco.fila.conversation_id},
+        )
+    ).scalar_one_or_none()
+
+
+async def _guardar_args_pedidos(s: AsyncSession, foco: _Foco, accion: str, h: str, args: Mapping[str, Any]) -> None:
+    valor = {"task_id": str(foco.fila.id), "action": accion, "args_hash": h, "args": dict(args)}
+    await s.execute(
+        text(
+            "UPDATE conversations SET state = jsonb_set(coalesce(state, '{}'::jsonb), ARRAY[CAST(:k AS text)],"
+            " CAST(:v AS jsonb)) WHERE tenant_id = :t AND id = :c"
+        ),
+        {
+            "k": _CLAVE_ARGS_PEDIDOS, "v": json.dumps(valor, ensure_ascii=False, default=str),
+            "t": foco.fila.tenant_id, "c": foco.fila.conversation_id,
+        },
+    )
+
+
+async def _borrar_args_pedidos(s: AsyncSession, foco: _Foco, accion: str | None = None) -> None:
+    await _borrar_args_de_la_tarea(s, foco.fila, accion)
+
+
+async def _borrar_args_de_la_tarea(s: AsyncSession, fila: ConversationTask, accion: str | None = None) -> None:
+    """Quita `accion_por_confirmar` si es de esa tarea (y de esa acción, si se indica)."""
+    await s.execute(
+        text(
+            "UPDATE conversations SET state = state - CAST(:k AS text) WHERE tenant_id = :t AND id = :c"
+            " AND state -> :k ->> 'task_id' = :task AND (CAST(:a AS text) IS NULL OR state -> :k ->> 'action' = :a)"
+        ),
+        {"k": _CLAVE_ARGS_PEDIDOS, "t": fila.tenant_id, "c": fila.conversation_id, "task": str(fila.id), "a": accion},
+    )
+
+
+# Eventos tras los que una confirmación pedida ya no puede valer: los args guardados se borran.
+_VENCEN_ARGS_PEDIDOS = frozenset({"stage_entered", "revalidated", *state.TERMINALES, "episode_expired"})
 
 
 def _evento_por_seq(eventos: Sequence[Evento], seq: Any) -> Evento | None:
@@ -963,6 +1019,15 @@ class ContextoMotor:
                 gobernada = Previo(task_id=foco.fila.id, stage=foco.stage.id, args=args)
                 if motor.requiere_confirmacion(foco.stage, accion) or accion in self._confirmar_tambien:
                     eventos = await _eventos(s, foco)
+                    if not motor.accion_confirmada(eventos, accion, h):
+                        # El cliente ya confirmó esta acción con otros args (el modelo reescribió
+                        # el título o el detalle al volver a llamarla, Estudio Aurora 2026-11-19):
+                        # se ejecuta lo que el cliente vio, no se le pide confirmar otra vez.
+                        firmados = await self._args_confirmados(s, foco, eventos, accion)
+                        if firmados is not None:
+                            args, h = firmados
+                            gobernada.args = args
+                            gobernada.con_lo_confirmado = True
                     # HU-AOS-07: con resumen del pack, la confirmación vale para ESE resumen (el
                     # total leído del estado): si cambió con los mismos args, se pide otra vez.
                     huella = await self._huella_del_pack(foco, accion, args)
@@ -994,6 +1059,7 @@ class ContextoMotor:
                                 datos_peticion["resumen"] = huella
                             await _registrar(s, foco.fila, "confirmation_requested", datos_peticion, "kernel")
                         self._pedidas[h] = (accion, dict(args))  # el resumen de la confirmación (HU-AOS-09)
+                        await _guardar_args_pedidos(s, foco, accion, h, args)
                         gobernada.decision = Decision(
                             {"status": "confirmation_required", "message": mensaje("confirmacion_requerida", accion=accion)},
                             "confirmation_required",
@@ -1001,10 +1067,36 @@ class ContextoMotor:
                         )
                         return gobernada
                 await _registrar(s, foco.fila, "action_requested", {"action": accion, "args_hash": h}, "llm")
+                await _borrar_args_pedidos(s, foco, accion)
             return gobernada
         except Exception as exc:
             log.warning("motor_antes_de_accion_fallo", accion=accion, error=type(exc).__name__)
             return Previo(Decision({"error": mensaje("error_interno")}, "denied", h))
+
+    async def _args_confirmados(
+        self, s: AsyncSession, foco: _Foco, eventos: Sequence[Evento], accion: str
+    ) -> tuple[dict[str, Any], str] | None:
+        """(args, hash) que el cliente confirmó para esta acción, si siguen valiendo: el `confirmed`
+        vigente, los args guardados al pedirlo con ese mismo hash y, ligados otra vez a los datos de
+        la tarea, el mismo hash (si un dato cambió, se pide otra vez como siempre). Bajo el lock."""
+        firmado = motor.hash_confirmado(eventos, accion)
+        if not firmado:
+            return None
+        guardado = await _leer_args_pedidos(s, foco)
+        if (
+            not isinstance(guardado, Mapping)
+            or guardado.get("task_id") != str(foco.fila.id)
+            or guardado.get("action") != accion
+            or guardado.get("args_hash") != firmado
+            or not isinstance(guardado.get("args"), Mapping)
+            or motor.hash_args(guardado["args"]) != firmado
+        ):
+            return None
+        ligados, distinto = await self._ligar(foco, accion, dict(guardado["args"]))
+        if distinto is not None or motor.hash_args(ligados) != firmado:
+            return None
+        log.info("motor_accion_con_args_confirmados", accion=accion)
+        return ligados, firmado
 
     async def _ligar(self, foco: _Foco, accion: str, args: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
         """(argumentos efectivos, nombre del primer dato distinto o None). Bajo el lock."""
@@ -1080,6 +1172,8 @@ class ContextoMotor:
             return {**resultado, "escalate": True}
         if task_id is not None:
             await self._avanzar_seguro(task_id)
+        if previo.con_lo_confirmado and isinstance(resultado, dict):
+            return {**resultado, "notice": mensaje("accion_con_lo_confirmado", accion=accion)}
         return resultado
 
     async def _datos_de_accion(self, s: AsyncSession, foco: _Foco, accion: str, resultado: Mapping[str, Any]) -> None:

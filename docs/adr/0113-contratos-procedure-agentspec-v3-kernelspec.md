@@ -1172,3 +1172,12 @@ confirmación» sin que existiera el pedido.
 - **Despliegue:** primero el backend (contratos y runtime van en el mismo binario) y después el editor que escriba `action`. Como dice la adenda del 2026-10-20, en cuanto exista una versión con `action` no se puede volver a un binario anterior a 3.2.0.
 - **Sin `action`, la consulta no se ofrece** (el contrato la acepta, pero no hay qué ejecutar). Ningún agente declara consultas hoy.
 - Una consulta no garantiza que la acción sea solo de lectura (las acciones no declaran efectos, `catalogo.side_effect = None`). Eso lo responde el dueño del agente al declararla. **Una acción que aparece en alguna etapa de un procedimiento de la release, o que pide confirmación en el binding, no se ofrece como consulta**: el kernel la saca de la oferta y la niega si llega (ADR-0116, adenda HU-AOS-19 §5).
+
+
+## Adenda (2026-11-22): la acción confirmada corre con los argumentos que vio el cliente
+
+**Estado:** propuesta. Sale del chat web de Estudio Aurora (test, 2026-11-19): el cliente respondió «Sí, confirmo», el kernel registró `confirmed` y el modelo volvió a llamar `create_calendar_event` con otro `title` y otra `description`; el hash cambió y se le pidió confirmar otra vez. Es el riesgo que dejó anotado la adenda del botón («después del toque, el modelo tiene que repetir la acción con los mismos argumentos»).
+
+- Al pedir la confirmación de una acción (`confirmation_required` en `antes_de_accion`) el motor guarda sus argumentos efectivos en `conversations.state.accion_por_confirmar` con la tarea, la acción y el hash. Va en el estado de la conversación y no en `task_events` porque lleva datos personales y `task_events` es append-only; se borra al registrarse `action_requested` de esa acción.
+- Si la acción llega con otro hash y hay un `confirmed` vigente de ella (misma visita a la etapa, sin ejecución que lo consuma: `motor.hash_confirmado`), se toman los argumentos guardados con ESE hash, se ligan otra vez a los datos de la tarea y, si el hash sigue siendo el mismo, la acción corre con ellos. Si un dato cambió o los argumentos guardados no coinciden, todo sigue como antes (se pide otra vez). El cliente confirma lo que el servidor ejecuta, también cuando el modelo reescribe un texto libre.
+- No cambia ningún contrato.

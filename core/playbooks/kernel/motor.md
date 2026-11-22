@@ -50,3 +50,5 @@ La confirmación que se le pidió al cliente ya venció (pasó más de un turno)
 La acción {accion} no está disponible para este agente en esta conexión. No insistas con ella: resuelve con las acciones ofrecidas o, si el cliente necesita otra cosa, díselo y sigue con lo que falta.
 ## correo_dudoso
 El correo de {dato} parece tener el dominio mal escrito. Antes de seguir, pregúntale al cliente si quiso decir @{sugerido}. Si dice que sí, guarda el correo con @{sugerido}; si confirma que está bien como lo escribió, vuelve a guardarlo tal cual.
+## accion_con_lo_confirmado
+El cliente ya había confirmado {accion} con los datos de su resumen, así que se ejecutó con esos datos y no con los que enviaste ahora. Cuéntale el resultado tal como lo devolvió la herramienta.
