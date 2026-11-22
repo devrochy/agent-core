@@ -20,8 +20,9 @@ Acciones de IA cotizadas (HU-BILL-16, ADR-0194): `cotizar` dice cuánto cuesta a
 `decidir_turno` es la lectura del turno (HU-BILL-18/20): el mismo cálculo, sin lock ni excepción, más el
 colchón de las conversaciones abiertas (ADR-0208 §4-5).
 
-Se excluye el playground del panel (conversaciones del canal `test`): una prueba del panel no
-consume el crédito del negocio.
+El playground del panel (conversaciones del canal `test`) es gratis hasta
+`PLAYGROUND_GRATIS_POR_CICLO` créditos por ciclo (D-79, ADR-0208 §15); lo que pasa de ahí suma
+al consumo del negocio.
 Todo corre dentro de `tenant_scope` (RLS) y además filtra `tenant_id` explícito.
 """
 
