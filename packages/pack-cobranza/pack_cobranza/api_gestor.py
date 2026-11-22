@@ -222,9 +222,9 @@ async def _membresias_de_campo(admin: Admin, *, solo: uuid.UUID | None = None) -
     - `master` (rol `global`: master de plataforma o permiso global) → acceso total.
     - `owner` del tenant → acceso total (`propietario`).
     - colaborador con perfil `Gestor` activo → `gestor` (scopeado a sus carteras).
-    Solo tenants activos con `pack_cobranza` habilitado en su AgentSpec.
+    Solo tenants activos con `pack_cobranza` entre los packs del negocio (`packs_del_negocio`, ADR-0206 §5).
     """
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.shared.tenant import admin_tenants
 
     filas = await admin_tenants(admin.id)
@@ -256,8 +256,7 @@ async def _membresias_de_campo(admin: Admin, *, solo: uuid.UUID | None = None) -
         if tenant is None:
             continue
         async with tenant_scope(tid):
-            spec = await load_active_spec(tid)
-            if PLUGIN_ID not in enabled_packs(spec):
+            if PLUGIN_ID not in await packs_del_negocio(tid):
                 continue
             if role in ("global", "owner"):
                 out.append(

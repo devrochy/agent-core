@@ -38,10 +38,10 @@ async def _proveedores() -> list[LeadProvider]:
     if agente is not None and agente.packs is not None:
         habilitados = set(agente.packs)
     else:
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
 
         try:
-            habilitados = enabled_packs(await load_active_spec())
+            habilitados = await packs_del_negocio()
         except Exception:
             return []
     return [

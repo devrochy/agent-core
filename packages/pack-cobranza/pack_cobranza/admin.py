@@ -113,13 +113,12 @@ def _request_section(request: Request) -> str:
 
 
 async def _pack_enabled() -> bool:
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     try:
-        spec = await load_active_spec()
+        return PLUGIN_ID in await packs_del_negocio()
     except Exception:
         return False
-    return PLUGIN_ID in enabled_packs(spec)
 
 
 async def _authorized(request: Request, *, write: bool) -> bool:

@@ -77,25 +77,21 @@ def test_las_tools_estan_en_el_core() -> None:
 
 @pytest.mark.asyncio
 async def test_predicado_solo_con_proveedor_habilitado(monkeypatch, fake_cap) -> None:
-    import core.agents.spec as spec_mod
+    import core.agents.instalaciones_agente as inst_mod
 
-    class _Spec:
-        def __init__(self, packs: set[str]) -> None:
-            self.packs = packs
-
-    async def _spec_con(packs: set[str]) -> _Spec:
-        return _Spec(packs)
+    async def _packs_con(packs: set[str]) -> set[str]:
+        return packs
 
     skill = tools_mod.SubscriptionSkill()
     herramientas = skill.get_tools()
     assert all(t.connection_predicate is not None for t in herramientas)
 
-    monkeypatch.setattr(spec_mod, "load_active_spec", lambda: _spec_con({"pack_subscriptions"}))
+    monkeypatch.setattr(inst_mod, "packs_del_negocio", lambda: _packs_con({"pack_subscriptions"}))
 
     pred = herramientas[0].connection_predicate
     assert pred is not None and await pred(set()) is True
 
-    monkeypatch.setattr(spec_mod, "load_active_spec", lambda: _spec_con(set()))
+    monkeypatch.setattr(inst_mod, "packs_del_negocio", lambda: _packs_con(set()))
     assert await pred(set()) is False
 
 

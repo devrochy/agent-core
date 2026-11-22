@@ -29,13 +29,13 @@ PLUGIN_ID = "pack_cobranza"
 
 async def capability_del_tenant():
     """Capacidad de pagos de un pack habilitado para el tenant (o `None`)."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.plugin_manager import plugin_manager
 
     if not plugin_manager.is_active(PLUGIN_ID):
         return None
     try:
-        enabled = enabled_packs(await load_active_spec())
+        enabled = await packs_del_negocio()
     except Exception:
         enabled = None
     return payment_registry.capability_for(enabled)
@@ -79,13 +79,12 @@ async def _on_payment_confirmed(reference: str | None = None, amount: Any = None
     tenant_id = get_current_tenant_id()
     if tenant_id is None or not reference:
         return
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     async with tenant_scope(tenant_id):
         # Guard de enablement: este handler está suscrito de forma global (event
         # bus), pero SOLO debe procesar pagos de tenants con cobranza activa.
-        spec = await load_active_spec(tenant_id)
-        if "pack_cobranza" not in enabled_packs(spec):
+        if "pack_cobranza" not in await packs_del_negocio(tenant_id):
             return
         async with get_session() as session:
             link = (await session.execute(select(LinkPago).where(LinkPago.tenant_id == tenant_id, LinkPago.referencia == reference))).scalar_one_or_none()

@@ -169,7 +169,7 @@ def test_listar_planes_es_una_consulta_de_solo_lectura_que_solo_ofrece_el_motor(
 async def test_listar_planes_solo_se_ofrece_con_el_motor_activo(monkeypatch) -> None:
     """El predicado REAL de la tool: proveedor habilitado Y bandera del motor. Sin bandera (o sin poder leerla)
     no se ofrece; sin proveedor tampoco."""
-    import core.agents.spec as spec_mod
+    import core.agents.instalaciones_agente as inst_mod
     from core.kernel import oferta
 
     listar = {t.name: t for t in tools_mod.SubscriptionSkill().get_tools()}["sub_listar_planes"]
@@ -178,13 +178,12 @@ async def test_listar_planes_solo_se_ofrece_con_el_motor_activo(monkeypatch) -> 
     async def motor() -> bool | None:
         return estado["motor"]
 
-    async def spec():
-        return object()
+    async def packs():
+        return {"pack_subscriptions"} if estado["proveedor"] else set()
 
     monkeypatch.setattr(oferta, "motor_activo", motor)
     monkeypatch.setattr(tools_mod.subscription_registry, "registered_provider_ids", lambda: ["pack_subscriptions"])
-    monkeypatch.setattr(spec_mod, "load_active_spec", spec)
-    monkeypatch.setattr(spec_mod, "enabled_packs", lambda _spec: {"pack_subscriptions"} if estado["proveedor"] else set())
+    monkeypatch.setattr(inst_mod, "packs_del_negocio", packs)
     for motor_activo, proveedor, ofrece in (
         (False, True, False), (None, True, False), (True, True, True), (True, False, False),
     ):

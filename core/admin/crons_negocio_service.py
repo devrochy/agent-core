@@ -9,7 +9,7 @@ usuarios:
 - la vista por negocio del master en `Plataforma › Crons` (fase de historial).
 
 Sin fila = valores por defecto: un cron de pack está encendido si el pack lo está (el recorrido
-ya filtra por `enabled_packs`); uno de core, siempre. Un valor desconocido o un fallo de lectura
+ya filtra por `packs_del_negocio`, ADR-0206 §5); uno de core, siempre. Un valor desconocido o un fallo de lectura
 nunca enciende nada por accidente: el cron se salta.
 """
 
@@ -278,11 +278,12 @@ def _proxima(meta: CronMeta, config: ConfigCronNegocio | None, zona: ZoneInfo, a
 
 
 async def _packs_habilitados() -> set[str] | None:
-    """Packs del negocio activo (ADR-0019). `None` = no se pudo leer: no se oculta nada."""
+    """Packs del negocio activo: `packs_del_negocio` (ADR-0206 §5). `None` = no se pudo leer:
+    no se oculta nada."""
     try:
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
 
-        return set(enabled_packs(await load_active_spec()))
+        return await packs_del_negocio()
     except Exception:
         return None
 

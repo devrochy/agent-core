@@ -354,13 +354,12 @@ async def _count_plugins(tenant_id: uuid.UUID) -> int:
     """Packs de NEGOCIO habilitados del tenant (sin el core, ADR-0045).
 
     El core es plomería del framework y no consume cuota. Fuente única del
-    conteo: `count_tenant_packs` (mismo valor que el KPI del panel).
+    conteo: `packs_del_negocio` (ADR-0206 §5), el mismo valor que el KPI del panel.
     """
-    from core.agents.spec import count_tenant_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     async with tenant_scope(tenant_id):
-        spec = await load_active_spec(tenant_id)
-    return count_tenant_packs(spec)
+        return len(await packs_del_negocio(tenant_id, con_core=False))
 
 
 async def usage_snapshot(

@@ -146,12 +146,10 @@ async def codigo_de_promocion(valor: Any, ctx: ToolContext, datos: dict[str, Any
 
 
 async def _pago_en_linea_disponible() -> bool:
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.payments import payment_registry
-    from core.shared.tenant import get_current_tenant_id
 
-    spec = await load_active_spec(get_current_tenant_id())
-    return payment_registry.capability_for(enabled_packs(spec)) is not None
+    return payment_registry.capability_for(await packs_del_negocio()) is not None
 
 
 async def metodo_de_pago(valor: Any, ctx: ToolContext, datos: dict[str, Any]) -> ResolverResult:

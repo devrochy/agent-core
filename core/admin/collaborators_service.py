@@ -1025,13 +1025,12 @@ async def modulos_habilitados_del_negocio(tenant_id: uuid.UUID) -> set[str]:
     con la que el panel habilita cada módulo (`packs_con_especialista`): un pack que solo está en el
     spec, sin agente, se ve con candado y no aporta roles de colaborador.
 
-    No confundir con `packs_activos_del_negocio` de ADR-0206 (HU-AOS-90, sobre `pack_installations`):
-    cuando llegue, reemplaza aquí a `enabled_packs(load_active_spec())`; la condición del especialista sigue."""
+    Los habilitados salen de `packs_del_negocio` (ADR-0206 §5); la condición del especialista sigue."""
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.agents.instancias import packs_con_especialista
-    from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
 
     async with tenant_scope(tenant_id):
-        habilitados = enabled_packs(await load_active_spec(tenant_id)) - {CORE_PACK_ID}
+        habilitados = await packs_del_negocio(tenant_id, con_core=False)
         if not habilitados:
             return set()
         apagados = await plugin_manager.disabled_plugins_for_tenant(tenant_id)

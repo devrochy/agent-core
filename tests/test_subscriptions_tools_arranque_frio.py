@@ -11,17 +11,12 @@ from __future__ import annotations
 
 import pytest
 
-import core.agents.spec as spec_mod
+import core.agents.instalaciones_agente as inst_mod
 from core.orchestrator.loop import _connections_ok
 from core.subscriptions import subscription_registry
 
 NOMBRES = {"sub_consultar", "sub_link_pago", "sub_pausar", "sub_cancelar", "sub_cambiar_plan"}
 # Las del procedimiento `cambiar_plan` (HU-AOS-08) solo se ofrecen con el motor activo.
-
-
-class _Spec:
-    def __init__(self, packs: set[str]) -> None:
-        self.packs = packs
 
 
 @pytest.fixture()
@@ -43,10 +38,10 @@ def registro_vacio():
 
 @pytest.fixture()
 def negocio_con_suscripciones(monkeypatch):
-    async def _spec() -> _Spec:
-        return _Spec({"pack_subscriptions"})
+    async def _packs() -> set[str]:
+        return {"pack_subscriptions"}
 
-    monkeypatch.setattr(spec_mod, "load_active_spec", _spec)
+    monkeypatch.setattr(inst_mod, "packs_del_negocio", _packs)
 
 
 async def _ofrecidas(host) -> set[str]:  # type: ignore[no-untyped-def]
@@ -87,10 +82,10 @@ async def test_sin_el_pack_en_el_spec_no_se_ofrecen(registro_vacio, monkeypatch)
     from core.mcp.host import MCPHost
     from core.tools.core_skill import register_core_skills
 
-    async def _spec() -> _Spec:
-        return _Spec({"pack_commerce"})
+    async def _packs() -> set[str]:
+        return {"pack_commerce"}
 
-    monkeypatch.setattr(spec_mod, "load_active_spec", _spec)
+    monkeypatch.setattr(inst_mod, "packs_del_negocio", _packs)
     host = MCPHost()
     register_core_skills(host)
     subscription_registry.register("pack_subscriptions", object())  # type: ignore[arg-type]
@@ -99,7 +94,7 @@ async def test_sin_el_pack_en_el_spec_no_se_ofrecen(registro_vacio, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_sin_negocio_en_contexto_no_se_ofrecen(registro_vacio) -> None:
-    """Fail-closed con el `load_active_spec` real: sin tenant en contexto, no se ofrecen."""
+    """Fail-closed con el `packs_del_negocio` real: sin tenant en contexto, no se ofrecen."""
     from core.mcp.host import MCPHost
     from core.tools.core_skill import register_core_skills
 

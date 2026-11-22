@@ -21,7 +21,7 @@ entradas `opciones` solo si la bandera `opciones_directas.habilitada` del negoci
 Los textos de packs se leen SOLO con `plugin_manager.load_config` (la ruta de lectura de siempre, que descifra y
 valida) y de ella se extraen únicamente los campos que el propio pack marca como mensaje al cliente
 (`json_schema_extra={"mensaje": "<canal>"}`); el core no conoce los nombres de esos campos y nunca se vuelca la
-configuración entera. Los packs habilitados se leen sin escribir (`leer_spec_activo` no siembra el AgentSpec).
+configuración entera. Los packs habilitados son `packs_del_negocio` (ADR-0206 §5), solo lectura.
 
 Las variables se devuelven tal como las usa cada fuente (`{{1}}`, `{cliente.nombre}`, `{fecha}`): normalizarlas es
 trabajo de la pista D1. Todo filtra por `tenant_id` explícito además de la RLS.
@@ -38,7 +38,7 @@ from typing import Any, Literal
 
 from sqlalchemy import select
 
-from core.agents.spec import CORE_PACK_ID, enabled_packs, leer_spec_activo
+from core.agents.instalaciones_agente import packs_del_negocio
 from core.db.models import (
     MensajeGuardado,
     MessageTemplate,
@@ -369,13 +369,10 @@ def campos_de_texto(schema: Any) -> dict[str, str]:
 
 
 async def _packs_habilitados(tenant_id: uuid.UUID) -> set[str]:
-    """Packs del AgentSpec activo que no están apagados para el negocio. Solo lee: sin spec activo, ninguno (no
-    se siembra el default desde una consulta)."""
-    activo = await leer_spec_activo(tenant_id)
-    if activo is None:
-        return set()
+    """Packs de `packs_del_negocio` (ADR-0206 §5) que no están apagados para el negocio. Solo lee:
+    sin agentes, ninguno."""
     inactivos = await plugin_manager.disabled_plugins_for_tenant(tenant_id)
-    return (set(enabled_packs(activo[1])) - set(inactivos)) - {CORE_PACK_ID}
+    return await packs_del_negocio(tenant_id, con_core=False) - set(inactivos)
 
 
 async def _entradas_de_packs(tenant_id: uuid.UUID) -> list[Entrada]:

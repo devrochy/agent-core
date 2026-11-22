@@ -995,7 +995,7 @@ async def _orden_seguro_para_ocultar(tenant_id: uuid.UUID, desde: datetime | Non
     """
     from sqlalchemy import select
 
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.db.models import Lead
     from core.db.session import get_session
 
@@ -1013,7 +1013,7 @@ async def _orden_seguro_para_ocultar(tenant_id: uuid.UUID, desde: datetime | Non
             + (f" desde {desde.isoformat()}" if desde else "")
             + ": envía uno de prueba desde el home y vuelve a correr"
         )
-    if "pack_commerce" in enabled_packs(await load_active_spec()):
+    if "pack_commerce" in await packs_del_negocio(tenant_id):
         faltas.append("comercio sigue encendido: apágalo en el panel (Habilidades → Comercio) y vuelve a correr")
     detalle = f"{lead[0]} ({lead[1].isoformat()})" if lead is not None else "-"
     return faltas, detalle

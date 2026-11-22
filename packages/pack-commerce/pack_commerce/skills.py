@@ -1931,11 +1931,10 @@ class OrderSkill(BaseSkill):
 
     async def _payment_capability(self):  # type: ignore[no-untyped-def]
         """Capacidad de pago de un pack habilitado, vía el registro del core."""
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
         from core.payments import payment_registry
 
-        spec = await load_active_spec(get_current_tenant_id())
-        return payment_registry.capability_for(enabled_packs(spec))
+        return payment_registry.capability_for(await packs_del_negocio())
 
     async def consultar_estado_pedido(self, arguments: dict[str, Any], context: ToolContext) -> dict[str, Any]:
         raw = str(arguments.get("public_order_number", "")).strip()

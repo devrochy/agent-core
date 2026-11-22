@@ -51,16 +51,16 @@ PACK_CONFIG_TABS: dict[str, tuple[str, str]] = {
 async def config_tabs(request: Request) -> list[dict[str, str]]:
     """Lista de pestañas de Configuración visibles para el tenant activo.
 
-    Las del core siempre; las de packs solo si el pack está habilitado
-    (`AgentSpec.packs`). El pack NO hardcodea la barra: la arma el core.
+    Las del core siempre; las de packs solo si el pack está en las instalaciones
+    de sus agentes (ADR-0206 §5). El pack NO hardcodea la barra: la arma el core.
     """
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     tabs = [{"id": i, "label": label, "href": href} for (i, label, href) in CONFIG_TABS]
 
     enabled: set[str] = set()
     try:
-        enabled = enabled_packs(await load_active_spec())
+        enabled = await packs_del_negocio()
     except Exception:
         enabled = set()
     for plugin_id, (tab_id, label, href) in PACK_CONFIG_TABS.items():
@@ -86,12 +86,12 @@ async def base_context(request: Request, section: str) -> dict[str, Any] | None:
             )
         ).scalar_one_or_none()
     # Import local (no a nivel de módulo): los packs con admin_router propio
-    # reusan base_context sin necesitar arrastrar agents.spec si no llaman a
+    # reusan base_context sin necesitar arrastrar las instalaciones si no llaman a
     # esta rama. El menú lateral debe reflejar solo los packs de ESTE tenant
-    # (AgentSpec.packs), no todo lo activo globalmente en el proceso.
-    from core.agents.spec import enabled_packs, load_active_spec
+    # (`packs_del_negocio`, ADR-0206 §5), no todo lo activo globalmente en el proceso.
+    from core.agents.instalaciones_agente import packs_del_negocio
 
-    tenant_enabled = enabled_packs(await load_active_spec())
+    tenant_enabled = await packs_del_negocio()
     from core.admin.plan_view import dashboard_billing_summary
 
     tenant_id = get_current_tenant_id()

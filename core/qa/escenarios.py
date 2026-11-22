@@ -267,10 +267,10 @@ async def _activar_suscripciones(ctx: Contexto) -> bool:
     """Activa `pack_subscriptions` en el negocio (lo mismo que `PUT /admin/plugins/{id}/config`).
     Devuelve True si lo activó ahora."""
     from core.admin.views import configure_plugin_for_tenant
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.billing.enforcement import QuotaExceeded
 
-    if "pack_subscriptions" in enabled_packs(await load_active_spec(ctx.tenant_id)):
+    if "pack_subscriptions" in await packs_del_negocio(ctx.tenant_id):
         return False
     try:
         await configure_plugin_for_tenant("pack_subscriptions", {})

@@ -32,8 +32,8 @@ CRON_RECORDATORIOS = f"{PACK_ID}.recordatorios_de_citas"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
-    """Negocios cuyo AgentSpec incluye este pack (ADR-0019)."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    """Negocios con este pack entre los packs del negocio (`packs_del_negocio`, ADR-0206 §5)."""
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     async with get_session() as session:
         rows = (await session.execute(text("select id from tenants where deleted_at is null"))).scalars().all()
@@ -42,9 +42,8 @@ async def _tenant_ids() -> list[uuid.UUID]:
         tid = uuid.UUID(str(raw))
         try:
             async with tenant_scope(tid):
-                spec = await load_active_spec()
-            if PACK_ID in enabled_packs(spec):
-                result.append(tid)
+                if PACK_ID in await packs_del_negocio(tid):
+                    result.append(tid)
         except Exception:
             continue
     return result

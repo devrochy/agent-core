@@ -223,11 +223,10 @@ async def superpoderes_del_agente(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> 
 
 
 async def habilitados_del_negocio(tenant_id: uuid.UUID) -> set[str]:
-    """Packs de negocio habilitados (la única lectura de la habilitación, ADR-0118 adenda)."""
-    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    """Packs de negocio habilitados: `packs_del_negocio` (ADR-0206 §5)."""
+    from core.agents.instalaciones_agente import packs_del_negocio
 
-    leido = await leer_spec_activo(tenant_id)
-    return set(enabled_business_packs(leido[1])) if leido is not None else set()
+    return await packs_del_negocio(tenant_id, con_core=False)
 
 
 async def _base_del_negocio(tenant_id: uuid.UUID) -> dict[str, Any]:

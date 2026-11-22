@@ -131,7 +131,8 @@ async def fichas_del_negocio(tenant_id: uuid.UUID, agent_id: uuid.UUID | None = 
     Con `agent_id` (ADR-0190, HU-AOS-67): las del AGENTE que atiende la conexión — sus habilidades instaladas (o
     las del negocio si no tiene propias) y los bindings de su borrador, que es lo que el dueño ve en «Acciones»."""
     _scope(tenant_id)
-    from core.agents.spec import enabled_packs, leer_spec_activo
+    from core.agents.instalaciones_agente import packs_del_negocio
+    from core.agents.spec import leer_spec_activo
     from core.kernel.procedures import registro
     from core.mcp.declarative import PLUGIN_ID as DECLARATIVE_PLUGIN_ID
     from core.mcp.declarative import tools_for_spec
@@ -145,7 +146,7 @@ async def fichas_del_negocio(tenant_id: uuid.UUID, agent_id: uuid.UUID | None = 
     registradas = {t.name: t for t in mcp_host.get_tools()}
     # Prioridad al host, como el loop: una declarativa no puede ocultar una tool registrada.
     declarativas = [t for t in tools_for_spec(spec) if t.name not in registradas]
-    habilitados = enabled_packs(spec)
+    habilitados = await packs_del_negocio(tenant_id)
     inactivos = await plugin_manager.disabled_plugins_for_tenant(tenant_id)
     packs_activos = set(habilitados) - set(inactivos)
     if declarativas:

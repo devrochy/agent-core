@@ -50,7 +50,7 @@ async def reenviar_al_negocio(payload: dict[str, Any]) -> str:
     """Evento ya verificado con la firma de la plataforma cuyo link no es de un pago de la
     plataforma. Devuelve lo que hizo el pack de pagos del negocio, o `ignored` si no hay cuenta
     compartida. No depende de la allowlist de vendedores: basta la variable y el negocio activo."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.payments import payment_registry, procesar_evento
     from core.tenants import is_tenant_active
 
@@ -61,7 +61,7 @@ async def reenviar_al_negocio(payload: dict[str, Any]) -> str:
     if not await is_tenant_active(negocio):
         raise ReenvioFallido(f"el negocio {negocio} de BILLING_WOMPI_EVENTOS_TENANT no está activo")
     async with tenant_scope(negocio):
-        capacidad = payment_registry.capability_for(enabled_packs(await load_active_spec(negocio)))
+        capacidad = payment_registry.capability_for(await packs_del_negocio(negocio))
         resultado = await procesar_evento(capacidad, payload) if capacidad is not None else None
     if resultado is None:
         raise ReenvioFallido(f"el negocio {negocio} no tiene un pack de pagos que procese eventos")

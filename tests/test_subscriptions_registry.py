@@ -27,17 +27,16 @@ class _Cap:
 
 @pytest.fixture()
 def registro(monkeypatch):
-    """`activos` son los packs habilitados en el AgentSpec del negocio (HU-SUB-09)."""
-    import core.agents.spec as spec_mod
+    """`activos` son los packs del negocio: `packs_del_negocio` (HU-SUB-09, ADR-0206 §5)."""
+    import core.agents.instalaciones_agente as inst_mod
 
     reg = SubscriptionRegistry()
     activos: set[str] = set()
 
-    async def _spec(_tenant_id=None):
-        return object()
+    async def _packs(_tenant_id=None, *, con_core=True):
+        return set(activos)
 
-    monkeypatch.setattr(spec_mod, "load_active_spec", _spec)
-    monkeypatch.setattr(spec_mod, "enabled_packs", lambda _spec: set(activos))
+    monkeypatch.setattr(inst_mod, "packs_del_negocio", _packs)
     return reg, activos
 
 

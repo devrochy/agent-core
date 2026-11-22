@@ -438,8 +438,9 @@ PACK_ID = "{plugin_id}"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
-    """Tenants cuyo AgentSpec incluye este plugin (ADR-0019)."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    """Tenants con este plugin entre los packs del negocio (`packs_del_negocio`, ADR-0206 §5)."""
+    from core.agents.instalaciones_agente import packs_del_negocio
+    from core.shared.tenant import tenant_scope
 
     async with get_session() as session:
         rows = (
@@ -447,9 +448,9 @@ async def _tenant_ids() -> list[uuid.UUID]:
         ).all()
     out: list[uuid.UUID] = []
     for tenant_id in rows:
-        spec = await load_active_spec(tenant_id)
-        if PACK_ID in enabled_packs(spec):
-            out.append(tenant_id)
+        async with tenant_scope(tenant_id):
+            if PACK_ID in await packs_del_negocio(tenant_id):
+                out.append(tenant_id)
     return out
 
 

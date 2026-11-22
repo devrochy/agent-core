@@ -1323,7 +1323,7 @@ class CRMModule(BaseModule):
         """Completa el lead del cliente con los datos de contacto de un recorrido de ESTE pack
         (`tomar_pedido`): con foco, `crear_lead`/`actualizar_lead` no se
         ofrecen. Solo si el pack está habilitado para el negocio; nunca crea un lead."""
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
 
         if not str(procedure_id).startswith(f"{self.id}.") or not isinstance(datos, dict):
             return
@@ -1339,7 +1339,7 @@ class CRMModule(BaseModule):
         from core.leads import servicio as leads
 
         try:
-            if self.id not in enabled_packs(await load_active_spec(actual)):
+            if self.id not in await packs_del_negocio(actual):
                 return
             async with get_session() as session:
                 await leads.completar_contacto(
@@ -1380,10 +1380,9 @@ class CRMModule(BaseModule):
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
             return
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
 
-        spec = await load_active_spec(tenant_id)
-        if self.id not in enabled_packs(spec):
+        if self.id not in await packs_del_negocio(tenant_id):
             return
 
         # La referencia puede venir versionada (`OC-0001-r2`): se normaliza a la

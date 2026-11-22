@@ -100,10 +100,10 @@ from core.agents.habilitacion import (
     set_pack_for_tenant,
 )
 from core.agents.habilitacion import ensure_pack_activated as _ensure_pack_activated
+from core.agents.instalaciones_agente import packs_del_negocio
 from core.agents.spec import (
     CORE_PACK_ID,
     activate_spec_version,
-    enabled_packs,
     load_active_spec,
     next_spec_version,
     save_spec_if_changed,
@@ -185,7 +185,6 @@ async def leads_global(request: Request) -> HTMLResponse:
 
     from core.admin.lead_registry import lead_registry
     from core.admin.permissions import require_section
-    from core.agents.spec import enabled_packs, load_active_spec
     from core.db.models import Customer
     from core.db.session import get_session
     from core.shared.tenant import get_current_tenant_id
@@ -213,7 +212,7 @@ async def leads_global(request: Request) -> HTMLResponse:
         ).scalars().all()
 
     try:
-        enabled = enabled_packs(await load_active_spec())
+        enabled = await packs_del_negocio()
     except Exception:
         enabled = set()
     providers = lead_registry.providers_for(enabled)
@@ -288,15 +287,11 @@ async def login_submit(request: Request, email: str = Form(...), password: str =
 
 async def _pack_view_allowed(plugin_id: str) -> bool:
     """Enablement del pack para el tenant (ADR-0019): la vista por descriptor solo
-    se sirve si el pack está activo y habilitado en el spec del tenant, igual que
-    las tools en el orchestrator (`_tool_denial`). RLS aísla los datos igualmente,
-    pero un pack no provisionado no debe exponer su UI."""
-    from core.agents.spec import enabled_packs, load_active_spec
-
+    se sirve si el pack está activo y entre los packs del negocio (`packs_del_negocio`, ADR-0206 §5).
+    RLS aísla los datos igualmente, pero un pack no provisionado no debe exponer su UI."""
     if not plugin_manager.is_active(plugin_id):
         return False
-    spec = await load_active_spec()
-    return plugin_id in enabled_packs(spec)
+    return plugin_id in await packs_del_negocio()
 
 
 @router.get("/packs/{plugin_id}/{view}", response_class=HTMLResponse)
@@ -1304,10 +1299,8 @@ async def dashboard(request: Request):
     llm_model = (app_settings.llm_model if app_settings else None) or settings.llm_model
 
     # Packs de negocio habilitados del tenant (sin el core): mismo valor que la
-    # métrica `plugins` del plan y que la lista `/admin/plugins` (ADR-0045).
-    from core.agents.spec import count_tenant_packs
-
-    tenant_packs = count_tenant_packs(await load_active_spec())
+    # métrica `plugins` del plan y que la lista `/admin/plugins` (ADR-0045, ADR-0206 §5).
+    tenant_packs = len(await packs_del_negocio(con_core=False))
 
     ctx.update(
         kpi={
@@ -1494,8 +1487,7 @@ async def plugins_list(request: Request):
         return _login_redirect()
     async with get_session() as session:
         records = {r.id: r for r in (await session.execute(select(PluginRecord))).scalars().all()}
-    spec = await load_active_spec()
-    enabled = enabled_packs(spec)
+    enabled = await packs_del_negocio()
     tenant_id = get_current_tenant_id()
     async with get_session() as session:
         tenant_state = {
@@ -2680,7 +2672,7 @@ async def settings_page(request: Request):
             app_settings = AppSettings(tenant_id=get_current_tenant_id())
             session.add(app_settings)
     spec = await load_active_spec()
-    enabled = enabled_packs(spec)
+    enabled = await packs_del_negocio()
     from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
 
     all_guardrails = [
@@ -2787,7 +2779,7 @@ async def settings_skills_save(request: Request):
     form = await request.form()
     current = await load_active_spec()
     data = current.model_dump(mode="json")
-    enabled = enabled_packs(current)
+    enabled = await packs_del_negocio()
 
     # Solo se editan tools de packs HABILITADOS (mismo criterio que el GET): así
     # no se pisan los bindings de packs deshabilitados ni se persiste basura.
@@ -2989,7 +2981,8 @@ async def settings_save(
     spec = await load_active_spec()
     from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
 
-    valid_names = {g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled_packs(spec)} | set(TOGGLES)
+    enabled = await packs_del_negocio()
+    valid_names = {g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled} | set(TOGGLES)
     async with get_session() as session:
         app_settings = (
             await session.execute(

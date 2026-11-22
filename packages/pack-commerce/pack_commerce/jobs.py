@@ -35,11 +35,11 @@ CRON_QUOTES = f"{PACK_ID}.follow_up_quotes"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
-    """Tenants cuyo AgentSpec incluye este pack (ADR-0019).
+    """Tenants con este pack entre los packs del negocio (`packs_del_negocio`, ADR-0206 §5).
 
     Sin este filtro, los follow-ups se enviarían a tenants sin el pack.
     """
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     async with get_session() as session:
         rows = (
@@ -51,9 +51,8 @@ async def _tenant_ids() -> list[uuid.UUID]:
         tid = uuid.UUID(str(raw))
         try:
             async with tenant_scope(tid):
-                spec = await load_active_spec()
-            if PACK_ID in enabled_packs(spec):
-                result.append(tid)
+                if PACK_ID in await packs_del_negocio(tid):
+                    result.append(tid)
         except Exception:
             continue
     return result

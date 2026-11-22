@@ -10,8 +10,8 @@
    (ADR-0191 §4) y cada agente congela su última versión (o la `fijada` que pase el llamador).
 2. **Habilidades.** Las efectivas en el scope de la conexión (ADR-0118 §2, HU-AOS-16): si la
    conexión tiene instalaciones propias vivas (`pack_installations`, scope `connection`),
-   SOLO esas, sin merge; si no, las habilitadas del negocio (`enabled_business_packs` del v2
-   activo). Una instalación de conexión de un pack que el negocio no tiene habilitado hace
+   SOLO esas, sin merge; si no, las habilitadas del negocio (`packs_del_negocio`,
+   ADR-0206 §5). Una instalación de conexión de un pack que el negocio no tiene habilitado hace
    fallar el build (`instalacion_sin_habilitar`: en la parte 1 de la HU la activación del
    código, la config y las tools siguen colgando de `spec.packs`). Las de la plataforma con su
    versión exacta, registrada en `pack_versions` con el mismo `manifest_hash` y no retirada; los
@@ -241,11 +241,10 @@ async def habilidades_efectivas(tenant_id: uuid.UUID, connection_id: uuid.UUID |
     """Habilidades que un build usaría hoy: las del scope de la conexión (`_efectivas`) o, sin
     conexión, las habilitadas del negocio. Lectura pura; `ErrorDelBuild` si una instalación de
     conexión no está habilitada en el negocio (el mismo fail-closed del build)."""
-    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     _exigir_scope(tenant_id)
-    leido = await leer_spec_activo(tenant_id)
-    del_negocio = set(enabled_business_packs(leido[1])) if leido else set()
+    del_negocio = await packs_del_negocio(tenant_id, con_core=False)
     if connection_id is None:
         return del_negocio
     return await _efectivas(tenant_id, connection_id, del_negocio)
@@ -539,13 +538,14 @@ async def armar_con_instancias(
     """Pasos 2 a 5 del build con los agentes ya leídos. También lo usa la prueba del borrador
     (`core.releases.efimera`, adenda HU-AOS-72 de ADR-0191), que arma las instancias en memoria."""
     from core.agents.flow import read_tenant_flow_raw
-    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    from core.agents.instalaciones_agente import packs_del_negocio
+    from core.agents.spec import leer_spec_activo
     from core.releases.cargar import derivar_procedimientos
     from core.shared.tenant import tenant_slug
 
     _exigir_scope(tenant_id)
     leido = await leer_spec_activo(tenant_id)
-    del_negocio = set(enabled_business_packs(leido[1])) if leido else set()
+    del_negocio = await packs_del_negocio(tenant_id, con_core=False)
     allowlist: set[str] = {p.name for p in leido[1].playbooks} if leido else set()
     del leido
     for inst in instancias:

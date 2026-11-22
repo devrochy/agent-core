@@ -675,6 +675,40 @@ def presets_v2(
         raise typer.Exit(1)
 
 
+@app.command("packs-sin-instalacion")
+def packs_sin_instalacion(
+    tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
+    todos: bool = typer.Option(False, "--todos", help="Todos los negocios vivos."),
+    aplicar: bool = typer.Option(False, "--aplicar", help="Escribe. Sin esto es dry-run: reporta lo que haría."),
+    quitar_sobrantes: bool = typer.Option(
+        False, "--quitar-sobrantes", help="Con --aplicar, desinstala de sus agentes lo que sobra (borrado lógico)."
+    ),
+) -> None:
+    """Precheck de ADR-0206 §5 (HU-AOS-91): habilidades de `agent_specs.packs` sin instalación en ningún agente activo
+    (se perderían) e instaladas que `agent_specs` no tiene (aparecerían). Con --aplicar instala en los especialistas
+    activos las transversales que faltan; las de especialidad necesitan su agente. Dry-run por defecto."""
+    import asyncio
+
+    from cli.tenant_ref import resolve_tenant
+    from core.agents.instalaciones_agente import precheck_packs_del_negocio
+
+    if bool(tenant) == todos:
+        raise typer.BadParameter("Indica --tenant <slug> o --todos (uno de los dos).")
+
+    async def _run() -> list[dict[str, object]]:
+        ids = [await resolve_tenant(tenant)] if tenant else None
+        return await precheck_packs_del_negocio(ids, aplicar=aplicar, quitar_sobrantes=quitar_sobrantes)
+
+    filas = asyncio.run(_run())
+    console.print("Habilidades del negocio contra sus agentes" + ("" if aplicar else " (dry-run: no se escribió nada)"))
+    for f in filas:
+        console.print(
+            f"  {f['negocio']}: faltan {f['faltan'] or '—'} · sobran {f['sobran'] or '—'}"
+            f" · instala {f['instala'] or '—'} · quita {f['quita'] or '—'}"
+        )
+    console.print(f"{len(filas)} negocio(s) con diferencias." if filas else "Sin diferencias.")
+
+
 @app.command("habilidades-por-agente")
 def habilidades_por_agente(
     tenant: str | None = typer.Option(None, "--tenant", help="Solo este negocio (slug o UUID)."),
