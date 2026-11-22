@@ -1,6 +1,6 @@
 # ADR-0208 — El crédito es el único tope de consumo: topes estructurales, colchón para conversaciones abiertas y tarifario v2
 
-- **Estado:** propuesto (HU-BILL-17, 2026-11-22).
+- **Estado:** aceptado (2026-11-22, por decisión del dueño; documento mergeado en agent-core#884, plan en solvershub-docs#291). Sin código todavía; el código va en HU-BILL-18 a HU-BILL-21.
 - **Fecha:** 2026-11-22
 - **Contexto:** D-79 y SPEC-51 (`solvershub-docs`, #291), HU-BILL-18 a HU-BILL-21.
   **Enmienda:** ADR-0142 (métricas y punto de enforcement), ADR-0144 (deja de ser sombra; fees desde

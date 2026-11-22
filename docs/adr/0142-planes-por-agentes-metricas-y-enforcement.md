@@ -2,7 +2,7 @@
 
 - **Estado:** propuesto (HU-BILL-05, 2026-10-19). Cifras aprobadas por el dueño el 2026-10-19; las demás
 - **Nota de estado:** ADR-0192 (propuesto, 2026-11-12): sin General, la enmienda «el General no cuenta en el plan» deja de aplicar.
-- **Nota de estado:** ADR-0208 (propuesto, 2026-11-22, D-79): el crédito pasa a ser el único tope de consumo, salen `conversaciones`, `mensajes`, `conversaciones_audio`, `conversaciones_ocr`, `costo_llm_usd` y `plugins`, y se suman `conexiones`, `correos`, canales y `min_plan` como topes estructurales. Las cifras por plan son las de D-79.
+- **Nota de estado:** ADR-0208 (aceptado, 2026-11-22, D-79): el crédito pasa a ser el único tope de consumo, salen `conversaciones`, `mensajes`, `conversaciones_audio`, `conversaciones_ocr`, `costo_llm_usd` y `plugins`, y se suman `conexiones`, `correos`, canales y `min_plan` como topes estructurales. Las cifras por plan son las de D-79.
   decisiones revisables están marcadas abajo.
 - **Fecha:** 2026-10-19
 - **Contexto:** D-35 («SolversHub vende agentes»), `modelo-de-precios.md §5` (docs), HU-BILL-05 y HU-AOS-37
