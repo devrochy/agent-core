@@ -15,7 +15,7 @@ from core.almacenamiento import URL_TTL_CANAL, StorageInvalido, guardar, url
 from core.config import get_settings
 from core.mcp.types import VoiceSynthesis
 from core.media.errors import MediaProviderError
-from core.media.tts import sintetizar_audio
+from core.media.tts import registrar_consumo_tts, sintetizar_audio
 from core.shared.logger import get_logger
 from core.shared.tenant import current_tenant_slug
 
@@ -86,6 +86,9 @@ async def sintetizar(conversation_id, texto: str) -> VoiceSynthesis | None:  # t
     except MediaProviderError as exc:
         log.warning("voice_tts_error", code=exc.code, transient=exc.transient)
         return None
+    # OpenAI ya cobró: la fila `tts` va aunque después falle la conversión o el guardado (ADR-0208 §11).
+    propia = bool(config.api_key.get_secret_value().strip())
+    await registrar_consumo_tts(conversation_id, resultado, key_mode="byok" if propia else "platform")
 
     # OpenAI ya puede devolver Ogg/Opus; solo se invoca ffmpeg cuando hace falta.
     datos = resultado.contenido

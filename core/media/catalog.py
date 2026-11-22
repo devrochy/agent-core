@@ -128,6 +128,28 @@ VISION_CATALOG: dict[VisionProviderKey, VisionProvider] = {
 }
 
 
+# Voz de salida (TTS, ADR-0197, pack-voice): USD por millón de caracteres del texto sintetizado.
+# Fuente: https://developers.openai.com/api/docs/pricing (2026-11-22): `tts-1` USD 15 y `tts-1-hd`
+# USD 30 por 1M de caracteres. `gpt-4o-mini-tts` se cobra por tokens (USD 0,60 por 1M de texto de
+# entrada y USD 12 por 1M de audio de salida) y OpenAI no publica su precio por carácter: se usa el
+# de `tts-1` como estimación hasta calibrarlo con el uso real (HU-BILL-29). Un modelo que no esté
+# aquí se costea con el precio más alto (`tts-1-hd`): cobrar de menos sería regalar el gasto.
+TTS_USD_POR_MILLON_DE_CARACTERES: dict[str, float] = {
+    "tts-1": 15.0,
+    "tts-1-hd": 30.0,
+    "gpt-4o-mini-tts": 15.0,
+}
+_TTS_PRECIO_DESCONOCIDO = 30.0
+
+
+def tts_cost_usd(model: str, caracteres: int) -> float:
+    """Costo aproximado de sintetizar `caracteres` con `model` (OpenAI)."""
+    if caracteres <= 0:
+        return 0.0
+    tarifa = TTS_USD_POR_MILLON_DE_CARACTERES.get(model, _TTS_PRECIO_DESCONOCIDO)
+    return round(tarifa * caracteres / 1_000_000, 6)
+
+
 def is_audio_provider(value: str | None) -> bool:
     return bool(value) and value in AUDIO_CATALOG
 
@@ -169,6 +191,7 @@ def vision_cost_usd(
 
 __all__ = [
     "AUDIO_CATALOG",
+    "TTS_USD_POR_MILLON_DE_CARACTERES",
     "VISION_CATALOG",
     "AudioProviderKey",
     "ModelOption",
@@ -179,6 +202,7 @@ __all__ = [
     "is_audio_provider",
     "is_vision_mode",
     "is_vision_provider",
+    "tts_cost_usd",
     "vision_cost_usd",
     "vision_model_or_default",
 ]

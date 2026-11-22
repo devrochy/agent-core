@@ -692,6 +692,8 @@ class ProveedorGrabado(BaseLLMProvider):
         thinking: bool | None,
         pricing_per_mtok: tuple[float, float],
         secretos: tuple[str, ...] = (),
+        cache_pricing_per_mtok: tuple[float, float] | None = None,
+        input_includes_cache: bool = True,
     ) -> None:
         if modo not in ("record", "replay"):
             raise ErrorGrabacion(f"ProveedorGrabado no aplica al modo {modo!r}")
@@ -705,6 +707,9 @@ class ProveedorGrabado(BaseLLMProvider):
         self.model = model
         self.thinking = thinking
         self.pricing_per_mtok = pricing_per_mtok
+        # Mismo costeo de caché que el proveedor real (ADR-0208 §13), también en replay.
+        self.cache_pricing_per_mtok = cache_pricing_per_mtok
+        self.input_includes_cache = input_includes_cache
         # Nunca un atributo con la clave en claro: `Secretos` no se puede imprimir.
         self._secretos = Secretos()
         self._secretos.agregar(dict.fromkeys(secretos, "API key del proveedor (LLM_API_KEY o BYOK)"))

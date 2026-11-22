@@ -1,8 +1,8 @@
 """HU-BILL-04/06 · medición del crédito mensual contra la base real (ADR-0144).
 
 - El crédito usado coincide con `usage_ledger` y la tasa: créditos congelados al escribir, filas
-  viejas calculadas con la TRM vigente, fees de notas de voz, imágenes y plantillas enviadas; sin
-  playground ni filas `eval`.
+  viejas calculadas con la TRM vigente y fees de plantillas enviadas; el playground dentro de los
+  300 gratis y sin filas `eval`. Lo de antes de `v2` está en `test_hu_bill_21_todo_el_gasto.py`.
 - El mes de consumo se reinicia con el ciclo de la suscripción.
 - Aislamiento entre negocios (filtro y RLS) y `GET /admin/plan` con el uso real.
 - La migración 0096 sube y baja.
@@ -85,7 +85,9 @@ def _mensaje(tid: uuid.UUID, conv: uuid.UUID, cuando: datetime, **campos: Any) -
 
 
 async def _sembrar_mes(tid: uuid.UUID, cuando: datetime) -> None:
-    """Un mes tipo. Esperado (TRM 4000): 8,5 + 1,6 + 0,5 + 1,0 + 0,3 = 11,9 créditos."""
+    """Un mes tipo después de `v2` (TRM 4000): 8,5 + 1,6 + 0,3 = 10,4 créditos. La nota de voz y la
+    imagen de `messages` ya no cobran su fee (cobra su fila del ledger, HU-BILL-21) y el playground
+    queda dentro de los 300 gratis."""
     conv = await _conversacion(tid)
     playground = await _conversacion(tid, channel="test")
     await _filas(
@@ -96,7 +98,7 @@ async def _sembrar_mes(tid: uuid.UUID, cuando: datetime) -> None:
         _turno(tid, conv, cuando, cost_usd=Decimal("0.5"), credits=Decimal("1.6"), key_mode="byok",
                tarifario_version="v1", trm_cop=Decimal("4000")),
         _turno(tid, None, cuando, cost_usd=Decimal("1"), kind="eval"),  # a cargo de la plataforma
-        _turno(tid, playground, cuando, cost_usd=Decimal("1")),  # prueba del panel: no consume
+        _turno(tid, playground, cuando, cost_usd=Decimal("0.001")),  # playground: dentro de los 300 gratis
         _turno(tid, conv, cuando, input_tokens=0, output_tokens=0),  # sin llamada al LLM: 0
         _mensaje(tid, conv, cuando, direction="inbound", media_type="audio/ogg"),
         _mensaje(tid, conv, cuando, direction="inbound", media_type="image/jpeg"),
@@ -131,17 +133,19 @@ async def test_el_credito_usado_coincide_con_el_ledger_y_la_tasa(monkeypatch: py
 
     consumo = await _medir(tid, desde, por_agente=True)
     assert consumo.por_concepto == {
-        "llm_turn": Decimal("10.1"), "stt": Decimal("0.5"), "vision": Decimal("1.0"), "template_sent": Decimal("0.3"),
+        "llm_turn": Decimal("10.1"), "stt": Decimal("0"), "vision": Decimal("0"), "tts": Decimal("0"),
+        "template_sent": Decimal("0.3"), "playground": Decimal("0"),
     }
-    assert consumo.total == Decimal("11.9")
+    assert consumo.total == Decimal("10.4")
+    assert consumo.playground_usado == Decimal("1.4")  # ⌈12⌉/10 + 0,2, gratis
     # Sin agentes v3: todo cae en el renglón sin agente y la suma cuadra con el total.
-    assert [(a.agent_id, a.used) for a in consumo.por_agente] == [(None, Decimal("11.9"))]
+    assert [(a.agent_id, a.used) for a in consumo.por_agente] == [(None, Decimal("10.4"))]
     # El registro de métricas (ADR-0045) mide lo mismo.
-    assert await count_metric(tid, "creditos", period_start=desde) == pytest.approx(11.9)
+    assert await count_metric(tid, "creditos", period_start=desde) == pytest.approx(10.4)
 
     # Otra TRM: solo cambian las filas sin créditos congelados (8,5 → ⌈91,08⌉/10 + 0,2 = 9,4).
     monkeypatch.setattr(get_settings(), "billing_trm_cop", 4400.0)
-    assert (await _medir(tid, desde)).total == Decimal("12.8")
+    assert (await _medir(tid, desde)).total == Decimal("11.3")
 
 
 async def test_el_mes_de_consumo_se_reinicia_con_el_ciclo() -> None:
@@ -184,7 +188,7 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
     await _sembrar_mes(uno, ahora)
     desde = ahora - timedelta(hours=1)
 
-    assert (await _medir(uno, desde)).total == Decimal("11.9")
+    assert (await _medir(uno, desde)).total == Decimal("10.4")
     assert (await _medir(otro, desde)).total == Decimal(0)
     # Medir otro negocio desde un scope ajeno se rechaza; y la RLS no deja ver sus filas.
     from core.billing.creditos import medir_creditos
@@ -202,9 +206,12 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
     r = await app_client.get("/api/v1/admin/plan", headers=await api_headers(app_client, uno))
     assert r.status_code == 200, r.text
     credito = r.json()["credit"]
-    assert (credito["limit"], credito["used"], credito["percent"]) == (12000, 11.9, 0.1)
-    assert credito["by_concept"] == {"llm_turn": 10.1, "stt": 0.5, "vision": 1.0, "template_sent": 0.3}
-    assert credito["by_agent"] == [{"agent_id": None, "name": None, "used": 11.9}]
+    assert (credito["limit"], credito["used"], credito["percent"]) == (12000, 10.4, 0.1)
+    assert credito["by_concept"] == {
+        "llm_turn": 10.1, "stt": 0.0, "vision": 0.0, "tts": 0.0, "template_sent": 0.3, "playground": 0.0,
+    }
+    assert credito["by_agent"] == [{"agent_id": None, "name": None, "used": 10.4}]
+    assert credito["playground"] == {"used": 1.4, "free_limit": 300.0, "free_remaining": 298.6, "charged": 0.0}
     assert credito["period_start"] and credito["period_end"]
     r = await app_client.get("/api/v1/admin/plan", headers=await api_headers(app_client, otro))
     assert r.status_code == 200, r.text

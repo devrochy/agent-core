@@ -70,12 +70,13 @@ def plan_limit_error(exc: QuotaExceeded | PlanNoIncluye) -> ApiError:
     )
 
 
-def plan_limit_responses(metric: str) -> dict[int | str, dict[str, str]]:
-    """Documentación OpenAPI del 409 de una métrica estructural."""
+def plan_limit_responses(*metrics: str) -> dict[int | str, dict[str, str]]:
+    """Documentación OpenAPI del 409 de una o varias métricas del plan."""
+    codigos = " | ".join(plan_limit_code(m) for m in metrics)
     return {
         409: {
             "description": (
-                f"Tope del plan: `error.code = {plan_limit_code(metric)}`, "
+                f"Tope del plan: `error.code = {codigos}`, "
                 "`error.details = {metric, used, limit}`; no se escribió nada."
             )
         }

@@ -263,7 +263,12 @@ async def generar_estructurado[M: BaseModel](
         uso = respuesta.usage
         estimar = getattr(llm, "estimate_cost_usd", None)
         # Un proveedor sin tarifas (el fake de DEMO_MODE) cuenta 0.
-        costo = Decimal(str(estimar(uso.input_tokens, uso.output_tokens))) if estimar else Decimal("0")
+        if estimar:
+            from core.llm.base import costo_de_respuesta
+
+            costo = Decimal(str(costo_de_respuesta(llm, uso)))  # con su caché (ADR-0208 §13)
+        else:
+            costo = Decimal("0")
     except Exception:
         uso, costo = None, Decimal("0")
     consumo = await _medir(

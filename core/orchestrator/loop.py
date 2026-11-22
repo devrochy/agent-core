@@ -173,8 +173,8 @@ class _TurnUsage:
         uso = response.usage
         leidos = getattr(uso, "cache_read_tokens", 0)
         escritos = getattr(uso, "cache_write_tokens", 0)
-        # El costo sale de `uso.input_tokens` tal cual (`_response_cost`); aquí solo el total que
-        # guarda el ledger: Anthropic no incluye lo cacheado en `input_tokens` (ADR-0117, HU-AOS-35).
+        # El costo lo calcula el proveedor con su caché (`_response_cost`, ADR-0208 §13); aquí solo el
+        # total que guarda el ledger: Anthropic no incluye lo cacheado en `input_tokens` (HU-AOS-35).
         incluido = getattr(uso, "input_includes_cache", True)
         self.input_tokens += uso.input_tokens + (0 if incluido else leidos + escritos)
         self.output_tokens += uso.output_tokens
@@ -217,23 +217,11 @@ def _creditos_del_turno(usage: _TurnUsage) -> dict[str, Any]:
     0 créditos. Si el cálculo falla, las columnas quedan en NULL y la fila se escribe igual: la
     fila (con su `cost_usd`) es la fuente de la facturación y nunca se pierde por esto."""
     try:
-        from decimal import Decimal
+        from core.billing.tarifario import creditos_congelados
 
-        from core.billing.tarifario import TARIFARIO_VIGENTE, creditos_por_evento, trm_vigente
-
-        trm = trm_vigente()
-        key_mode = "byok" if usage.key_mode == "byok" else "platform"
-        creditos = (
-            creditos_por_evento(round(usage.cost_usd, 6), "llm_turn", key_mode, trm)
-            if usage.llamadas > 0
-            else Decimal("0.0")
+        return creditos_congelados(
+            round(usage.cost_usd, 6), "llm_turn", usage.key_mode, hubo_gasto=usage.llamadas > 0  # type: ignore[arg-type]
         )
-        return {
-            "credits": creditos,
-            "key_mode": key_mode,
-            "tarifario_version": TARIFARIO_VIGENTE.version,
-            "trm_cop": trm,
-        }
     except Exception:
         log.warning("usage_ledger_credits_failed")
         return {}
@@ -1792,7 +1780,9 @@ def _response_cost(provider, response) -> float:  # type: ignore[no-untyped-def]
     matcheaba ese dict y el costo quedaba en $0.00 — silenciosamente mal en
     usage_ledger, la fuente de facturación (ADR-0008).
     """
-    return provider.estimate_cost_usd(response.usage.input_tokens, response.usage.output_tokens)
+    from core.llm.base import costo_de_respuesta
+
+    return costo_de_respuesta(provider, response.usage)
 
 
 async def _mark_budget_exhausted(conversation_id: uuid.UUID) -> None:
