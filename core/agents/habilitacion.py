@@ -14,7 +14,6 @@ from dataclasses import dataclass, field
 
 from sqlalchemy import select
 
-from core.billing.enforcement import QuotaExceeded, quota_decision
 from core.db.models import PluginConfig
 from core.db.session import get_session
 from core.plugin_manager import plugin_manager
@@ -117,7 +116,7 @@ async def configure_plugin_for_tenant(plugin_id: str, values: dict[str, object])
 
     Punto ÚNICO compartido por el panel SSR y la API `/api/v1` (ADR-0076/0077): la lógica de cifrado y
     activación no se duplica. Ya no habilita nada: una habilidad es del negocio solo si algún agente activo la
-    tiene instalada (ADR-0206, HU-AOS-91), y la cuota `plugins` se cobra al instalarla.
+    tiene instalada (ADR-0206, HU-AOS-91).
     """
     await plugin_manager.save_config(plugin_id, values)
     await plugin_manager.activate(plugin_id)
@@ -147,8 +146,8 @@ async def seed_flow_for_current_tenant(pack: str) -> None:
 async def asegurar_habilidades(
     tenant_id: uuid.UUID, packs: Iterable[str], *, actor: uuid.UUID | None
 ) -> ResultadoHabilitacion:
-    """Deja listos para instalar en un agente los `packs` dados: el despliegue los trae, la cuota `plugins` del
-    plan alcanza y su código queda activo. NO escribe la habilitación: una habilidad es del negocio solo si algún
+    """Deja listos para instalar en un agente los `packs` dados: el despliegue los trae y su código queda activo
+    (ya no hay cuota `plugins`: ADR-0208 §1). NO escribe la habilitación: una habilidad es del negocio solo si algún
     agente activo la tiene instalada (ADR-0206, HU-AOS-91), así que quien llama la instala en el agente después.
 
     Un pack que no activa (le falta configuración) sigue y queda en `config_pendiente`: no aporta tools mientras
@@ -170,10 +169,6 @@ async def asegurar_habilidades(
     nuevos = [p for p in pedidos if p not in instalados]
     if not nuevos:
         return ResultadoHabilitacion(ya_estaban=ya)
-    decision = await quota_decision(tenant_id, "plugins")
-    if not decision.allowed:
-        raise QuotaExceeded("plugins", len(instalados), decision.limit or 0)
-
     config_pendiente: dict[str, str] = {}
     for pack in nuevos:
         error = await ensure_pack_activated(pack) or await _config_del_negocio(pack)

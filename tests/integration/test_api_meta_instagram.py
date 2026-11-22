@@ -32,7 +32,7 @@ BASE = "/api/v1/admin/meta/instagram"
 CLAVE = "Clave-de-prueba-1"
 
 
-async def _new_tenant(prefix: str, *, plan: str = "basic") -> uuid.UUID:
+async def _new_tenant(prefix: str, *, plan: str = "premium") -> uuid.UUID:
     from _habilidades import onboard_tenant
 
     from core.db.session import get_session
@@ -90,10 +90,11 @@ def _ids() -> tuple[str, str]:
 
 # ------------------------------------------------------------------ estado
 async def test_el_estado_dice_si_esta_lista_la_app_y_si_el_plan_lo_incluye(app_client, meta) -> None:
-    basic, free = await _new_tenant("api-ig-basic"), await _new_tenant("api-ig-free", plan="free")
+    premium, free = await _new_tenant("api-ig-premium"), await _new_tenant("api-ig-free", plan="free")
+    basic = await _new_tenant("api-ig-basic", plan="basic")
     meta([])
 
-    r = await app_client.get(BASE, headers=await api_headers(app_client, basic))
+    r = await app_client.get(BASE, headers=await api_headers(app_client, premium))
     assert r.status_code == 200, r.text
     assert r.json() == {
         "meta_configured": True, "app_id": APP_ID_PLATAFORMA,
@@ -104,6 +105,9 @@ async def test_el_estado_dice_si_esta_lista_la_app_y_si_el_plan_lo_incluye(app_c
         "login_available": False, "login_missing": ["INSTAGRAM_LOGIN_ENABLED"],
     }
     r = await app_client.get(BASE, headers=await api_headers(app_client, free))
+    assert r.json()["plan_includes"] is False
+    # Planes v3 (D-79): Basic ya no incluye Instagram.
+    r = await app_client.get(BASE, headers=await api_headers(app_client, basic))
     assert r.json()["plan_includes"] is False
 
 

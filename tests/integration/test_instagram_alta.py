@@ -25,7 +25,7 @@ pytestmark = [
 
 
 # ------------------------------------------------------------------ helpers
-async def _new_tenant(prefix: str, *, plan: str = "basic") -> uuid.UUID:
+async def _new_tenant(prefix: str, *, plan: str = "premium") -> uuid.UUID:
     from _habilidades import onboard_tenant
 
     from core.db.session import get_session
@@ -331,7 +331,7 @@ async def test_un_plan_sin_instagram_no_descubre_ni_conecta(meta) -> None:
 async def test_todos_los_planes_de_pago_incluyen_instagram() -> None:
     from core.gateway.meta_instagram_alta import plan_incluye_instagram
 
-    assert [plan_incluye_instagram(p) for p in ("free", "basic", "premium", "empresarial")] == [False, True, True, True]
+    assert [plan_incluye_instagram(p) for p in ("free", "basic", "premium", "empresarial")] == [False, False, True, True]
 
 
 async def test_sin_la_configuracion_de_instagram_no_hay_alta(meta, monkeypatch) -> None:

@@ -76,23 +76,23 @@ def test_fragmentos_reales_de_commerce_son_validos() -> None:
         assert bool(fragmento.seed.get("products")) == (vertical != "suscripciones")
 
 
-def _plan(pid: str, orden: int, plugins: int | None) -> SimpleNamespace:
-    return SimpleNamespace(id=pid, sort_order=orden, limits={"plugins": plugins})
+def _plan(pid: str, orden: int) -> SimpleNamespace:
+    return SimpleNamespace(id=pid, sort_order=orden, limits={})
 
 
 def test_plan_insuficiente_se_rechaza() -> None:
     manifest = load_preset("cobranza")  # premium
     modulos = {"pack_cobranza": SimpleNamespace(min_plan="premium")}
     with pytest.raises(PresetError, match="plan más alto"):
-        _validar_plan(manifest, _plan("basic", 1, 3), modulos)
-    _validar_plan(manifest, _plan("premium", 2, 8), modulos)
+        _validar_plan(manifest, _plan("basic", 1), modulos)
+    _validar_plan(manifest, _plan("premium", 2), modulos)
 
 
-def test_limite_de_habilidades_del_plan() -> None:
+def test_el_plan_ya_no_limita_cuantas_habilidades_trae_el_preset() -> None:
+    """HU-BILL-18 (ADR-0208 §1): `plugins` dejó de ser tope; aunque una fila vieja lo traiga, no se mira."""
     manifest = load_preset("restaurante")  # 2 packs
     modulos = {p: SimpleNamespace(min_plan="basic") for p in manifest.packs}
-    with pytest.raises(PresetError, match="habilidades"):
-        _validar_plan(manifest, _plan("basic", 1, 1), modulos)
+    _validar_plan(manifest, SimpleNamespace(id="basic", sort_order=1, limits={"plugins": 1}), modulos)
 
 
 def test_el_cli_de_tenant_no_importa_packs() -> None:

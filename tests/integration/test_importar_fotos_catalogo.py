@@ -118,7 +118,7 @@ async def test_foto_cotizada_reconocida_idempotente_y_confirmada(app_client, mon
     cot = await app_client.get(f"{_BASE}/{ventas}/importar-datos/fotos/cotizacion?fotos=3", headers=h)
     assert cot.status_code == 200, cot.text
     cot = cot.json()
-    assert cot["alcanza"] is True and cot["llave_propia"] is False and cot["limite"] == 2500
+    assert cot["alcanza"] is True and cot["llave_propia"] is False and cot["limite"] == 1500
     assert cot["por_foto"] >= 2 and cot["creditos"] >= cot["por_foto"] * 3 - 1
     assert await _ledger_vision(tid) == []
 

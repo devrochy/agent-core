@@ -130,11 +130,11 @@ async def test_suscripcion_aislada_entre_tenants():
 
 
 async def test_metrica_plugins_no_cuenta_el_core():
-    """El core es plomería del framework: no consume cuota (ADR-0045)."""
+    """El core es plomería del framework: no cuenta como pack de negocio (ADR-0045)."""
     from core.agents.defaults_negocio import POR_DEFECTO
     from core.agents.instalaciones_agente import packs_del_negocio
     from core.agents.turno import agente_desde_defaults, enabled_business_packs, enabled_packs
-    from core.billing.metrics import count_metric
+    from core.billing.metrics import METRIC_KEYS
     from core.shared.tenant import tenant_scope
 
     tid = await _onboard(_uniq("pkgnocore"))
@@ -150,5 +150,6 @@ async def test_metrica_plugins_no_cuenta_el_core():
     assert "core" not in enabled_business_packs(agente) and "core" not in de_negocio
     assert de_negocio == set()  # onboarding sin packs de negocio
 
-    assert await count_metric(tid, "plugins") == 0
+    # La cuota `plugins` salió del registro con los planes v3 (ADR-0208 §1, HU-BILL-18).
+    assert "plugins" not in METRIC_KEYS
 

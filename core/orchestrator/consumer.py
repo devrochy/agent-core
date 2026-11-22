@@ -760,10 +760,8 @@ async def _resolve_conversation(
 
         is_new = conversation is None
         if conversation is None:
-            # Cuota de conversaciones (ADR-0045): solo bloquea ABRIR una nueva;
-            # las conversaciones ya abiertas siguen respondiendo. Sesión abierta
-            # reutilizada (mismo criterio que el gate de clientes).
-            await enforce_metric(tenant_id, "conversaciones", session=session)
+            # Abrir una conversación ya no tiene tope propio (ADR-0208 §1, HU-BILL-18): el
+            # crédito del mes corta en la cabecera del turno (`ingress.politicas_del_turno`).
             if connection is None:
                 # Hasta el contract se permite (número de la plataforma, canal sin fila); después el
                 # NOT NULL la rechaza. Este aviso lista los caminos que quedan antes de aplicarlo.

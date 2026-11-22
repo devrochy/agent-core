@@ -226,7 +226,7 @@ async def save_plugin_config(
 
     """Valida, guarda y activa el código del pack. Valores inválidos (p. ej. un número negativo)
     responden 422 `invalid_config` con `fields` por campo. Ya no habilita la habilidad en el negocio:
-    eso pasa al instalarla en un agente (ADR-0206, HU-AOS-91), y ahí se cobra la cuota."""
+    eso pasa al instalarla en un agente (ADR-0206, HU-AOS-91)."""
     try:
         await configure_plugin_for_tenant(plugin_id, values)
     except PluginConfigError as exc:

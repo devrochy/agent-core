@@ -69,9 +69,6 @@ def _validar_plan(manifest: PresetManifest, plan: Any, modules: dict[str, Any]) 
         raise PresetError(
             f"El preset {manifest.id} necesita un plan más alto (plan actual: {nombre})."
         )
-    limite = (plan.limits or {}).get("plugins")
-    if limite is not None and len(manifest.packs) > limite:
-        raise PresetError(f"El plan {plan.id} permite {limite} habilidades; el preset usa {len(manifest.packs)}.")
 
 
 # ------------------------------------------------------------------ config

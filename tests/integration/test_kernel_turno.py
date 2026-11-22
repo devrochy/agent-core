@@ -325,7 +325,7 @@ async def test_sin_cuota_bloquea_sin_llm_y_responde_el_cierre(tenant_setup, monk
     t1, _t2 = tenant_setup
 
     async def _agotada(_tid):
-        return "mensajes"
+        return "creditos"
 
     monkeypatch.setattr("core.billing.enforcement.turn_quota_metric", _agotada)
     _inmediato(monkeypatch)

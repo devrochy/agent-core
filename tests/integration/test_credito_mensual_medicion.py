@@ -202,7 +202,7 @@ async def test_aislamiento_entre_negocios(app_client) -> None:
     r = await app_client.get("/api/v1/admin/plan", headers=await api_headers(app_client, uno))
     assert r.status_code == 200, r.text
     credito = r.json()["credit"]
-    assert (credito["limit"], credito["used"], credito["percent"]) == (20000, 11.9, 0.1)
+    assert (credito["limit"], credito["used"], credito["percent"]) == (12000, 11.9, 0.1)
     assert credito["by_concept"] == {"llm_turn": 10.1, "stt": 0.5, "vision": 1.0, "template_sent": 0.3}
     assert credito["by_agent"] == [{"agent_id": None, "name": None, "used": 11.9}]
     assert credito["period_start"] and credito["period_end"]

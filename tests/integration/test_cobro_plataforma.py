@@ -43,7 +43,7 @@ pytestmark = [
 
 _SECRETO_DE_EVENTOS = "secreto-de-eventos-de-prueba"
 # Monto firmado por Wompi en el webhook: el del link de cada plan.
-_CENTAVOS = {"basic": 20_000_000, "premium": 60_000_000}
+_CENTAVOS = {"basic": 12_900_000, "premium": 29_900_000}
 
 
 # ------------------------------------------------------------------ dobles
@@ -283,7 +283,7 @@ async def _negocio_aprovisionado(
     vendedores: Callable[..., None],
     *,
     plan: str = "premium",
-    precio: int = 600_000,
+    precio: int = 299_000,
     vertical: str = "restaurante",
     con_pagos: bool = False,
     vendedor: uuid.UUID | None = None,
@@ -536,7 +536,7 @@ async def test_pago_por_el_asistente_extiende_el_periodo_del_negocio(vendedores,
     assert negocio.period_end == sumar_periodo(inicio, "mensual", negocio.dia_ancla)
     assert negocio.period_end == (await _suscripcion_del_vendedor(esc)).proximo_cargo
     [pago] = [p for p in await _pagos(esc.negocio) if p.periodo == referencia]
-    assert (pago.status, pago.provider, int(pago.amount_cop)) == ("aprobado", "asistente", 600_000)
+    assert (pago.status, pago.provider, int(pago.amount_cop)) == ("aprobado", "asistente", 299_000)
     assert len(await _auditoria(esc.vendedor, "cobro_plataforma_aplicado")) == 1
     [en_el_negocio] = await _auditoria(esc.negocio, "cobro_plataforma_aplicado")
     assert en_el_negocio.input["referencia"] == referencia
@@ -578,23 +578,23 @@ async def test_un_periodo_pagado_con_descuento_no_es_monto_distinto_y_registra_l
     inicio = (await _suscripcion_de(esc.negocio)).period_end
     referencia = _referencia(esc, inicio)
     cargo = await _cobrar_periodo(esc, inicio)
-    await _rebajar_el_cargo(esc, cargo["periodo"], 300_000, con_descuento=True)
+    await _rebajar_el_cargo(esc, cargo["periodo"], 149_500, con_descuento=True)
     await _pagar_por_el_asistente(esc, cargo["periodo"])
 
     [evento] = await _eventos(esc.vendedor, "subscription.charge_paid")
-    assert (Decimal(evento.payload["monto"]), Decimal(evento.payload["monto_bruto"])) == (Decimal(300_000), Decimal(600_000))
+    assert (Decimal(evento.payload["monto"]), Decimal(evento.payload["monto_bruto"])) == (Decimal(149_500), Decimal(299_000))
     assert evento.payload["descuento"]["etiqueta"] == "Lanzamiento"
     assert await _entregar_cargos_pagados(esc) == 1
 
     [pago] = [p for p in await _pagos(esc.negocio) if p.periodo == referencia]
-    assert (pago.status, int(pago.amount_cop)) == ("aprobado", 300_000)
+    assert (pago.status, int(pago.amount_cop)) == ("aprobado", 149_500)
     assert (await _suscripcion_de(esc.negocio)).status == "active"
     [auditada] = await _auditoria(esc.vendedor, "cobro_plataforma_aplicado")
-    assert (auditada.output["monto_bruto"], auditada.output["monto_cobrado"]) == ("600000.00", "300000.00")
+    assert (auditada.output["monto_bruto"], auditada.output["monto_cobrado"]) == ("299000.00", "149500.00")
     assert auditada.output["descuento"]["etiqueta"] == "Lanzamiento"
     # La foto de la promoción es del vendedor: la auditoría del negocio comprador no la lleva.
     [del_negocio] = await _auditoria(esc.negocio, "cobro_plataforma_aplicado")
-    assert "descuento" not in del_negocio.output and del_negocio.output["monto_cobrado"] == "300000.00"
+    assert "descuento" not in del_negocio.output and del_negocio.output["monto_cobrado"] == "149500.00"
     assert not [p for p in await _pagos(esc.negocio) if p.status == "monto_distinto"]
     assert not [a for a in alertas if a["severity"] == "critical"]
 
@@ -604,7 +604,7 @@ async def test_una_suscripcion_a_menor_precio_sin_descuento_si_alerta_monto_dist
     inicio = (await _suscripcion_de(esc.negocio)).period_end
     antes = await _suscripcion_de(esc.negocio)
     cargo = await _cobrar_periodo(esc, inicio)
-    await _rebajar_el_cargo(esc, cargo["periodo"], 300_000, con_descuento=False)
+    await _rebajar_el_cargo(esc, cargo["periodo"], 149_500, con_descuento=False)
     await _pagar_por_el_asistente(esc, cargo["periodo"])
     assert await _entregar_cargos_pagados(esc) == 1
 
@@ -625,11 +625,11 @@ async def test_el_alta_o_el_cambio_desde_free_con_descuento_registran_el_neto_co
     a_lista = periodo_de(esc.slug, datetime.now(UTC) + timedelta(days=240), desde_cero=True)
     async with tenant_scope(esc.negocio):
         async with get_session() as s:
-            await registrar_periodo_pagado(s, esc.negocio, "premium", periodo=con_neto, monto=Decimal(300_000))
+            await registrar_periodo_pagado(s, esc.negocio, "premium", periodo=con_neto, monto=Decimal(149_500))
             await registrar_periodo_pagado(s, esc.negocio, "premium", periodo=a_lista)
     pagos = {p.periodo: p for p in await _pagos(esc.negocio)}
-    assert int(pagos[con_neto.referencia].amount_cop) == 300_000
-    assert int(pagos[a_lista.referencia].amount_cop) == 600_000
+    assert int(pagos[con_neto.referencia].amount_cop) == 149_500
+    assert int(pagos[a_lista.referencia].amount_cop) == 299_000
 
 
 async def test_la_conciliacion_compara_el_precio_de_lista_de_un_cargo_con_descuento(vendedores, correos, alertas) -> None:
@@ -642,12 +642,12 @@ async def test_la_conciliacion_compara_el_precio_de_lista_de_un_cargo_con_descue
     for esc, descuento in ((con_descuento, True), (a_mano, False)):
         inicio = await _acercar_el_vencimiento(esc, fin=ahora + timedelta(days=4))
         await _cobrar_periodo(esc, inicio)
-        await _rebajar_el_cargo(esc, f"{inicio:%Y-%m}", 300_000, con_descuento=descuento)
+        await _rebajar_el_cargo(esc, f"{inicio:%Y-%m}", 149_500, con_descuento=descuento)
 
     _, diferencias = await conciliar_vendedor(vendedor, now=ahora)
     assert not [d for d in diferencias if d.negocio == con_descuento.slug and d.tipo == "monto_distinto"]
     [distinto] = [d for d in diferencias if d.negocio == a_mano.slug and d.tipo == "monto_distinto"]
-    assert distinto.detalle["asistente"] == 300_000
+    assert distinto.detalle["asistente"] == 149_500
 
 
 async def test_pago_por_el_panel_deja_pagado_el_cargo_del_asistente(
@@ -805,7 +805,7 @@ async def test_renovacion_genera_el_cobro_y_avisa_por_el_asistente(
     await renovar_suscripciones(ahora)
     [cobro] = [p for p in await _pagos(esc.negocio) if p.periodo == referencia]
     assert (cobro.status, cobro.provider, cobro.provider_reference) == ("pendiente", "plataforma", referencia)
-    assert cobro.period_start == inicio and int(cobro.amount_cop) == 600_000
+    assert cobro.period_start == inicio and int(cobro.amount_cop) == 299_000
     [evento] = await _eventos(esc.negocio, "platform.renewal_due")
     assert evento.payload["referencia"] == referencia
 
@@ -861,7 +861,7 @@ async def test_renovacion_por_el_panel_avisa_por_correo(vendedores, correos, ale
     [correo] = correos
     assert correo["to"] == email
     assert referencia in correo["body"] and "/plan" in correo["body"]
-    assert "$200.000" in correo["body"]
+    assert "$129.000" in correo["body"]
     assert any(a["severity"] == "push" and a["tenant_id"] == str(negocio) for a in alertas)
     [avisada] = await _auditoria(negocio, "renovacion_avisada")
     assert (avisada.output["canal"], avisada.output["correos"]) == ("panel", 1)
@@ -988,7 +988,7 @@ async def test_free_que_compra_un_plan_pago_cambia_de_plan_y_aplica_el_preset(ve
         alta = (await s.get(Tenant, esc.negocio)).settings["alta"]
     assert alta["preset"]["estado"] == "pendiente"  # ningún preset cabe en Free
 
-    premium = await _variante(esc.vendedor, "premium", 600_000)
+    premium = await _variante(esc.vendedor, "premium", 299_000)
     await _inscribir_y_pagar(esc, premium)
     [evento] = [e for e in await _eventos(esc.vendedor, "subscription.activated") if e.payload["cambio_de_plan"]]
     assert evento.payload["subscription_id"] == str(esc.subscription_id)
@@ -1066,7 +1066,7 @@ async def test_free_vencido_que_compra_un_plan_pago_sigue_con_su_negocio(vendedo
     assert (await _suscripcion_del_vendedor(esc)).estado == "vencida"
     assert await is_tenant_operational(esc.negocio) is False
 
-    basic = await _variante(esc.vendedor, "basic", 200_000)
+    basic = await _variante(esc.vendedor, "basic", 129_000)
     await _inscribir_y_pagar(esc, basic)
     [evento] = [e for e in await _eventos(esc.vendedor, "subscription.activated") if e.payload["cambio_de_plan"]]
     assert evento.payload["subscription_id"] == str(esc.subscription_id)  # la misma suscripción
@@ -1085,7 +1085,7 @@ async def test_cambio_de_plan_con_sub_cambiar_plan_cambia_el_plan_del_negocio(ve
     from core.shared.tenant import tenant_scope
 
     esc = await _negocio_aprovisionado(vendedores, plan="free", precio=0)
-    premium = await _variante(esc.vendedor, "premium", 600_000)
+    premium = await _variante(esc.vendedor, "premium", 299_000)
     async with tenant_scope(esc.vendedor):
         from pack_subscriptions.planes import obtener, snapshot
 
@@ -1106,7 +1106,7 @@ async def test_cambio_de_plan_con_sub_cambiar_plan_cambia_el_plan_del_negocio(ve
                     )
                 )
             ).scalar_one()
-        await SubscriptionsModule()._on_payment_confirmed(f"sub-{cargo.id}", "wompi", "pl-cambio", 600_000.0)
+        await SubscriptionsModule()._on_payment_confirmed(f"sub-{cargo.id}", "wompi", "pl-cambio", 299_000.0)
     eventos = [e for e in await _eventos(esc.vendedor, "subscription.activated") if e.payload.get("cambio_de_plan")]
     assert eventos and eventos[-1].payload["referencia"] == esc.referencia
     await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, cambio_de_plan=True)
@@ -1205,7 +1205,7 @@ def _evento_wompi(link_id: str, *, centavos: int, secreto: str = _SECRETO_DE_EVE
     """Evento `transaction.updated` firmado como Wompi (checksum de `signature.properties`)."""
     transaccion = {"id": f"tx-{uuid.uuid4().hex[:8]}", "status": "APPROVED", "amount_in_cents": centavos, "payment_link_id": link_id}
     propiedades = ["transaction.id", "transaction.status", "transaction.amount_in_cents"]
-    timestamp = 1_760_000_000
+    timestamp = 1_729_900_000
     valores = "".join(str(transaccion[p.split(".")[1]]) for p in propiedades)
     checksum = hashlib.sha256(f"{valores}{timestamp}{secreto}".encode()).hexdigest()
     return {
@@ -1275,7 +1275,7 @@ async def test_r05_un_pago_de_la_plataforma_sigue_aplicandose_en_su_negocio(
     get_settings.cache_clear()
     negocio, _ = await onboard_tenant(name="Negocio R05", slug=uniq("r05"))
     assert await _link_del_panel(negocio, "basic")
-    evento = _evento_wompi(pasarela.links[-1], centavos=20_000_000)
+    evento = _evento_wompi(pasarela.links[-1], centavos=12_900_000)
     r = await app_client.post("/webhooks/billing/wompi", json=evento)
     assert (r.status_code, r.json()["status"]) == (200, "ok")
     sub = await _suscripcion_de(negocio)
@@ -1292,7 +1292,7 @@ async def test_un_pago_del_panel_por_otro_monto_no_se_aplica(vendedores, correos
     vendedores()
     negocio, _ = await onboard_tenant(name="Negocio monto", slug=uniq("monto"))
     assert await _link_del_panel(negocio, "basic")
-    evento = _evento_wompi(pasarela.links[-1], centavos=20_000_100)
+    evento = _evento_wompi(pasarela.links[-1], centavos=12_900_100)
     r = await app_client.post("/webhooks/billing/wompi", json=evento)
     assert r.status_code == 200
     assert (await _suscripcion_de(negocio)).plan_id == "free"
@@ -1384,8 +1384,8 @@ async def test_recompra_despues_de_cancelar_va_a_revision(vendedores, correos, a
     esc = await _negocio_aprovisionado(vendedores)
     async with tenant_scope(esc.vendedor):
         await SubscriptionCapabilityImpl().cancel(esc.subscription_id)
-    basic = await _variante(esc.vendedor, "basic", 200_000)
-    pedido = await _pedido(esc.vendedor, basic, 200_000, esc.cliente, {"email": "otro@correo-prueba.co", "negocio": "Acme 2"})
+    basic = await _variante(esc.vendedor, "basic", 129_000)
+    pedido = await _pedido(esc.vendedor, basic, 129_000, esc.cliente, {"email": "otro@correo-prueba.co", "negocio": "Acme 2"})
     await _entregar(esc.vendedor, "subscription.activated", on_subscription_activated, referencia=pedido)
     async with tenant_scope(esc.vendedor):
         async with get_session() as s:
@@ -1409,7 +1409,7 @@ async def test_un_plan_activado_por_menos_que_su_precio_no_se_aplica(vendedores,
     from core.shared.tenant import tenant_scope
 
     esc = await _negocio_aprovisionado(vendedores, plan="free", precio=0)
-    premium = await _variante(esc.vendedor, "premium", 600_000)
+    premium = await _variante(esc.vendedor, "premium", 299_000)
     # La suscripción del cliente pasa a Premium «a mano» con un valor de período de $1.
     async with tenant_scope(esc.vendedor):
         async with get_session() as s:

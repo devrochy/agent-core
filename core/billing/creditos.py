@@ -16,8 +16,10 @@ sin contador paralelo):
 
 Acciones de IA cotizadas (HU-BILL-16, ADR-0194): `cotizar` dice cuánto cuesta antes de gastar,
 `alcanza` verifica el saldo del mes y `imagen_ya_cobrada` evita cobrar dos veces la misma foto.
+`credito_agotado` es la lectura del turno (HU-BILL-18): el mismo cálculo, sin lock ni excepción.
 
-Se excluye el playground del panel (conversaciones del canal `test`), como en `costo_llm_usd`.
+Se excluye el playground del panel (conversaciones del canal `test`): una prueba del panel no
+consume el crédito del negocio.
 Todo corre dentro de `tenant_scope` (RLS) y además filtra `tenant_id` explícito.
 """
 
@@ -272,35 +274,86 @@ async def alcanza(
     por petición concurrente (una foto). ADR-0194.
 
     Con `BILLING_BLOQUEAR_POR_CREDITOS` apagado solo mide y deja pasar."""
-    from core.billing.enforcement import QuotaExceeded, subscription_overview
-    from core.billing.periodos import ventana_mensual
-    from core.billing.plans import get_plan
+    from core.billing.enforcement import QuotaExceeded
     from core.config import get_settings
 
     _exigir_scope(tenant_id)
-    overview = await subscription_overview(tenant_id)
-    plan = get_plan(overview.plan_id) if overview.plan_id else None
-    if overview.period_start is None or plan is None or plan.monthly_credits is None:
-        return SaldoDeCreditos(usado=Decimal(0), limite=None)
-    inicio, fin = ventana_mensual(overview.period_start, overview.dia_ancla, now or datetime.now(UTC))
-
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": f"billing:creditos:{tenant_id}"}
-    )
-    usado = (await medir_creditos(session, tenant_id, desde=inicio, hasta=fin)).total
-    saldo = SaldoDeCreditos(usado=usado, limite=plan.monthly_credits)
-    if usado + Decimal(creditos) <= plan.monthly_credits:
+    saldo = await _saldo_del_mes(session, tenant_id, now=now, con_lock=True)
+    if saldo.limite is None or saldo.usado + Decimal(creditos) <= saldo.limite:
         return saldo
     if not get_settings().billing_bloquear_por_creditos:
         log.warning(
             "billing_creditos_insuficientes_sin_bloqueo",
             tenant_id=str(tenant_id),
-            usado=float(usado),
-            limite=plan.monthly_credits,
+            usado=float(saldo.usado),
+            limite=saldo.limite,
             creditos=float(creditos),
         )
         return saldo
-    raise QuotaExceeded("creditos", creditos_enteros(usado), plan.monthly_credits)
+    raise QuotaExceeded("creditos", creditos_enteros(saldo.usado), saldo.limite)
+
+
+async def credito_agotado(
+    session,  # type: ignore[no-untyped-def]
+    tenant_id: uuid.UUID,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """¿El negocio ya consumió todo el crédito del mes? Lo consulta la cabecera del turno
+    (`enforcement.turn_quota_metric`, HU-BILL-18, ADR-0208 §2-3): con el crédito agotado el turno
+    se corta con `quota_exhausted` antes de llamar al LLM.
+
+    Mismo mes, mismo límite y mismo consumo que `alcanza` (`_saldo_del_mes`), pero **sin** el lock
+    consultivo: el turno no escribe en la misma transacción, y una carrera entre dos turnos solo
+    deja pasar uno de más. No levanta `QuotaExceeded`. Sin suscripción, sin `period_start` o sin
+    crédito en el plan devuelve False. Con `BILLING_BLOQUEAR_POR_CREDITOS` apagado mide, registra
+    un warning si habría bloqueado y devuelve False. `session` debe estar dentro del
+    `tenant_scope(tenant_id)`."""
+    from core.config import get_settings
+
+    _exigir_scope(tenant_id)
+    saldo = await _saldo_del_mes(session, tenant_id, now=now, con_lock=False)
+    if saldo.limite is None or saldo.usado < saldo.limite:
+        return False
+    if not get_settings().billing_bloquear_por_creditos:
+        log.warning(
+            "billing_credito_agotado_sin_bloqueo",
+            tenant_id=str(tenant_id),
+            usado=float(saldo.usado),
+            limite=saldo.limite,
+        )
+        return False
+    return True
+
+
+async def _saldo_del_mes(
+    session,  # type: ignore[no-untyped-def]
+    tenant_id: uuid.UUID,
+    *,
+    now: datetime | None,
+    con_lock: bool,
+) -> SaldoDeCreditos:
+    """Consumido y límite del mes del ciclo, el cálculo común de `alcanza` y `credito_agotado`.
+
+    La ventana es la de `ventana_mensual` desde el ciclo de la suscripción y el límite es
+    `Plan.monthly_credits`, igual que `/admin/plan` (`plan_view.credito_del_mes`). Sin suscripción,
+    sin `period_start` o sin crédito en el plan, `limite=None` (no se limita). Con `con_lock`, toma
+    `pg_advisory_xact_lock('billing:creditos:<tenant>')` antes de medir (ver `alcanza`)."""
+    from core.billing.enforcement import subscription_overview
+    from core.billing.periodos import ventana_mensual
+    from core.billing.plans import get_plan
+
+    overview = await subscription_overview(tenant_id)
+    plan = get_plan(overview.plan_id) if overview.plan_id else None
+    if overview.period_start is None or plan is None or plan.monthly_credits is None:
+        return SaldoDeCreditos(usado=Decimal(0), limite=None)
+    inicio, fin = ventana_mensual(overview.period_start, overview.dia_ancla, now or datetime.now(UTC))
+    if con_lock:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": f"billing:creditos:{tenant_id}"}
+        )
+    usado = (await medir_creditos(session, tenant_id, desde=inicio, hasta=fin)).total
+    return SaldoDeCreditos(usado=usado, limite=plan.monthly_credits)
 
 
 async def imagen_ya_cobrada(session, tenant_id: uuid.UUID, image_key: str) -> bool:  # type: ignore[no-untyped-def]
@@ -330,6 +383,7 @@ __all__ = [
     "SaldoDeCreditos",
     "alcanza",
     "cotizar",
+    "credito_agotado",
     "creditos_enteros",
     "imagen_ya_cobrada",
     "medir_creditos",

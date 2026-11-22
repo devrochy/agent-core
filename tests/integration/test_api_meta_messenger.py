@@ -26,7 +26,7 @@ BASE = "/api/v1/admin/meta/messenger"
 CLAVE = "Clave-de-prueba-1"
 
 
-async def _new_tenant(prefix: str, *, plan: str = "basic") -> uuid.UUID:
+async def _new_tenant(prefix: str, *, plan: str = "premium") -> uuid.UUID:
     from _habilidades import onboard_tenant
 
     from core.db.session import get_session
@@ -78,10 +78,11 @@ async def _intento(app_client, headers) -> str:
 
 # ------------------------------------------------------------------ estado
 async def test_el_estado_dice_si_esta_lista_la_app_y_si_el_plan_lo_incluye(app_client, meta) -> None:
-    basic, free = await _new_tenant("api-msgr-basic"), await _new_tenant("api-msgr-free", plan="free")
+    premium, free = await _new_tenant("api-msgr-premium"), await _new_tenant("api-msgr-free", plan="free")
+    basic = await _new_tenant("api-msgr-basic", plan="basic")
     meta([])
 
-    r = await app_client.get(BASE, headers=await api_headers(app_client, basic))
+    r = await app_client.get(BASE, headers=await api_headers(app_client, premium))
     assert r.status_code == 200, r.text
     assert r.json() == {
         "meta_configured": True, "app_id": APP_ID_PLATAFORMA,
@@ -91,6 +92,9 @@ async def test_el_estado_dice_si_esta_lista_la_app_y_si_el_plan_lo_incluye(app_c
     }
 
     r = await app_client.get(BASE, headers=await api_headers(app_client, free))
+    assert r.json()["plan_includes"] is False
+    # Planes v3 (D-79): Basic ya no incluye Messenger.
+    r = await app_client.get(BASE, headers=await api_headers(app_client, basic))
     assert r.json()["plan_includes"] is False
 
 

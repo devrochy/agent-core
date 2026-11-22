@@ -35,17 +35,6 @@ def _inbound_stream() -> str:
     return INBOUND_STREAM
 
 
-def _media_metric(items: list[dict[str, Any]]) -> str | None:
-    """Métrica de cuota que consume el mensaje (ADR-0045), como en el webhook."""
-    for item in items:
-        mime = str(item.get("type") or "")
-        if mime.startswith("audio/"):
-            return "conversaciones_audio"
-        if mime.startswith("image/"):
-            return "conversaciones_ocr"
-    return None
-
-
 def _descriptor(item: dict[str, Any]) -> dict[str, Any]:
     """Descriptor serializable del media (sin los bytes)."""
     entrada: dict[str, Any] = {
@@ -85,27 +74,6 @@ async def _materializar_media(
     return descriptores
 
 
-async def _dentro_de_cuota(tenant_id: uuid.UUID, items: list[dict[str, Any]]) -> bool:
-    """Bloqueo duro de cuota de audio/OCR (ADR-0045). Si el chequeo falla, no se
-    pierde el mensaje: se deja pasar y se registra (mejor responder de más que
-    tirar el turno por una caída del servicio de facturación)."""
-    metric = _media_metric(items)
-    if metric is None:
-        return True
-    from core.billing.enforcement import check_metric
-    from core.shared.tenant import tenant_scope
-
-    try:
-        async with tenant_scope(tenant_id):
-            permitido = await check_metric(tenant_id, metric)
-    except Exception:
-        log.warning("waweb_media_quota_check_failed", tenant_id=str(tenant_id), metric=metric)
-        return True
-    if not permitido:
-        log.warning("waweb_media_quota_exceeded", tenant_id=str(tenant_id), metric=metric)
-    return permitido
-
-
 async def publish_inbound(
     *,
     tenant_id: uuid.UUID,
@@ -117,8 +85,8 @@ async def publish_inbound(
     media: list[dict[str, Any]] | None = None,
     media_context: str = "",
 ) -> bool:
-    """Encola un mensaje entrante. `False` si era duplicado, no había contenido o
-    la cuota de audio/OCR está agotada.
+    """Encola un mensaje entrante. `False` si era duplicado o no había contenido. La media
+    entra siempre: el crédito del mes la cobra (ADR-0208 §1, sin tope de audios ni imágenes).
 
     Los bytes de `media` se guardan en Redis y en el stream viaja solo el
     descriptor (`{type, redis_key, bytes}`); así una nota de voz o una foto no
@@ -130,8 +98,6 @@ async def publish_inbound(
         return False
 
     items = media or []
-    if not await _dentro_de_cuota(tenant_id, [_descriptor(item) for item in items]):
-        return False
     descriptores = await _materializar_media(tenant_id, wamid, items)
 
     fields: dict[str, Any] = {

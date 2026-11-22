@@ -102,28 +102,6 @@ async def test_sin_suscripcion_grandfathered():
     assert await is_tenant_operational(tid) is True
 
 
-async def test_turn_quota_metric_por_costo_llm():
-    """Bajar el límite de costo LLM a 0 agota la métrica de turno."""
-    from core.billing import plans as plans_module
-    from core.billing.enforcement import turn_quota_metric
-    from core.billing.plans import Plan
-
-    tid = await _onboard(_uniq("enf-turno"))
-    original = plans_module.PLANS_BY_ID["free"]
-    bumped = Plan(
-        id="free",
-        name="Free",
-        price_cop=0,
-        trial_days=30,
-        limits={**original.limits, "costo_llm_usd": 0},
-    )
-    plans_module.PLANS_BY_ID["free"] = bumped
-    try:
-        assert await turn_quota_metric(tid) == "costo_llm_usd"
-    finally:
-        plans_module.PLANS_BY_ID["free"] = original
-
-
 async def test_quota_decision_ilimitado_no_bloquea():
     from core.billing.enforcement import check_metric
     from core.billing.plans import PLANS_BY_ID
@@ -134,60 +112,11 @@ async def test_quota_decision_ilimitado_no_bloquea():
 
     unlimited = Plan(
         id="free", name="Free", price_cop=0, trial_days=30,
-        limits={**original.limits, "conversaciones": None},
+        limits={**original.limits, "clientes": None},
     )
     PLANS_BY_ID["free"] = unlimited
     try:
-        assert await check_metric(tid, "conversaciones") is True
+        assert await check_metric(tid, "clientes") is True
     finally:
         PLANS_BY_ID["free"] = original
-
-
-async def _set_packs(tenant_id, packs: list[str]) -> None:
-    """Las habilidades del negocio son las instaladas en sus agentes (HU-AOS-91): sin el chequeo de cuota, que es
-    justo lo que se mide."""
-    from _habilidades import dar_habilidades
-
-    await dar_habilidades(tenant_id, packs, chequear=False)
-
-
-def _plan_con_tope_de_habilidades(monkeypatch) -> None:
-    """`free` con el tope de habilidades de antes de ADR-0142 (`plugins: 1`), solo en el test."""
-    from dataclasses import replace
-
-    from core.billing import plans
-
-    free = plans.PLANS_BY_ID["free"]
-    monkeypatch.setitem(plans.PLANS_BY_ID, "free", replace(free, limits={**free.limits, "plugins": 1}))
-
-
-async def test_cuota_plugins_cuenta_packs_de_negocio_no_el_core(monkeypatch):
-    """Con un plan con `plugins: 1` (desde ADR-0142 ningún plan del catálogo lo define: el
-    mecanismo se prueba con un plan de prueba): el primer pack de negocio entra; el segundo se bloquea.
-
-    El gate se evalúa ANTES de instalar (`asegurar_habilidades`), así que
-    `used=0` con límite 1 permite el primero, y `used=1` bloquea el segundo.
-    Antes del fix, `enabled_packs()` sumaba el core y un tenant recién creado ya
-    veía `used=1` (2/1 si tenía un pack) → bloqueado sin poder habilitar nada.
-    """
-    from core.billing.enforcement import quota_decision
-
-    _plan_con_tope_de_habilidades(monkeypatch)
-    tid = await _onboard(_uniq("enf-pkg"))
-
-    # Sin packs de negocio: hay cupo para habilitar el primero.
-    d0 = await quota_decision(tid, "plugins")
-    assert d0.allowed is True and d0.used == 0 and d0.limit == 1
-
-    # Con 1 pack de negocio: la métrica NO suma el core (used==1, no 2), y ya no
-    # hay cupo para un segundo pack (el gate se evalúa antes de agregar).
-    await _set_packs(tid, ["pack_commerce"])
-    d1 = await quota_decision(tid, "plugins")
-    assert d1.used == 1, "el core no debe sumar a la métrica"
-    assert d1.allowed is False
-
-    # Con 2 packs: agotado igualmente.
-    await _set_packs(tid, ["pack_commerce", "pack_calendar"])
-    d2 = await quota_decision(tid, "plugins")
-    assert d2.used == 2 and d2.allowed is False
 
