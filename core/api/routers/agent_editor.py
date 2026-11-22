@@ -24,7 +24,9 @@ el editor del panel necesita y no existía:
   con el promedio real de tokens por turno del negocio (30 días); sin historial (o sin acceso a
   la sección `costs`), `null`. Siempre trae `business_model`, el modelo por defecto del negocio;
   con `?agent_id=`, `effective_model` y `effective_source` (`negocio` o `agente`) de ese agente
-  (HU-AOS-79). 404 si el agente no es del negocio.
+  (HU-AOS-79). 404 si el agente no es del negocio. **Solo el master ve modelos** (ADR-0210 §5):
+  para el gestor `items` viene vacío, `provider` y `business_model` en `""` y `byok_model`,
+  `effective_model` y `effective_source` en `null`; `min_phrases` y el consumo siguen igual.
 - `GET  /api/v1/admin/agents/{id}/publish-targets` — conexiones donde se puede instalar.
 - `POST /api/v1/admin/agents/{id}/publish` — `{connection_ids, lock_version?, notes?}`. D-35:
   sin al menos una conexión no se publica. Publica la versión, instala el agente y construye la
@@ -480,7 +482,21 @@ async def list_models(
             raise ApiError.not_found("Agente no encontrado.") from None
         efectivo = svc.modelo_efectivo(borrador.content, ctx)
     # El consumo (promedios y estimados) es de la sección Costos: sin ella, solo los precios.
-    ve_costos = actua_como_master(principal.admin) or await effective_access(principal.admin, "costs", tid) is not None
+    master = actua_como_master(principal.admin)
+    ve_costos = master or await effective_access(principal.admin, "costs", tid) is not None
+    if not master:
+        # El gestor nunca ve el modelo (ADR-0210 §5): sin nombres de modelo ni de proveedor. Quedan los campos
+        # del esquema, vacíos, y `min_phrases`, que es lo que el panel lee de aquí.
+        return LlmModelCatalog(
+            **build_page([], 0, params).model_dump(),
+            provider="",
+            byok_model=None,
+            avg_input_tokens=ctx.avg_input_tokens if ve_costos else None,
+            avg_output_tokens=ctx.avg_output_tokens if ve_costos else None,
+            sample_turns=ctx.sample_turns if ve_costos else 0,
+            min_phrases=svc.MIN_FRASES,
+            business_model="",
+        )
     items = [
         LlmModel(
             provider=m.provider,

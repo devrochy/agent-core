@@ -854,6 +854,8 @@ CEREBRO = [
         ),
         por_defecto=_MODELO_POR_DEFECTO["primary"],
         almacen="agent_defaults:model.primary",
+        # El gestor elige el nivel de IA del agente, no el modelo (ADR-0210 §5).
+        editable_por="master",
     ),
     Opcion(
         clave="model_router",
@@ -863,6 +865,8 @@ CEREBRO = [
         explicacion="Modelo que se usa en los turnos difíciles que no necesitan herramientas. Vacío, usa el principal.",
         por_defecto="",
         almacen="agent_defaults:model.router",
+        # El gestor elige el nivel de IA del agente, no el modelo (ADR-0210 §5).
+        editable_por="master",
     ),
     Opcion(
         clave="model_fallback",
@@ -872,6 +876,8 @@ CEREBRO = [
         explicacion="Se usa si el modelo principal falla. Vacío, no hay respaldo y el cliente recibe un aviso.",
         por_defecto="",
         almacen="agent_defaults:model.fallback",
+        # El gestor elige el nivel de IA del agente, no el modelo (ADR-0210 §5).
+        editable_por="master",
     ),
     Opcion(
         clave="model_temperature",

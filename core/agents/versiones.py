@@ -253,10 +253,14 @@ async def actualizar_agente(
     name: str | None = None,
     description: str | None = None,
     status: str | None = None,
+    nivel_ia: str | None = None,
 ) -> AgentRecord:
-    """Nombre, descripción y estado. `key` y `kind` no cambian (la instancia fija su rol por
+    """Nombre, descripción, estado y nivel de IA. `key` y `kind` no cambian (la instancia fija su rol por
     FK). Archivar el General o el Coordinador (vienen con el negocio: sin ellos las conexiones
-    nuevas, el backfill y los presets fallan) o un agente instanciado en una conexión → `Conflicto`."""
+    nuevas, el backfill y los presets fallan) o un agente instanciado en una conexión → `Conflicto`.
+
+    `nivel_ia` (ADR-0210 §1 y §4): solo para un AgentSpec v3; se aplica al publicar. Un nivel que el plan no
+    incluye → `niveles.NivelNoIncluido`, antes de escribir nada."""
     _exigir_scope(tenant_id)
     async with get_session() as session:
         agente = (
@@ -288,13 +292,49 @@ async def actualizar_agente(
                 raise Conflicto(
                     "El agente está en una conexión: quítalo de ella antes de archivarlo.", codigo="agent_in_use"
                 )
+        if nivel_ia is not None and nivel_ia != agente.nivel_ia:
+            await _exigir_nivel(session, tenant_id, agente, nivel_ia)
         if name is not None:
             agente.name = name
         if description is not None:
             agente.description = description
         if status is not None:
             agente.status = status
+        if nivel_ia is not None:
+            agente.nivel_ia = nivel_ia
     return agente
+
+
+async def _exigir_nivel(session: Any, tenant_id: uuid.UUID, agente: AgentRecord, nivel_ia: str) -> None:
+    """Gate del nivel de IA (ADR-0210 §4): solo un AgentSpec v3 lo usa, y solo el plan que lo incluye lo elige.
+    Bajar a Estándar siempre se puede. Sin suscripción no hay techo (grandfathered, `niveles.plan_del_negocio`)."""
+    from core.llm import niveles
+
+    if not niveles.es_nivel(nivel_ia):
+        raise Conflicto("Ese nivel de IA no existe.", codigo="nivel_ia_invalido")
+    if CONTRATO_POR_KIND[agente.kind] != "agentspec/3":
+        raise Conflicto("El nivel de IA se elige en los agentes especialistas.", codigo="nivel_ia_not_applicable")
+    if nivel_ia == niveles.ESTANDAR:
+        return
+    plan = await niveles.plan_del_negocio(tenant_id, session=session)
+    if plan.techo is not None and not niveles.plan_incluye(nivel_ia, {"nivel_ia": plan.techo}):
+        raise niveles.NivelNoIncluido(nivel_ia, plan.plan_id, plan.plan_name)
+
+
+async def _usa_llave_propia(session: Any, tenant_id: uuid.UUID) -> bool:
+    """BYOK del negocio (proveedor y llave en `app_settings`): el mismo criterio que el turno."""
+    from core.llm.niveles import usa_llave_propia
+
+    fila = (
+        await session.execute(
+            text(
+                "select llm_provider, llm_api_key_encrypted from app_settings "
+                "where tenant_id = :t and deleted_at is null limit 1"
+            ),
+            {"t": tenant_id},
+        )
+    ).first()
+    return usa_llave_propia(fila)
 
 
 async def pausar_agente(
@@ -514,7 +554,8 @@ async def publicar(
     """Congela el borrador (o `contenido`, para el backfill) en una versión inmutable.
     Devuelve `(versión, creada)`; con el mismo hash que una existente, `creada = False`.
 
-    `modelo` reemplaza `model.primary` solo en la versión (HU-AOS-79): el borrador no cambia."""
+    `modelo` reemplaza `model.primary` solo en la versión (HU-AOS-79): el borrador no cambia. Con la llave de la
+    plataforma lo ignora: el nivel de IA del agente fija `model.primary` y `model.router` (ADR-0210 §3)."""
     agente = await obtener_agente(tenant_id, agent_id)
     if agente.status != "active":
         raise Conflicto("El agente está archivado.")
@@ -528,6 +569,25 @@ async def publicar(
         flujo = borrador.flow
         horario = getattr(borrador, "schedule", None)
     contrato = CONTRATO_POR_KIND[agente.kind]
+    if contrato == "agentspec/3" and isinstance(contenido, Mapping):
+        # Nivel de IA (ADR-0210 §3): con la llave de la plataforma fija `primary` y `router` ANTES del hash, y
+        # manda sobre el `modelo` de reemplazo. Con llave propia no aplica: se conserva el modelo del negocio.
+        async with get_session() as session:
+            byok = await _usa_llave_propia(session, tenant_id)
+        if not byok:
+            from core.llm import niveles
+
+            del_nivel = niveles.modelos_de(getattr(agente, "nivel_ia", None))
+            actual = contenido.get("model")
+            contenido = {
+                **contenido,
+                "model": {
+                    **(actual if isinstance(actual, Mapping) else {}),
+                    "primary": del_nivel.primary,
+                    "router": del_nivel.router,
+                },
+            }
+            modelo = None
     if modelo and contrato == "agentspec/3" and isinstance(contenido, Mapping):
         actual = contenido.get("model")
         contenido = {**contenido, "model": {**(actual if isinstance(actual, Mapping) else {}), "primary": modelo}}
