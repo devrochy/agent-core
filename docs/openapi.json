@@ -33233,13 +33233,11 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Successful Response",
+          "410": {
+            "description": "Retirado con el AgentSpec v2: `error.code = v2_retirado` (ADR-0206, HU-AOS-91).",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeclarativeToolsOut"
-                }
+                "schema": {}
               }
             }
           },
@@ -33297,13 +33295,11 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Successful Response",
+          "410": {
+            "description": "Retirado con el AgentSpec v2: `error.code = v2_retirado` (ADR-0206, HU-AOS-91).",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeclarativeToolsOut"
-                }
+                "schema": {}
               }
             }
           },
@@ -33314,40 +33310,6 @@
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
-              }
-            }
-          }
-        },
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": [
-                  "tools"
-                ],
-                "properties": {
-                  "tools": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    "description": "Tools declarativas (ADR-0052). Headers sensibles como {\"secret\": \"<nombre>\"}."
-                  },
-                  "secrets": {
-                    "type": "object",
-                    "additionalProperties": {
-                      "type": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    "description": "Valores de secretos (solo escritura); null quita el secreto."
-                  }
-                },
-                "additionalProperties": false
               }
             }
           }
@@ -34397,7 +34359,7 @@
           "admin · configuración"
         ],
         "summary": "Save Skills Settings",
-        "description": "On/off y límites por herramienta (solo tools de packs habilitados).",
+        "description": "Retirado: las tools del negocio vivían en el AgentSpec v2 (410 `v2_retirado`).",
         "operationId": "save_skills_settings_api_v1_admin_settings_skills_put",
         "parameters": [
           {
@@ -34458,6 +34420,9 @@
               }
             }
           },
+          "410": {
+            "description": "Retirado con el AgentSpec v2: `error.code = v2_retirado` (ADR-0206, HU-AOS-91)."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -34478,7 +34443,7 @@
           "admin · configuración"
         ],
         "summary": "Get Advanced",
-        "description": "Versiones del AgentSpec, LLM, guardrails, flow de atención y evals.",
+        "description": "LLM propio, flujo de atención y corridas de evals. `versions`, `guardrails_text` y `spec` quedan vacíos: eran\ndel AgentSpec v2 (ADR-0206, HU-AOS-91) y se mantienen para no romper la APK instalada.",
         "operationId": "get_advanced_api_v1_admin_settings_advanced_get",
         "parameters": [
           {
@@ -34545,7 +34510,7 @@
           "admin · configuración"
         ],
         "summary": "Activate Spec Version Endpoint",
-        "description": "Activa (o revierte a) una versión concreta del AgentSpec (ADR-0051).",
+        "description": "Retirado con el AgentSpec v2 (410 `v2_retirado`).",
         "operationId": "activate_spec_version_endpoint_api_v1_admin_settings_advanced_versions__version_id__activate_post",
         "parameters": [
           {
@@ -34600,6 +34565,9 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "Retirado con el AgentSpec v2: `error.code = v2_retirado` (ADR-0206, HU-AOS-91)."
           },
           "422": {
             "description": "Validation Error",
@@ -34698,7 +34666,7 @@
           "admin · configuración"
         ],
         "summary": "Save Guardrails Settings",
-        "description": "Guardrails personalizados del tenant (DSL seguro, una regla por línea).",
+        "description": "Retirado: los guardrails personalizados vivían en el AgentSpec v2 (410 `v2_retirado`).",
         "operationId": "save_guardrails_settings_api_v1_admin_settings_advanced_guardrails_put",
         "parameters": [
           {
@@ -34755,6 +34723,9 @@
               }
             }
           },
+          "410": {
+            "description": "Retirado con el AgentSpec v2: `error.code = v2_retirado` (ADR-0206, HU-AOS-91)."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -34775,7 +34746,7 @@
           "admin · configuración"
         ],
         "summary": "Get Raw Spec",
-        "description": "AgentSpec activo (editor crudo de Configuración → Avanzado), con los headers sensibles\nde las tools declarativas enmascarados (HU-AOS-12). El `tenantId` mostrado es el del\nnegocio de la sesión, aunque la fila traiga otro.",
+        "description": "Retirado: el editor crudo del AgentSpec v2 (410 `v2_retirado`).",
         "operationId": "get_raw_spec_api_v1_admin_settings_advanced_spec_get",
         "parameters": [
           {
@@ -34822,6 +34793,9 @@
               }
             }
           },
+          "410": {
+            "description": "Retirado con el AgentSpec v2: `error.code = v2_retirado` (ADR-0206, HU-AOS-91)."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -34840,7 +34814,7 @@
           "admin · configuración"
         ],
         "summary": "Save Raw Spec",
-        "description": "Valida el JSON contra el contrato del AgentSpec y guarda si cambió.\n\n`save_spec_if_changed` solo crea versión cuando el contenido difiere, así que\nguardar el mismo spec es un no-op (no ensucia el historial). El `tenantId` es\nsiempre el del negocio de la sesión: el del cuerpo se ignora.",
+        "description": "Retirado: el editor crudo del AgentSpec v2 (410 `v2_retirado`).",
         "operationId": "save_raw_spec_api_v1_admin_settings_advanced_spec_put",
         "parameters": [
           {
@@ -34896,6 +34870,9 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "Retirado con el AgentSpec v2: `error.code = v2_retirado` (ADR-0206, HU-AOS-91)."
           },
           "422": {
             "description": "Validation Error",
@@ -55370,27 +55347,6 @@
         ],
         "title": "ConexionTwilioOut"
       },
-      "ConfiguredSecret": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "domains": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Domains"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "domains"
-        ],
-        "title": "ConfiguredSecret"
-      },
       "ConfirmarPagoBody": {
         "properties": {
           "referencia": {
@@ -58611,39 +58567,6 @@
           "retirados"
         ],
         "title": "DatosRetirados"
-      },
-      "DeclarativeToolsOut": {
-        "properties": {
-          "tools": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Tools"
-          },
-          "secrets": {
-            "items": {
-              "$ref": "#/components/schemas/ConfiguredSecret"
-            },
-            "type": "array",
-            "title": "Secrets"
-          },
-          "literals_to_migrate": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Literals To Migrate"
-          }
-        },
-        "type": "object",
-        "required": [
-          "tools",
-          "secrets",
-          "literals_to_migrate"
-        ],
-        "title": "DeclarativeToolsOut"
       },
       "Definicion": {
         "properties": {

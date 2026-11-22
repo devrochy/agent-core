@@ -7,7 +7,7 @@
 - Idempotente, audita `opciones_directas_bandera` con el actor y no pisa el resto de `tenants.settings`.
 - Por negocio: encender A no enciende B.
 - Con la bandera encendida la API de plantillas deja de dar 404 `opciones_directas_no_habilitadas`; apagada, vuelve.
-- El catálogo de acciones ofrece las tools marcadas aptas solo con binding explícito (PUT /settings/skills) y pack activo.
+- El catálogo de acciones ofrece las tools marcadas aptas solo con binding explícito (`spec.tools` del v2 mientras exista) y pack activo.
 - Los caminos de leer-modificar-escribir de `tenants.settings` no reponen un `true` que el master apagó.
 
 Requiere el stack local (Postgres + Redis) y `AGENT_CORE_INTEGRATION=1`.
@@ -228,9 +228,26 @@ async def test_el_catalogo_ofrece_las_tools_marcadas_solo_con_binding_y_pack(app
     # Sin binding explícito no se ofrece nada (aunque la bandera esté encendida y los packs activos).
     assert (await app_client.get(catalogo, headers=ha)).json() == {"acciones": []}
 
-    # El binding sale de Configuración → Habilidades (PUT /admin/settings/skills).
+    # El binding del negocio: `PUT /admin/settings/skills` se retiró con el AgentSpec v2 (HU-AOS-91), así que el test
+    # lo escribe en el spec directo (el catálogo por agente usa los bindings de su borrador).
     def binding(nombre: str, plugin: str, habilitada: bool = True) -> dict[str, Any]:
         return {"name": nombre, "plugin_id": plugin, "enabled": habilitada}
+
+    async def _bindings(tid: uuid.UUID, tools: list[dict[str, Any]]) -> None:
+        from core.agents.instalaciones_agente import packs_del_negocio
+        from core.agents.spec import load_active_spec, save_spec_if_changed
+        from core.mcp.host import mcp_host
+        from core.shared.tenant import tenant_scope
+
+        async with tenant_scope(tid):
+            habilitados = await packs_del_negocio(tid)
+            editables = {x.name for x in mcp_host.get_tools() if x.plugin_id in habilitados}
+            spec = await load_active_spec()
+            data = spec.model_dump(mode="json")
+            data["tools"] = [
+                {"tool": x["name"], "enabled": x["enabled"], "scopes": []} for x in tools if x["name"] in editables
+            ]
+            await save_spec_if_changed(spec, data, tid)
 
     cuerpo = {
         "tools": [
@@ -240,7 +257,7 @@ async def test_el_catalogo_ofrece_las_tools_marcadas_solo_con_binding_y_pack(app
             binding("get_customer_profile", "core"),  # ídem
         ]
     }
-    assert (await app_client.put("/api/v1/admin/settings/skills", headers=ha, json=cuerpo)).status_code == 200
+    await _bindings(a, cuerpo["tools"])
     por_nombre = {x["tool"]: x for x in (await app_client.get(catalogo, headers=ha)).json()["acciones"]}
     assert set(por_nombre) == {"list_client_appointments"}
     citas = por_nombre["list_client_appointments"]
@@ -260,11 +277,11 @@ async def test_el_catalogo_ofrece_las_tools_marcadas_solo_con_binding_y_pack(app
 
     # Deshabilitar el binding la saca del catálogo.
     cuerpo["tools"][0] = binding("list_client_appointments", "pack_calendar", habilitada=False)
-    await app_client.put("/api/v1/admin/settings/skills", headers=ha, json=cuerpo)
+    await _bindings(a, cuerpo["tools"])
     assert (await app_client.get(catalogo, headers=ha)).json() == {"acciones": []}
 
     # B no tiene el pack de agenda: la tool no es editable (el binding se ignora) y no se ofrece.
-    await app_client.put("/api/v1/admin/settings/skills", headers=hb, json={"tools": [binding("list_client_appointments", "pack_calendar")]})
+    await _bindings(b, [binding("list_client_appointments", "pack_calendar")])
     assert (await app_client.get(catalogo, headers=hb)).json() == {"acciones": []}
 
     # Apagada la bandera, ni el catálogo responde.

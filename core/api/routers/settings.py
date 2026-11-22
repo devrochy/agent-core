@@ -27,19 +27,12 @@ from core.admin.envios_segmento import PALABRAS_DE_BAJA_POR_DEFECTO, limpiar_pal
 from core.admin.roles import actua_como_master
 from core.admin.settings_service import (
     read_memory,
-    read_skills,
     save_memory,
-    save_skills,
     validate_business_ranges,
 )
 from core.agents import defaults_negocio
 from core.agents.defaults_negocio import DefaultsDelNegocio
 from core.agents.instalaciones_agente import packs_del_negocio
-from core.agents.spec import (
-    con_tenant_de_la_fila,
-    load_active_spec,
-    save_spec_if_changed,
-)
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.config import DEBOUNCE_DELAY_MS, get_settings
@@ -438,14 +431,14 @@ def _defaults_invalidos(exc: ValueError) -> ApiError:
 async def get_settings_api(
     principal: Annotated[Principal, Depends(require("settings"))],
 ) -> SettingsResponse:
-    spec = await load_active_spec()
     app_settings = await _load_app_settings(principal.tenant_id)
     defaults = _defaults_de(app_settings)
     return SettingsResponse(
         identity=_identity_out(app_settings, _available_guardrails(await packs_del_negocio())),
         brain=_brain_out(defaults),
         memory=MemorySettings(**read_memory(defaults)),
-        skills=[SkillBinding(**item) for item in read_skills(spec, await packs_del_negocio())],
+        # Las tools del negocio eran del AgentSpec v2 (ADR-0206, HU-AOS-91): vacío, para no romper la APK instalada.
+        skills=[],
     )
 
 
@@ -1049,18 +1042,24 @@ async def save_memory_settings(
     return MemorySettings(**read_memory(defaults or defaults_negocio.POR_DEFECTO))
 
 
-@router.put("/skills", response_model=list[SkillBinding])
+_V2_RETIRADO = (
+    "Esta configuración era del AgentSpec v2, que el turno ya no lee (ADR-0206, HU-AOS-91). Los guardrails y las "
+    "tools de cada agente se configuran en el agente."
+)
+_RESPUESTA_RETIRADA = {410: {"description": "Retirado con el AgentSpec v2: `error.code = v2_retirado` (ADR-0206, HU-AOS-91)."}}
+
+
+def _retirado() -> ApiError:
+    return ApiError(410, "v2_retirado", _V2_RETIRADO)
+
+
+@router.put("/skills", response_model=list[SkillBinding], responses=_RESPUESTA_RETIRADA)
 async def save_skills_settings(
     payload: SkillsUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> list[SkillBinding]:
-    """On/off y límites por herramienta (solo tools de packs habilitados)."""
-    await save_skills(
-        principal.tenant_id,
-        tools=[tool.model_dump() for tool in payload.tools],
-    )
-    spec = await load_active_spec()
-    return [SkillBinding(**item) for item in read_skills(spec, await packs_del_negocio())]
+    """Retirado: las tools del negocio vivían en el AgentSpec v2 (410 `v2_retirado`)."""
+    raise _retirado()
 
 
 # ------------------------------------------------------------------ avanzado
@@ -1135,45 +1134,26 @@ class AdvancedResponse(BaseModel):
 async def get_advanced(
     principal: Annotated[Principal, Depends(require("settings"))],
 ) -> AdvancedResponse:
-    """Versiones del AgentSpec, LLM, guardrails, flow de atención y evals."""
-    from core.admin.advanced_service import (
-        list_spec_versions,
-        read_custom_guardrails,
-        read_flow,
-        read_llm,
-        recent_eval_runs,
-    )
-    from core.agents.declarativas import spec_para_mostrar
+    """LLM propio, flujo de atención y corridas de evals. `versions`, `guardrails_text` y `spec` quedan vacíos: eran
+    del AgentSpec v2 (ADR-0206, HU-AOS-91) y se mantienen para no romper la APK instalada."""
+    from core.admin.advanced_service import read_flow, read_llm, recent_eval_runs
 
-    spec = await load_active_spec()
     return AdvancedResponse(
-        # Los literales sensibles de tools declarativas viejas nunca salen (HU-AOS-12).
-        spec=spec_para_mostrar(spec.model_dump(mode="json")),
-        versions=[SpecVersion(**v) for v in await list_spec_versions(principal.tenant_id)],
+        versions=[],
         llm=LlmSettings(**await read_llm(principal.tenant_id)),
-        guardrails_text=read_custom_guardrails(spec),
-        flow=FlowResponse(**await read_flow(spec)),
+        guardrails_text="",
+        flow=FlowResponse(**await read_flow()),
         eval_runs=[EvalRunItem(**r) for r in await recent_eval_runs(principal.tenant_id)],
     )
 
 
-@router.post("/advanced/versions/{version_id}/activate", response_model=SpecVersion)
+@router.post("/advanced/versions/{version_id}/activate", response_model=SpecVersion, responses=_RESPUESTA_RETIRADA)
 async def activate_spec_version_endpoint(
     version_id: str,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> SpecVersion:
-    """Activa (o revierte a) una versión concreta del AgentSpec (ADR-0051)."""
-    from core.admin.advanced_service import activate_version, list_spec_versions
-
-    _version, error = await activate_version(principal.tenant_id, version_id)
-    if error is not None:
-        raise ApiError.bad_request(error, "activate_failed")
-
-    versions = await list_spec_versions(principal.tenant_id)
-    active = next((v for v in versions if v["is_active"]), None)
-    if active is None:
-        raise ApiError(502, "activate_failed", "No quedó una versión activa.")
-    return SpecVersion(**active)
+    """Retirado con el AgentSpec v2 (410 `v2_retirado`)."""
+    raise _retirado()
 
 
 @router.put("/advanced/llm", response_model=LlmSettings)
@@ -1193,98 +1173,34 @@ async def save_llm_settings(
     return LlmSettings(**await read_llm(principal.tenant_id))
 
 
-@router.put("/advanced/guardrails", response_model=GuardrailsSettings)
+@router.put("/advanced/guardrails", response_model=GuardrailsSettings, responses=_RESPUESTA_RETIRADA)
 async def save_guardrails_settings(
     payload: GuardrailsUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> GuardrailsSettings:
-    """Guardrails personalizados del tenant (DSL seguro, una regla por línea)."""
-    from core.admin.advanced_service import (
-        read_custom_guardrails,
-        save_custom_guardrails_report,
-    )
-
-    error, ignoradas = await save_custom_guardrails_report(
-        principal.tenant_id, payload.guardrails_text
-    )
-    if error is not None:
-        raise ApiError.bad_request(error, "invalid_guardrails")
-    spec = await load_active_spec()
-    return GuardrailsSettings(
-        guardrails_text=read_custom_guardrails(spec), ignored=ignoradas
-    )
+    """Retirado: los guardrails personalizados vivían en el AgentSpec v2 (410 `v2_retirado`)."""
+    raise _retirado()
 
 
 class SpecPayload(BaseModel):
     spec: dict[str, Any]
 
 
-@router.get("/advanced/spec", response_model=SpecPayload)
+@router.get("/advanced/spec", response_model=SpecPayload, responses=_RESPUESTA_RETIRADA)
 async def get_raw_spec(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> SpecPayload:
-    """AgentSpec activo (editor crudo de Configuración → Avanzado), con los headers sensibles
-    de las tools declarativas enmascarados (HU-AOS-12). El `tenantId` mostrado es el del
-    negocio de la sesión, aunque la fila traiga otro."""
-    from core.agents.declarativas import spec_para_mostrar
-
-    spec = await load_active_spec()
-    if principal.tenant_id is not None:
-        spec = con_tenant_de_la_fila(spec, principal.tenant_id)
-    return SpecPayload(spec=spec_para_mostrar(spec.model_dump(mode="json")))
+    """Retirado: el editor crudo del AgentSpec v2 (410 `v2_retirado`)."""
+    raise _retirado()
 
 
-@router.put("/advanced/spec", response_model=SpecPayload)
+@router.put("/advanced/spec", response_model=SpecPayload, responses=_RESPUESTA_RETIRADA)
 async def save_raw_spec(
     payload: SpecPayload,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> SpecPayload:
-    """Valida el JSON contra el contrato del AgentSpec y guarda si cambió.
-
-    `save_spec_if_changed` solo crea versión cuando el contenido difiere, así que
-    guardar el mismo spec es un no-op (no ensucia el historial). El `tenantId` es
-    siempre el del negocio de la sesión: el del cuerpo se ignora.
-    """
-    from agentcore_contracts import AgentSpec
-    from pydantic import ValidationError
-
-    from core.agents.declarativas import (
-        ErroresDeclarativas,
-        spec_para_mostrar,
-        tools_del_editor_crudo,
-    )
-    from core.agents.secretos import SecretoInvalido
-
-    if principal.tenant_id is None:
-        raise ApiError(400, "sin_negocio", "Selecciona un negocio (X-Tenant-Id).")
-    try:
-        nuevo = AgentSpec.model_validate(payload.spec)
-    except ValidationError as exc:
-        raise ApiError.bad_request(f"Spec inválido: {str(exc)[:240]}", "invalid_spec") from exc
-    nuevo = con_tenant_de_la_fila(nuevo, principal.tenant_id)
-    spec = await load_active_spec()
-    data = nuevo.model_dump(mode="json")
-    # Las tools declarativas pasan por el mismo validador que su editor (sin literales
-    # sensibles, secretos atados a dominios): el editor crudo no es una segunda puerta.
-    ext = dict(data.get("extensions") or {})
-    try:
-        tools = await tools_del_editor_crudo(
-            principal.tenant_id, ext.get("tools"), (spec.extensions or {}).get("tools"), actor=principal.admin.id
-        )
-    except ErroresDeclarativas as exc:
-        raise ApiError(
-            422, "invalid_declarative_tools", "Las tools declarativas no son válidas.",
-            fields={f"extensions.{k}": v for k, v in exc.errores.items()},
-        ) from None
-    except SecretoInvalido as exc:
-        raise ApiError(422, "invalid_secret", str(exc)) from None
-    if tools is None:
-        ext.pop("tools", None)
-    else:
-        ext["tools"] = tools
-    data["extensions"] = ext
-    await save_spec_if_changed(spec, data, principal.tenant_id)
-    return SpecPayload(spec=spec_para_mostrar(data))
+    """Retirado: el editor crudo del AgentSpec v2 (410 `v2_retirado`)."""
+    raise _retirado()
 
 
 # ---------------------------------------------------------------- plantillas por evento

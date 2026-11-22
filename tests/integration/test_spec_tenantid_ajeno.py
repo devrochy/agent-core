@@ -91,35 +91,6 @@ async def _prompt(tenant_id) -> str:
     return "\n".join(blocks)
 
 
-async def test_editor_crudo_ignora_tenantid_ajeno(app_client) -> None:
-    a, _ = await _negocio("spec-a")
-    b, slug_b = await _negocio("spec-b")
-    carpeta_b = _override_de(slug_b)
-    try:
-        cookie = await _cookie(app_client, a)
-        r = await app_client.get("/api/v1/admin/settings/advanced/spec", headers={"Cookie": cookie})
-        assert r.status_code == 200, r.text
-        spec = r.json()["spec"]
-        assert any(p["name"] == "tono" for p in spec["playbooks"])
-        spec["tenantId"] = str(b)
-        spec["persona"]["maxLength"] = 321  # cambio real: fuerza versión nueva
-
-        r2 = await app_client.put(
-            "/api/v1/admin/settings/advanced/spec", headers={"Cookie": cookie}, json={"spec": spec}
-        )
-        assert r2.status_code == 200, r2.text
-        assert r2.json()["spec"]["tenantId"] == str(a)
-
-        fila = await _fila_activa(a)
-        assert fila["tenantId"] == str(a)
-        assert fila["persona"]["maxLength"] == 321
-        assert SECRETO not in await _prompt(a)
-        # Control: el dueño del override sí lo ve.
-        assert SECRETO in await _prompt(b)
-    finally:
-        shutil.rmtree(carpeta_b, ignore_errors=True)
-
-
 async def test_version_guardada_con_tenantid_ajeno_no_carga_lo_de_otro_negocio() -> None:
     """Filas escritas antes del arreglo (o un rollback a ellas) no cargan lo de otro negocio.
 
