@@ -30,7 +30,6 @@
       "monthly_credits": 1500,
       "name": "Free",
       "price_cop": 0,
-      "price_cop_anual": null,
       "trial_days": 30
     },
     {
@@ -63,7 +62,6 @@
       "monthly_credits": 12000,
       "name": "Basic",
       "price_cop": 129000,
-      "price_cop_anual": 1290000,
       "trial_days": 0
     },
     {
@@ -98,7 +96,6 @@
       "monthly_credits": 40000,
       "name": "Premium",
       "price_cop": 299000,
-      "price_cop_anual": 2990000,
       "trial_days": 0
     },
     {
@@ -133,7 +130,6 @@
       "monthly_credits": 120000,
       "name": "Empresarial",
       "price_cop": 799000,
-      "price_cop_anual": 7990000,
       "trial_days": 0
     }
   ],

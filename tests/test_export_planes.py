@@ -1,7 +1,7 @@
 """HU-BILL-28 · export versionado del catálogo (`scripts/export_planes.py` → `docs/planes.json`). Sin base de datos.
 
 - el JSON commiteado coincide con lo que genera el script (sin deriva respecto a `plans.py`);
-- el anual es 10 meses (2 gratis, D-79) y Free no tiene anual;
+- los precios v3 son mensuales: no hay cobro anual (decisión del dueño, 2026-11-22);
 - `None` en topes y features sale como `null`, y no se publica «≈ conversaciones».
 """
 
@@ -30,15 +30,16 @@ def test_planes_json_al_dia_con_el_catalogo():
     )
 
 
-def test_precios_v3_y_anual_de_diez_meses():
+def test_precios_v3_mensuales_sin_anual():
     planes = {p["id"]: p for p in json.loads(_script().render())["planes"]}
     assert list(planes) == ["free", "basic", "premium", "empresarial"]
-    assert {k: (p["price_cop"], p["price_cop_anual"]) for k, p in planes.items()} == {
-        "free": (0, None),
-        "basic": (129_000, 1_290_000),
-        "premium": (299_000, 2_990_000),
-        "empresarial": (799_000, 7_990_000),
+    assert {k: p["price_cop"] for k, p in planes.items()} == {
+        "free": 0,
+        "basic": 129_000,
+        "premium": 299_000,
+        "empresarial": 799_000,
     }
+    assert all("price_cop_anual" not in p for p in planes.values())
     assert planes["free"]["trial_days"] == 30
     assert all(p["trial_days"] == 0 for k, p in planes.items() if k != "free")
 

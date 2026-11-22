@@ -27,8 +27,6 @@ sys.path.insert(0, str(ROOT))
 SALIDA = ROOT / "docs" / "planes.json"
 VERSION = 3
 
-# El código no define precio anual: D-79 fija el anual en 10 meses (2 meses gratis).
-MESES_COBRADOS_AL_ANO = 10
 
 
 def _plan(plan: Any) -> dict[str, Any]:
@@ -36,7 +34,6 @@ def _plan(plan: Any) -> dict[str, Any]:
         "id": plan.id,
         "name": plan.name,
         "price_cop": plan.price_cop,
-        "price_cop_anual": plan.price_cop * MESES_COBRADOS_AL_ANO if plan.price_cop > 0 else None,
         "monthly_credits": plan.monthly_credits,
         "trial_days": plan.trial_days,
         "currency": plan.currency,
