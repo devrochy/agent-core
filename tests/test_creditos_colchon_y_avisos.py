@@ -284,11 +284,11 @@ async def test_sin_redis_responde_igual(turno, monkeypatch) -> None:
 
 
 async def test_colchon_agotado_escala_con_creditos_agotados_sin_llm(turno) -> None:
-    from core.kernel.ingress import CREDITOS_AGOTADOS_REPLY, RESUMEN_CREDITOS_AGOTADOS
+    from core.kernel.ingress import ESCALATION_REPLY, RESUMEN_CREDITOS_AGOTADOS
 
     turno["decision"] = _decision("agotado", abierta=True, episodio=datetime.now(UTC), usado=12_600)
     bloqueo = await turno["correr"]()
-    assert (bloqueo.motivo, bloqueo.texto, bloqueo.escalado) == ("quota", CREDITOS_AGOTADOS_REPLY, True)
+    assert (bloqueo.motivo, bloqueo.texto, bloqueo.escalado) == ("quota", ESCALATION_REPLY, True)
     # La decisión antes que los efectos; luego la escalación y el status del turno.
     assert turno["vistos"] == [
         ("bloquear", "quota", "escalated"),
@@ -447,11 +447,13 @@ def test_motivo_creditos_agotados() -> None:
     assert etiqueta("creditos_agotados") == "Se agotó el crédito del plan"
 
 
-async def test_el_texto_de_creditos_agotados_vive_en_el_playbook() -> None:
+async def test_colchon_agotado_usa_el_texto_de_escalacion_del_playbook() -> None:
+    """Sin clave propia en `respuestas.md`: el playbook entra completo en el prompt del sistema."""
     from test_core_tools import make_spec
 
     from core.agents.responses import load_response
 
     spec = make_spec([{"name": "identidad", "description": "I"}, {"name": "respuestas", "description": "R"}])
-    texto = await load_response(spec, "creditos_agotados")
+    assert await load_response(spec, "creditos_agotados") is None
+    texto = await load_response(spec, "escalation")
     assert texto and "persona" in texto

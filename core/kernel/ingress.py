@@ -46,12 +46,6 @@ QUOTA_EXHAUSTED_REPLY = (
     "Por ahora no puedo seguir atendiendo esta conversación. "
     "Un asesor humano puede continuar la atención."
 )
-# Se agotó también el colchón de una conversación abierta y pasa a una persona (ADR-0208 §6). El texto
-# real vive en core/playbooks/respuestas.md (`## creditos_agotados`); esto es solo el fallback.
-CREDITOS_AGOTADOS_REPLY = (
-    "En este momento no puedo seguir atendiendo esta conversación. "
-    "Ya le avisé a una persona de nuestro equipo para que continúe contigo por este mismo chat."
-)
 # Resumen fijo de la escalación por créditos: sin contenido del cliente.
 RESUMEN_CREDITOS_AGOTADOS = "El negocio agotó el crédito del ciclo y la reserva de las conversaciones abiertas."
 # `quota_exhausted` se responde una vez por episodio (ADR-0208 §3). La llave lleva el inicio del episodio,
@@ -139,7 +133,10 @@ async def _sin_credito(conversation: Any, spec: Any, decision: Any, tenant_id: A
         await bloquear(conversation, "quota", status="escalated")
         await escalate(conversation.id, reason="creditos_agotados", summary=RESUMEN_CREDITOS_AGOTADOS)
         marcar_escalado()
-        texto = await load_response(spec, "creditos_agotados") or CREDITOS_AGOTADOS_REPLY
+        # Se agotó también el colchón y pasa a una persona (ADR-0208 §6): el mismo texto de una escalación
+        # (`## escalation` de core/playbooks/respuestas.md). Una clave nueva en ese playbook cambiaría el
+        # prompt del sistema de todos los agentes, porque el playbook entra completo en él.
+        texto = await load_response(spec, "escalation") or ESCALATION_REPLY
         return Bloqueo("quota", texto, escalado=True)
 
     llave = _llave_sin_credito(tenant_id, conversation.id, decision.episodio)

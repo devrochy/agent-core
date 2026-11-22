@@ -6,8 +6,6 @@ description: Mensajes de cierre y avisos del asistente
 Tu presupuesto de esta conversación se agotó. Un asesor humano puede continuar la atención.
 ## quota_exhausted
 Por ahora no puedo seguir atendiendo esta conversación. Un asesor humano puede continuar la atención.
-## creditos_agotados
-En este momento no puedo seguir atendiendo esta conversación. Ya le avisé a una persona de nuestro equipo para que continúe contigo por este mismo chat.
 ## tool_unavailable
 La herramienta no está disponible en este momento. Discúlpate y ofrece escalar a un asesor humano si es necesario.
 ## fallback
