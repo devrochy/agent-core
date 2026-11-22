@@ -14,8 +14,8 @@ import uuid
 from decimal import Decimal
 
 import pytest
-from agentcore_contracts import AgentSpec
 
+from core.agents.turno import AgenteDelTurno, agente_desde_defaults
 from core.llm.prompt_builder import PromptContext, build_system_blocks
 from core.mcp.host import MCPHost
 from core.mcp.types import Referencia
@@ -26,18 +26,16 @@ from core.shared.exceptions import PluginError
 QUOTE = uuid.UUID("7b1c0e2a-0000-4000-8000-000000000001")
 
 
-def make_spec() -> AgentSpec:
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={"role": "asistente", "tone": "cercano", "warmth": 3, "emojis": "sparse", "maxLength": 500, "forbiddenPhrases": []},
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30},
-        playbooks=[],
-        tools=[],
-        policies={"maxToolCallsPerTurn": 10},
-        packs=[],
+def make_spec() -> AgenteDelTurno:
+    return agente_desde_defaults(
+        {
+            "persona": {"role": "asistente", "tone": "cercano", "warmth": 3, "emojis": "sparse", "maxLength": 500, "forbiddenPhrases": []},
+            "model": {"primary": "deepseek-flash", "temperature": 0.3},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": [],
+            "tools": [],
+            "policies": {"maxToolCallsPerTurn": 10},
+        }
     )
 
 

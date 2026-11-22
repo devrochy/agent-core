@@ -168,7 +168,7 @@ CATALOGO: dict[str, Any] = {
 }
 
 def test_contrato_3_2_0_y_linter_de_consultas() -> None:
-    assert __version__ == "3.2.0"
+    assert __version__ == "4.0.0"
     base = {"model": {"primary": "deepseek-flash"}, "tools": [{"tool": "estado_demo"}]}
     bien = AgentSpecV3.model_validate(
         {**base, "exposes": {"consultas": [{"id": "subs.estado", "action": "estado_demo", "outputSchema": {"type": "object"}}]}}

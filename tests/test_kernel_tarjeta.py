@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from agentcore_contracts import AgentSpec
 from agentcore_contracts.procedure import Procedure
 
 from core.agents.playbooks import (
@@ -16,6 +15,7 @@ from core.agents.playbooks import (
     load_core_playbook,
     playbook_roots,
 )
+from core.agents.turno import AgenteDelTurno, agente_desde_defaults
 from core.kernel.state import Proyeccion
 from core.kernel.tarjeta import (
     CLAVES,
@@ -196,19 +196,17 @@ def test_tope_quita_tareas_enteras_empezando_por_las_en_pausa() -> None:
 # ---------------------------------------------------------------- lugar en el prompt (ADR-0091)
 
 
-def _spec() -> AgentSpec:
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={"role": "asistente", "tone": "cercano", "warmth": 3, "emojis": "sparse", "maxLength": 500,
-                 "forbiddenPhrases": []},
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30},
-        playbooks=[{"name": "identidad", "description": "Identidad del asistente"}],
-        tools=[],
-        policies={"maxToolCallsPerTurn": 10},
-        packs=[],
+def _spec() -> AgenteDelTurno:
+    return agente_desde_defaults(
+        {
+            "persona": {"role": "asistente", "tone": "cercano", "warmth": 3, "emojis": "sparse", "maxLength": 500,
+                         "forbiddenPhrases": []},
+            "model": {"primary": "deepseek-flash", "temperature": 0.3},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": [{"name": "identidad", "description": "Identidad del asistente"}],
+            "tools": [],
+            "policies": {"maxToolCallsPerTurn": 10},
+        }
     )
 
 

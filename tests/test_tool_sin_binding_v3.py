@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import pytest_asyncio
-from agentcore_contracts import AgentSpec
-from agentcore_contracts.contracts import ToolBinding
 
 import core.orchestrator.loop as loop_mod
+from core.agents.turno import AgenteDelTurno, agente_desde_defaults
 from core.mcp.types import MCPTool
 from core.orchestrator.loop import _execute_tool_safely, _solo_las_concedidas, _tool_denial
 from core.shared import release_vigente
@@ -27,28 +26,29 @@ PROCEDIMIENTO = SimpleNamespace(
 )
 
 
-def make_spec(playbooks: list[dict[str, str]]) -> AgentSpec:
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={
-            "role": "asistente",
-            "tone": "cercano",
-            "warmth": 3,
-            "emojis": "sparse",
-            "maxLength": 500,
-            "forbiddenPhrases": [],
-        },
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30},
-        playbooks=playbooks,
-        tools=[],
-        policies={
-            "maxToolCallsPerTurn": 10,
-        },
-        packs=[],
+def make_spec(playbooks: list[dict[str, str]], *, tools: Sequence[dict[str, Any]] = ()) -> AgenteDelTurno:
+    """El agente del turno con esos bindings (frozen: para cambiarlos se arma de nuevo)."""
+    return agente_desde_defaults(
+        {
+            "persona": {
+                "role": "asistente",
+                "tone": "cercano",
+                "warmth": 3,
+                "emojis": "sparse",
+                "maxLength": 500,
+                "forbiddenPhrases": [],
+            },
+            "model": {"primary": "deepseek-flash", "temperature": 0.3},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": playbooks,
+            "tools": list(tools),
+            "policies": {"maxToolCallsPerTurn": 10},
+        }
     )
+
+
+def _binding(tool: str, *, enabled: bool) -> dict[str, Any]:
+    return {"tool": tool, "enabled": enabled, "scopes": []}
 
 
 def _agente(procedimientos: tuple[str, ...] = ()) -> AgenteCongelado:
@@ -126,11 +126,10 @@ async def test_sin_binding_en_v3_se_niega_y_deja_evento(eventos: list[dict[str, 
 @pytest.mark.usefixtures("registradas", "turno")
 async def test_con_binding_corre_y_el_deshabilitado_sigue_negando() -> None:
     release_vigente.fijar(_release())
-    spec = make_spec([])
-    spec.tools = [ToolBinding(tool="send_email", enabled=True, scopes=[])]
+    spec = make_spec([], tools=[_binding("send_email", enabled=True)])
     assert await _tool_denial(spec, "send_email") is None
-    spec.tools = [ToolBinding(tool="send_email", enabled=False, scopes=[])]
-    assert "deshabilitada" in await _tool_denial(spec, "send_email")
+    spec = make_spec([], tools=[_binding("send_email", enabled=False)])
+    assert "deshabilitada" in (await _tool_denial(spec, "send_email") or "")
 
 
 @pytest.mark.usefixtures("registradas", "turno")
@@ -161,8 +160,8 @@ async def test_declarar_el_procedimiento_concede_sus_acciones(accion: str) -> No
     assert await _tool_denial(spec, accion) is None
     # La consulta entre agentes exige binding del destino.
     assert await _tool_denial(spec, accion, por_procedimiento=False) is not None
-    spec.tools = [ToolBinding(tool=accion, enabled=False, scopes=[])]
-    assert "deshabilitada" in await _tool_denial(spec, accion)
+    spec = make_spec([], tools=[_binding(accion, enabled=False)])
+    assert "deshabilitada" in (await _tool_denial(spec, accion) or "")
 
 
 @pytest.mark.usefixtures("registradas", "turno")
@@ -172,10 +171,9 @@ async def test_release_1_no_concede_por_procedimiento() -> None:
 
 
 @pytest.mark.usefixtures("registradas", "turno")
-async def test_v3_sin_release_niega_aunque_el_spec_v2_tenga_binding(eventos: list[dict[str, Any]]) -> None:
+async def test_v3_sin_release_niega_aunque_el_agente_tenga_binding(eventos: list[dict[str, Any]]) -> None:
     release_vigente.marcar_v3_sin_release(T)
-    spec = make_spec([])
-    spec.tools = [ToolBinding(tool="send_email", enabled=True, scopes=[])]
+    spec = make_spec([], tools=[_binding("send_email", enabled=True)])
     assert await _tool_denial(spec, "send_email") is not None
     assert any(e["event"] == "tool_sin_binding" for e in eventos)
 
@@ -183,8 +181,7 @@ async def test_v3_sin_release_niega_aunque_el_spec_v2_tenga_binding(eventos: lis
 @pytest.mark.usefixtures("registradas", "turno")
 async def test_release_sin_foco_niega() -> None:
     release_vigente.fijar(_release(foco=False))
-    spec = make_spec([])
-    spec.tools = [ToolBinding(tool="send_email", enabled=True, scopes=[])]
+    spec = make_spec([], tools=[_binding("send_email", enabled=True)])
     assert await _tool_denial(spec, "send_email") is not None
 
 
@@ -207,11 +204,7 @@ async def test_la_marca_de_otro_negocio_niega_en_vez_de_abrir() -> None:
 @pytest.mark.usefixtures("registradas", "turno")
 async def test_no_se_ofrece_lo_que_se_negaria() -> None:
     release_vigente.fijar(_release(por_agente={INSTANCIA: {"p": PROCEDIMIENTO}}))
-    spec = make_spec([])
-    spec.tools = [
-        ToolBinding(tool="send_email", enabled=True, scopes=[]),
-        ToolBinding(tool="cobrar", enabled=False, scopes=[]),
-    ]
+    spec = make_spec([], tools=[_binding("send_email", enabled=True), _binding("cobrar", enabled=False)])
     ofrecidas = [_tool("send_email"), _tool("crear_pedido"), _tool("cobrar"), _tool("otra")]
     assert [t.name for t in _solo_las_concedidas(spec, ofrecidas)] == ["send_email", "crear_pedido"]
 

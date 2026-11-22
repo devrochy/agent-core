@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 
 import pytest
-from agentcore_contracts import AgentSpec
 
 from core.agents import flow as flow_mod
 from core.agents.flow import (
@@ -20,27 +19,27 @@ from core.agents.flow import (
     render_flow,
     resolve_flow,
 )
+from core.agents.turno import AgenteDelTurno, agente_desde_defaults
 from core.llm.prompt_builder import PromptContext, build_system_blocks
 
 
-def make_spec(packs: list[str] | None = None) -> AgentSpec:
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={
-            "role": "asistente",
-            "tone": "cercano",
-            "warmth": 3,
-            "emojis": "sparse",
-            "maxLength": 500,
-            "forbiddenPhrases": [],
+def make_spec(packs: list[str] | None = None) -> AgenteDelTurno:
+    return agente_desde_defaults(
+        {
+            "persona": {
+                "role": "asistente",
+                "tone": "cercano",
+                "warmth": 3,
+                "emojis": "sparse",
+                "maxLength": 500,
+                "forbiddenPhrases": [],
+            },
+            "model": {"primary": "deepseek-flash", "temperature": 0.3},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": [],
+            "tools": [],
+            "policies": {"maxToolCallsPerTurn": 10},
         },
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30},
-        playbooks=[],
-        tools=[],
-        policies={"maxToolCallsPerTurn": 10},
         packs=packs or [],
     )
 

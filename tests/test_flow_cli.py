@@ -4,23 +4,23 @@ runtime. Antes daba falso negativo para `solvershub` (visto en test el 2026-10-0
 
 from __future__ import annotations
 
-from agentcore_contracts import AgentSpec
-
 from cli.commands.flow import _available_tool_names
+from core.agents.turno import AgenteDelTurno, agente_desde_defaults
 
 
-def _spec(packs: list[str]) -> AgentSpec:
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={
-            "role": "asistente", "tone": "cercano", "warmth": 3, "emojis": "sparse",
-            "maxLength": 500, "forbiddenPhrases": [],
+def _spec(packs: list[str]) -> AgenteDelTurno:
+    return agente_desde_defaults(
+        {
+            "persona": {
+                "role": "asistente", "tone": "cercano", "warmth": 3, "emojis": "sparse",
+                "maxLength": 500, "forbiddenPhrases": [],
+            },
+            "model": {"primary": "deepseek-flash", "temperature": 0.3},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": [],
+            "tools": [],
+            "policies": {"maxToolCallsPerTurn": 10},
         },
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30},
-        playbooks=[], tools=[], policies={"maxToolCallsPerTurn": 10},
         packs=packs,
     )
 
