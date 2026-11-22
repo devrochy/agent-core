@@ -67,9 +67,9 @@ PEDIDO = re.compile(r"pedido\b(?:\W+\w+){0,3}\W+(?:confirmad\w*|cread\w*)", re.I
 
 
 async def _negocio(**behavior: Any) -> uuid.UUID:
+    from _habilidades import onboard_tenant
     from sqlalchemy import select
 
-    from core.alta_negocio import onboard_tenant
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

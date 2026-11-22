@@ -180,7 +180,8 @@ async def test_tool_rota_en_la_prueba_del_panel_no_apaga_el_pack(_registered_fai
 async def test_plugins_page_no_muestra_error_reactivado(app_client):
     """Regresión UI (ADR-0024): una fila de salud con `deleted_at` (reactivada)
     NO debe seguir mostrándose como error en /admin/plugins."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 

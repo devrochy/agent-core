@@ -129,7 +129,8 @@ def _habilitar(pack_de_prueba: Any, monkeypatch) -> None:  # type: ignore[no-unt
 
 @pytest.fixture(scope="module")
 async def negocio() -> AsyncIterator[uuid.UUID]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.tenants import deactivate_tenant, purge_tenant
 
     slug = f"aos09-{uuid.uuid4().hex[:8]}"

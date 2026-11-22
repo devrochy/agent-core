@@ -50,9 +50,9 @@ async def _negocio(con_basic: bool = False) -> tuple[uuid.UUID, str]:
     Desde SPEC-43 los planes son de `pack_subscriptions`; aquí «PLAN-PREMIUM» y «PLAN-BASIC» son productos
     normales de commerce (el incidente de ADR-0130 no depende de que fueran planes). Con `con_basic`,
     también el Basic."""
+    from _habilidades import onboard_tenant
     from pack_commerce.models import Inventory, Product, ProductVariant
 
-    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 

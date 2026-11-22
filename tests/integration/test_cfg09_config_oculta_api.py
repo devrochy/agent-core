@@ -21,7 +21,7 @@ RUTA = "/api/v1/admin/plugins/pack_cobranza/config"
 
 
 async def test_la_config_de_cobranza_no_trae_las_claves_ocultas_y_guardar_las_conserva(app_client) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("cfg-oculta")
     tid, _ = await onboard_tenant(

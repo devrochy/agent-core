@@ -100,7 +100,7 @@ async def _ajustes(tid: uuid.UUID, **valores: Any) -> None:
 
 
 async def _negocio(**ajustes: Any) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("kin")
     tid, _ = await onboard_tenant(

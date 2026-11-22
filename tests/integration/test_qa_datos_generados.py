@@ -95,7 +95,7 @@ def _proveedor(monkeypatch, proveedor: ProveedorGuionado) -> ProveedorGuionado:
 
 
 async def _negocio(descripcion: str = DESCRIPCION) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("qa10")
     tid, _ = await onboard_tenant(
@@ -309,7 +309,7 @@ async def test_sin_descripcion_general_bandera_y_aislamiento(app_client, monkeyp
 
 
 async def test_suscripciones_usa_los_planes_que_nombra_su_plantilla(app_client, monkeypatch, qa_on) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("qa10s")
     tid, _ = await onboard_tenant(
@@ -397,7 +397,7 @@ async def test_borrar_modulo_alcanza_lotes_de_agentes(app_client, monkeypatch, q
 
 
 async def test_modulo_suscripciones_crea_planes_y_clientes(app_client, monkeypatch, qa_on) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("qa10m")
     tid, _ = await onboard_tenant(

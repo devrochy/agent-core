@@ -86,7 +86,8 @@ def codigos(hallazgos: list[dict[str, Any]], severidad: str = "error") -> set[st
 @pytest.fixture(scope="module")
 async def negocios() -> AsyncIterator[tuple[Negocio, Negocio, Negocio]]:
     """A (bandera encendida, la tool con binding), B (bandera encendida, SIN binding) y C (bandera apagada)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.tenants import deactivate_tenant, purge_tenant
 
     salida: list[Negocio] = []

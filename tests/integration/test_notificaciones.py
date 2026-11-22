@@ -43,7 +43,8 @@ def _spec(clave: str, **kw):
 
 
 async def _tenant_con_owner(slug: str) -> tuple[uuid.UUID, uuid.UUID, str]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import TenantUser
     from core.db.session import get_session
 

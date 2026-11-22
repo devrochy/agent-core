@@ -369,7 +369,7 @@ async def test_intake_slugs_inexistentes_cortan_por_ip(app_client, moto_setup, m
 async def _negocio_sin_comercio():
     from uuid import uuid4
 
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"lsc-{uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(

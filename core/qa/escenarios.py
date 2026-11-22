@@ -264,18 +264,28 @@ async def _clientes_y_pedidos(ctx: Contexto) -> Resultado:
 
 # ------------------------------------------------------------------ suscripciones
 async def _activar_suscripciones(ctx: Contexto) -> bool:
-    """Activa `pack_subscriptions` en el negocio (lo mismo que `PUT /admin/plugins/{id}/config`).
-    Devuelve True si lo activó ahora."""
-    from core.admin.views import configure_plugin_for_tenant
+    """Deja `pack_subscriptions` en el negocio como lo haría el dueño: crea el agente de Suscripciones desde su
+    plantilla, que lo instala (una habilidad es del negocio si algún agente activo la tiene, HU-AOS-91). Devuelve
+    True si lo activó ahora."""
+    from core.agents.editor import ErrorDelEditor, crear_desde_plantilla
     from core.agents.instalaciones_agente import packs_del_negocio
     from core.billing.enforcement import QuotaExceeded
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
 
     if "pack_subscriptions" in await packs_del_negocio(ctx.tenant_id):
         return False
     try:
-        await configure_plugin_for_tenant("pack_subscriptions", {})
-    except QuotaExceeded as exc:
-        raise FalloEscenario(f"El plan del negocio de prueba no admite otra habilidad: {exc}") from exc
+        await crear_desde_plantilla(
+            ctx.tenant_id,
+            "suscripciones",
+            nombre=None,
+            catalogo=catalogo_de_acciones(plugin_manager.list_modules()),
+            actor=None,
+            puede_habilitar=True,
+        )
+    except (ErrorDelEditor, QuotaExceeded) as exc:
+        raise FalloEscenario(f"No se pudo crear el agente de Suscripciones del negocio de prueba: {exc}") from exc
     return True
 
 

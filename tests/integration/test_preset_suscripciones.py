@@ -42,8 +42,9 @@ CATALOGO = {
 
 async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> None:
     """Gherkin «Reproducible»: packs del preset y proveedor `pack_subscriptions`."""
-    from core.agents.spec import enabled_packs, load_active_spec
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
     from core.subscriptions import proveedor_configurado
@@ -52,18 +53,17 @@ async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> N
         name="Agencia", slug=uniq("susc"), packs=[], preset="suscripciones", plan="premium"
     )
     async with tenant_scope(tid):
-        spec = await load_active_spec()
+        packs = await packs_del_negocio(tid, con_core=False)
         agenda = await plugin_manager.load_config("pack_calendar")
-    packs = enabled_packs(spec)
-    assert {"pack_commerce", "pack_calendar", "pack_subscriptions"} <= packs
-    # Pagos necesita las llaves de Wompi del negocio: queda pendiente, no inventada.
-    assert "pack_payments" not in packs
+    # El preset solo siembra configuración (HU-AOS-91): las habilidades llegan con los agentes que cree el dueño.
+    assert packs == set()
     assert agenda is not None and agenda.source == "interno"
     assert await proveedor_configurado(tid) == "pack_subscriptions"
 
 
 async def test_voz_de_marca_se_reemplaza_solo_si_se_pide(tmp_path, monkeypatch) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.onboarding import ensure_brand_voice
@@ -97,10 +97,10 @@ async def test_voz_de_marca_se_reemplaza_solo_si_se_pide(tmp_path, monkeypatch) 
 async def test_aplicar_preset_a_un_negocio_existente_no_mezcla_ejemplos() -> None:
     """Un negocio con catálogo propio no recibe los productos de ejemplo del preset
     ni le pisan los atributos de un SKU que coincida (visto al aplicar HU-SH-01 en test)."""
+    from _habilidades import onboard_tenant
     from pack_commerce.models import ProductVariant
     from pack_commerce.seed import seed_catalog
 
-    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.presets.apply import apply_preset
     from core.shared.tenant import tenant_scope

@@ -61,9 +61,8 @@ async def _packs_registrados() -> None:
 
 async def _negocio(*, packs: list[str] | None = None) -> tuple[uuid.UUID, str, uuid.UUID]:
     """Negocio con una conexión conversacional, sus agentes base y la release 1. (tid, slug, conexión)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
-
-    from core.alta_negocio import onboard_tenant
 
     slug = uniq("aos59")
     tid, _ = await onboard_tenant(name=f"AOS-59 {slug}", slug=slug, persona={"tone": "cercano"}, packs=packs)

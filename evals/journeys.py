@@ -226,6 +226,63 @@ def _como_vendedor(tenant_id: uuid.UUID) -> None:
 
 
 # ------------------------------------------------------------------ negocio y cliente
+# Playbooks de los packs de la corrida, en el orden en que los tenía el spec v2 del negocio: el agente de la corrida
+# los lleva igual que antes de HU-AOS-91 para que las grabaciones midan lo mismo.
+_PLAYBOOKS_DE_LA_CORRIDA: dict[uuid.UUID, list[dict[str, str]]] = {}
+KEY_ATENCION = "atencion"
+# Las habilidades de la corrida van en un agente propio, sin versión: no entra en ninguna release (y no choca con el
+# `atencion` de la foto que importa el gate) y `atencion` queda como antes, sin habilidades propias, con las del
+# negocio.
+KEY_HABILIDADES = "habilidades_corrida"
+
+
+async def _pendientes_del_preset(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        tenant = await session.get(Tenant, tenant_id)
+    registro = ((tenant.settings or {}).get("preset") or {}) if tenant is not None else {}
+    return [p for p in registro.get("pendientes") or [] if isinstance(p, dict)]
+
+
+async def _habilidades_de_la_corrida(tenant_id: uuid.UUID, definicion: dict[str, Any]) -> None:
+    """Las habilidades de la corrida (los `packs` del set, los del preset y los que trae `config`) quedan instaladas en
+    el agente `habilidades_corrida`: el alta no las elige (ADR-0206, HU-AOS-91)."""
+    from core.agents import versiones
+    from core.agents.habilitacion import asegurar_habilidades
+    from core.agents.instalaciones_agente import instalar_en_agente
+    from core.onboarding import _pack_playbook_refs
+    from core.presets import load_preset
+    from core.presets.apply import _playbook_refs
+
+    packs = list(definicion.get("packs", []))
+    refs = _pack_playbook_refs(packs)
+    if definicion.get("preset"):
+        manifest = load_preset(definicion["preset"])
+        packs += [p for p in manifest.packs if p not in packs]
+        # Como el spec v2 de antes: los playbooks de los packs que el preset dejó configurados, no los pendientes.
+        pendientes = {p.get("pack") for p in await _pendientes_del_preset(tenant_id)}
+        refs += _playbook_refs([p for p in manifest.packs if p not in pendientes], list(manifest.playbooks))
+    packs += [p for p in (definicion.get("config") or {}) if p not in packs]
+    # Y al final los de todo pack habilitado que faltaran, como hacía `load_active_spec` al leer el v2.
+    refs += _pack_playbook_refs(packs)
+    unicos: dict[str, dict[str, str]] = {}
+    for ref in refs:
+        unicos.setdefault(ref["name"], ref)
+    _PLAYBOOKS_DE_LA_CORRIDA[tenant_id] = list(unicos.values())
+    if not packs:
+        return
+    await asegurar_habilidades(tenant_id, packs, actor=None)
+    agente = await versiones.crear_agente(
+        tenant_id, key=KEY_HABILIDADES, kind="specialist", name="Habilidades de la corrida"
+    )
+    # Activas, también Pagos: el negocio de la corrida las tenía todas habilitadas y la config de Pagos del set es del
+    # negocio.
+    for pack in packs:
+        await instalar_en_agente(tenant_id, agente.id, pack)
+
+
 async def preparar_negocio(
     definicion: dict[str, Any],
     pagos: PagoSimulado,
@@ -237,7 +294,6 @@ async def preparar_negocio(
     `replica`, además los artefactos del negocio copiados a su directorio (catálogo, seed de
     packs y voz de marca, como `agent-core tenant seed --voz-de-marca`) y sin ejemplos. El motor de
     procedimientos corre en todo negocio (ADR-0191): no hay nada que encender."""
-    from core.admin.views import set_pack_for_tenant
     from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
@@ -247,7 +303,6 @@ async def preparar_negocio(
         name=definicion.get("nombre", "Negocio de journeys"),
         slug=slug,
         business_description=definicion.get("descripcion", "Negocio de prueba de los journeys."),
-        packs=list(definicion.get("packs", [])),
         preset=definicion.get("preset"),
         plan=definicion.get("plan", "premium"),
         sembrar_ejemplos=not definicion.get("catalogo") and not definicion.get("planes") and not replica,
@@ -256,9 +311,7 @@ async def preparar_negocio(
     async with tenant_scope(tenant_id):
         for pack_id, config in (definicion.get("config") or {}).items():
             await plugin_manager.save_config(pack_id, config)
-            error = await set_pack_for_tenant(pack_id, True)
-            if error:
-                raise RuntimeError(f"No se pudo habilitar {pack_id}: {error}")
+        await _habilidades_de_la_corrida(tenant_id, definicion)
     if replica:
         from core.onboarding import sembrar_artefactos
 
@@ -340,13 +393,13 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
 
     from core.agents import defaults_negocio, versiones
     from core.agents.base import asegurar_coordinador, contenido_base
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.agents.instancias import (
         ConflictoInstancia,
         agregar_instancia,
         asegurar_instancias_base,
     )
     from core.agents.procedimientos_de_negocio import declarados, procedimientos_publicados
-    from core.agents.spec import enabled_packs, leer_spec_activo, load_active_spec
     from core.db.models import AgentRecord
     from core.db.session import get_session
     from core.kernel.procedures import catalogo_de_acciones
@@ -356,37 +409,36 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
     from core.subscriptions.tools import SOLO_PROCEDIMIENTO
 
     async with tenant_scope(tenant_id):
-        await load_active_spec(tenant_id)  # siembra el default si el negocio no tiene uno
         await asegurar_coordinador(tenant_id, modules=modulos)
         async with get_session() as session:
             await asegurar_instancias_base(session, tenant_id, conexion)
             existente = (
                 await session.execute(
                     select(AgentRecord.id).where(
-                        AgentRecord.tenant_id == tenant_id, AgentRecord.key == "atencion", AgentRecord.deleted_at.is_(None)
+                        AgentRecord.tenant_id == tenant_id, AgentRecord.key == KEY_ATENCION, AgentRecord.deleted_at.is_(None)
                     )
                 )
             ).scalar_one_or_none()
-        if existente is not None:  # idempotente: negocios de prueba que se reusan entre módulos
-            try:
+        if existente is not None:
+            try:  # idempotente: negocios de prueba que se reusan entre módulos
                 await agregar_instancia(tenant_id, conexion, existente, is_default=True)
             except ConflictoInstancia as exc:
                 if exc.code != "already_assigned":
                     raise
             return existente
-        leido = await leer_spec_activo(tenant_id)
-        if leido is None:
-            raise SystemExit("El negocio de la corrida no tiene AgentSpec activo.")
-        spec = leido[1]
-        habilitados = enabled_packs(spec)
+        habilitados = await packs_del_negocio(tenant_id)
         catalogo = catalogo_de_acciones(modulos)
         contenido = contenido_base(await defaults_negocio.leer(tenant_id))
-        # Los playbooks de los packs siguen en el v2 (ADR-0206 §6 solo movió los base): sin ellos el agente de la corrida
-        # cambiaría respecto de las grabaciones.
+        # Los playbooks de los packs (ADR-0206 §6 solo movió los base): sin ellos el agente de la corrida cambiaría
+        # respecto de las grabaciones.
         presentes = {p["name"] for p in contenido["playbooks"]}
         contenido["playbooks"] = [
             *contenido["playbooks"],
-            *({"name": ref.name, "description": ref.description[:300]} for ref in spec.playbooks if ref.name not in presentes),
+            *(
+                {"name": ref["name"], "description": ref.get("description", "")[:300]}
+                for ref in _PLAYBOOKS_DE_LA_CORRIDA.pop(tenant_id, [])
+                if ref["name"] not in presentes
+            ),
         ][:60]
         contenido["tools"] = [
             {"tool": nombre, "enabled": True, "scopes": list(getattr(info, "scopes", ()))}
@@ -397,9 +449,8 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
             # la corrida si el negocio vende (comercio), para que las grabaciones midan lo mismo.
             and (nombre not in ACCIONES_CAPTAR_LEADS or "pack_commerce" in habilitados)
         ]
-        contenido["procedures"] = declarados(procedimientos_publicados(spec), set())
-        del leido, spec
-        agente = await versiones.crear_agente(tenant_id, key="atencion", kind="specialist", name="Atención")
+        contenido["procedures"] = declarados(procedimientos_publicados(habilitados), set())
+        agente = await versiones.crear_agente(tenant_id, key=KEY_ATENCION, kind="specialist", name="Atención")
         await versiones.publicar(
             tenant_id, agente.id, catalogo=catalogo, contenido=contenido, notes="Agente de la corrida de journeys."
         )

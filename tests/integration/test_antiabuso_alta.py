@@ -79,7 +79,7 @@ def silencio(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
 
 # ------------------------------------------------------------------ helpers
 async def _vendedor() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("vendedor-sh07")
     tid, _ = await onboard_tenant(name=f"Vendedor {slug}", slug=slug, packs=["pack_commerce", "pack_subscriptions"])

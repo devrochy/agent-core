@@ -62,7 +62,8 @@ def _twilio(ac: str, e164: str) -> httpx.MockTransport:
 
 
 async def _negocio_con_twilio(prefijo: str) -> dict[str, Any]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import Conversation, Customer, TwilioContentTemplate
     from core.db.session import get_session
     from core.gateway.twilio import alta, bandera

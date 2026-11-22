@@ -26,7 +26,8 @@ pytestmark = [
 
 async def _negocio_con_salientes(minutos: list[int]) -> tuple[uuid.UUID, list[uuid.UUID]]:
     """Un negocio con una conversación y outbound `queued` creados hace `minutos` cada uno."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import Conversation, Customer, Message, utcnow
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

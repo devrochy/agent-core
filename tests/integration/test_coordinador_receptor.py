@@ -51,7 +51,8 @@ def _alta_con_agent_os():
 async def _negocio_sin_especialistas() -> tuple[uuid.UUID, uuid.UUID]:
     """Alta con preset (sin especialistas desde ADR-0205 §1) y su primera conexión conversacional, el chat web, con
     la release 1 que deja el outbox."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.session import get_session
     from core.events.core_handlers import on_connection_release_1
     from core.gateway import chat_web_conexion

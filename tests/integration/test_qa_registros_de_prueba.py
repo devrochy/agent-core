@@ -182,7 +182,8 @@ async def test_aislamiento_permiso_y_bandera(app_client, monkeypatch, qa_on) -> 
 
 # ---------------------------------------------------------------- suscripciones
 async def test_planes_y_suscripciones(app_client, monkeypatch, qa_on) -> None:  # noqa: F811
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.plugin_manager import plugin_manager
     from core.qa.contrato_datos import RegistroSembrado
 

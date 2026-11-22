@@ -11,9 +11,8 @@
 2. **Habilidades.** Las efectivas en el scope de la conexión (ADR-0118 §2, HU-AOS-16): si la
    conexión tiene instalaciones propias vivas (`pack_installations`, scope `connection`),
    SOLO esas, sin merge; si no, las habilitadas del negocio (`packs_del_negocio`,
-   ADR-0206 §5). Una instalación de conexión de un pack que el negocio no tiene habilitado hace
-   fallar el build (`instalacion_sin_habilitar`: en la parte 1 de la HU la activación del
-   código, la config y las tools siguen colgando de `spec.packs`). Las de la plataforma con su
+   ADR-0206 §5: las instaladas en sus agentes activos). Una instalación de conexión de un pack que
+   el negocio no tiene hace fallar el build (`instalacion_sin_habilitar`). Las de la plataforma con su
    versión exacta, registrada en `pack_versions` con el mismo `manifest_hash` y no retirada; los
    plugins del negocio solo por nombre.
 3. **Procedimientos.** Cada `ProcedureRef` de las versiones `agentspec/3` resuelve a una

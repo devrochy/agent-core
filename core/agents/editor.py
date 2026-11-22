@@ -333,7 +333,9 @@ async def crear_desde_plantilla(
             ) from None
         habilitadas = list(resultado.habilitados_ahora)
         sin_configurar = resultado.config_pendiente
-        habilitados = await habilitados_del_negocio(tenant_id)  # lo que derivan el borrador y los avisos
+        # Quedan del negocio al instalarlas en este agente, más abajo (ADR-0206, HU-AOS-91); el borrador y los
+        # avisos ya las cuentan.
+        habilitados = habilitados | set(por_habilitar)
     publicados = _ofrecibles(habilitados)
     try:
         contenido, avisos = derivar_contenido(

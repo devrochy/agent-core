@@ -19,7 +19,7 @@ URL = "/api/v1/admin/settings"
 
 
 async def _negocio():
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("cfg03")
     tid, _ = await onboard_tenant(name=f"N {slug}", slug=slug, persona={"tone": "cercano"}, admin_email="admin@local")

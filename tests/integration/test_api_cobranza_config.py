@@ -36,9 +36,9 @@ TOTAL_CAMPOS = 32
 
 
 async def _tenant_con_cartera() -> tuple[uuid.UUID, uuid.UUID]:
+    from _habilidades import onboard_tenant
     from pack_cobranza.models import Cartera
 
-    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 

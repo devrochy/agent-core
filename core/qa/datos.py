@@ -359,6 +359,15 @@ async def _permisos_colaborador(tenant_id: uuid.UUID, admin_id: uuid.UUID) -> No
                 session.add(AdminPermission(admin_id=admin_id, section=seccion, access=acceso, tenant_id=tenant_id))
 
 
+async def _activar_packs(tenant_id: uuid.UUID) -> None:
+    from core.agents.habilitacion import asegurar_habilidades
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        await asegurar_habilidades(tenant_id, [p for p in PACKS if plugin_manager.get(p) is not None], actor=None)
+
+
 async def _sembrar(tenant_id: uuid.UUID, gestor_email: str) -> list[str]:
     from core.plugin_manager import plugin_manager
 
@@ -448,13 +457,15 @@ async def preparar(admin: Admin) -> dict[str, Any]:
             name=nombre,
             slug=ds.slug,
             business_description=DESCRIPCION_QA,
-            packs=list(PACKS),
             admin_email=correo_de("dueno", admin.id),
             tenant_id=ds.tenant_id,
             plan=PLAN,
         )
         if creado != ds.tenant_id:
             raise QaError("conflicto", f"Ya existe otro negocio con el slug {ds.slug}.")
+        # El alta no elige habilidades (ADR-0206, HU-AOS-91): aquí se activa su código y los agentes del Agent OS
+        # (`datos_aos.preparar`) las instalan.
+        await _activar_packs(ds.tenant_id)
         await _vincular(ds.tenant_id, ids["gestor"], "colaborador")
         await apply_pack_roles(["pack_cobranza:gestor"], ds.tenant_id, ids["gestor"])
         await _vincular(ds.tenant_id, ids["colaborador"], "colaborador")

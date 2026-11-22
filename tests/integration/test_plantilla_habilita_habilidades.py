@@ -61,7 +61,7 @@ def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _negocio_sin_packs() -> uuid.UUID:
     """El negocio del self-service en Free: sin packs, sin preset."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"habil-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"HABIL {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
@@ -194,7 +194,9 @@ async def test_guardar_el_spec_sobre_una_base_vieja_no_pisa_la_edicion_que_confi
         assert primera is not None
         segunda = await save_spec_version(base.model_copy(update={"packs": ["pack_calendar"]}), tid, base_id=base_id)
         assert segunda is None
-    assert await _packs(tid) == {"pack_commerce"}
+        # `spec.packs` ya no es la habilitación (HU-AOS-91): la carrera se mide sobre el spec mismo.
+        _id, final = await leer_spec_activo(tid)  # type: ignore[misc]
+    assert final.packs == ["pack_commerce"]
 
 
 async def test_el_dueno_del_negocio_puede_habilitar_sin_permisos_explicitos(app_client) -> None:

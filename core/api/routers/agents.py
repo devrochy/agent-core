@@ -601,15 +601,13 @@ async def _resueltos(v: Any) -> list[ResolvedProcedure]:
     agentes, ADR-0206 §5; el binario de hoy). Vacío para un KernelSpec."""
     from core.agents.instalaciones_agente import packs_del_negocio
     from core.agents.procedimientos_de_negocio import procedimientos_publicados
-    from core.agents.spec import load_active_spec
     from core.releases.procedimientos import publicados_por_id, resolver_refs
 
     refs = v.content.get("procedures") if v.contract == "agentspec/3" else None
     if not isinstance(refs, list) or not refs:
         return []
-    spec = await load_active_spec()
-    publicados = publicados_por_id(procedimientos_publicados(spec))
     habilidades = await packs_del_negocio()
+    publicados = publicados_por_id(procedimientos_publicados(habilidades))
     salida: list[ResolvedProcedure] = []
     for ref in refs:
         if not isinstance(ref, dict) or not isinstance(ref.get("id"), str) or not isinstance(ref.get("version"), str):

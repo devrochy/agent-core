@@ -43,7 +43,7 @@ ACTOR = "system:qa-datos"
 # Plantillas de `core/presets/plantillas/` que se instalan. Es un fixture de QA, como los
 # fragmentos `qa.json`. Cobranza NO: el catálogo de pruebas la crea desde el editor de agentes
 # (con la key de la plantilla ya ocupada, el editor respondería 409 `key_taken`).
-AGENTES = ("ventas", "agenda")
+AGENTES = ("ventas", "agenda", "cobranza")  # la app de campo necesita Cobranza en un agente (HU-AOS-91)
 NOMBRE_ROL = {"core": "Coordinador", "specialist": "Especialista", "backoffice": "Backoffice"}
 
 

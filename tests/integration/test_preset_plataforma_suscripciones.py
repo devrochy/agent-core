@@ -66,7 +66,8 @@ async def _negocio_con_preset(preset: str) -> tuple[uuid.UUID, Any]:
     """El alta real: negocio con su número de WhatsApp y el preset. Desde ADR-0205 §1 el alta no crea
     especialistas (solo el Coordinador): los agentes del preset se aplican aquí a mano, como
     `agent-core db presets-v2`, para revisar lo que el preset sugiere."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.presets import load_preset
     from core.presets.agentes import aplicar_agentes
     from core.shared.tenant import tenant_scope
@@ -85,11 +86,11 @@ async def _negocio_con_preset(preset: str) -> tuple[uuid.UUID, Any]:
 
 
 async def _packs(tid: uuid.UUID) -> set[str]:
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.shared.tenant import tenant_scope
 
-    async with tenant_scope(tid):
-        return set(enabled_packs(await load_active_spec()))
+    async with tenant_scope(tid):  # las de sus agentes activos (HU-AOS-91)
+        return await packs_del_negocio(tid)
 
 
 async def test_preset_propio_nace_sin_comercio_ni_ventas_con_suscripciones_por_defecto() -> None:

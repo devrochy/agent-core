@@ -26,7 +26,7 @@ URL = "/api/v1/admin/leads"
 
 
 async def _negocio(packs: list[str]) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("negsc")
     tid, _ = await onboard_tenant(

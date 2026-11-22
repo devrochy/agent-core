@@ -31,7 +31,8 @@ NOCHE = datetime(2026, 10, 28, 3, 15, tzinfo=UTC)
 
 
 async def _negocio(tz: str | None = None) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

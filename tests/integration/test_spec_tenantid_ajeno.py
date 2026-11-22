@@ -26,7 +26,7 @@ SECRETO = "Guion confidencial del negocio B."
 
 
 async def _negocio(prefijo: str):
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"{prefijo}-{os.urandom(3).hex()}"
     tid, _ = await onboard_tenant(

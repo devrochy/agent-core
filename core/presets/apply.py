@@ -16,7 +16,6 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 
 from core.agents import defaults_negocio
-from core.agents.spec import load_active_spec, save_spec_if_changed
 from core.db.models import AppSettings, Tenant
 from core.db.session import get_session
 from core.presets import PresetError, PresetManifest, load_fragment, load_preset
@@ -108,7 +107,7 @@ async def _configurar_pack(pack_id: str, module: Any, vertical: str) -> tuple[bo
     return True, "configurado"
 
 
-# ------------------------------------------------------------------ spec y settings
+# ------------------------------------------------------------------ valores por defecto y settings
 def _playbook_refs(packs: list[str], nombres: list[str]) -> list[dict[str, str]]:
     from core.onboarding import _pack_playbook_refs
 
@@ -116,17 +115,6 @@ def _playbook_refs(packs: list[str], nombres: list[str]) -> list[dict[str, str]]
     if nombres:
         refs = [r for r in refs if r["name"] in nombres]
     return refs
-
-
-async def _actualizar_spec(manifest: PresetManifest, habilitados: list[str], tenant_id: uuid.UUID) -> str | None:
-    spec = await load_active_spec()
-    data: dict[str, Any] = spec.model_dump(mode="json")
-    data["packs"] = sorted({*data.get("packs", []), *habilitados})
-    existentes = {p["name"] for p in data.get("playbooks", [])}
-    for ref in _playbook_refs(habilitados, manifest.playbooks):
-        if ref["name"] not in existentes:
-            data["playbooks"].append(ref)
-    return await save_spec_if_changed(spec, data, tenant_id)
 
 
 async def _actualizar_persona(manifest: PresetManifest, tenant_id: uuid.UUID) -> None:
@@ -240,7 +228,6 @@ async def apply_preset(tenant_id: uuid.UUID, preset_id: str, *, sembrar_ejemplos
                 resultado.pendientes.append({"pack": pack_id, "paso": f"configurar_{pack_id}", "detalle": detalle})
                 resultado.pasos.append(f"{pack_id} pendiente de configurar ({detalle})")
 
-        resultado.spec_version = await _actualizar_spec(manifest, resultado.habilitados, tenant_id)
         await _actualizar_persona(manifest, tenant_id)
         await _actualizar_app_settings(manifest, tenant_id)
         if manifest.proveedor_suscripciones in resultado.habilitados:

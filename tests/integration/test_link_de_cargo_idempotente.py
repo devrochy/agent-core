@@ -48,7 +48,8 @@ def proveedor(monkeypatch):
 
 
 async def _negocio() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
@@ -60,9 +61,9 @@ async def _negocio() -> uuid.UUID:
             "pack_payments",
             {"public_key": "pub_test_x", "private_key": "prv_test_x", "events_secret": "test_x", "sandbox": True},
         )
-        from core.admin.views import set_pack_for_tenant
+        from _habilidades import dar_habilidades
 
-        assert await set_pack_for_tenant("pack_payments", True) is None
+        await dar_habilidades(tid, ["pack_payments"])
     return tid
 
 

@@ -14,7 +14,7 @@ from typing import Any
 
 from core.agents import defaults_negocio
 from core.agents.defaults_negocio import DefaultsDelNegocio
-from core.agents.spec import enabled_packs, load_active_spec, save_spec_if_changed
+from core.agents.spec import load_active_spec, save_spec_if_changed
 from core.mcp.host import mcp_host
 
 # ------------------------------------------------------------------ horario
@@ -89,11 +89,10 @@ async def save_memory(
 
 
 # ------------------------------------------------------------------ habilidades (tools)
-def read_skills(spec) -> list[dict[str, Any]]:  # type: ignore[no-untyped-def]
-    """Herramientas editables (de packs habilitados) con su binding actual."""
+def read_skills(spec, enabled: set[str]) -> list[dict[str, Any]]:  # type: ignore[no-untyped-def]
+    """Herramientas editables (de los packs del negocio, `packs_del_negocio`) con su binding actual."""
     data = spec.model_dump(mode="json")
     bindings = {b.get("tool"): b for b in (data.get("tools") or [])}
-    enabled = enabled_packs(spec)
     items: list[dict[str, Any]] = []
     for tool in mcp_host.get_tools():
         if tool.plugin_id not in enabled:
@@ -119,9 +118,11 @@ async def save_skills(
     tools: list[dict[str, Any]],
 ) -> str | None:
     """Aplica on/off y límites SOLO a las tools de packs habilitados."""
+    from core.agents.instalaciones_agente import packs_del_negocio
+
     spec = await load_active_spec()
     data = spec.model_dump(mode="json")
-    enabled = enabled_packs(spec)
+    enabled = await packs_del_negocio()
     editable = {t.name for t in mcp_host.get_tools() if t.plugin_id in enabled}
 
     bindings_by_tool = {b["tool"]: dict(b) for b in data.get("tools", [])}

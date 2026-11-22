@@ -42,7 +42,8 @@ TEXTO = "Hola {cliente.nombre},\ngracias por escribir a {negocio.nombre}."
 @pytest.fixture(scope="module")
 async def negocios() -> AsyncIterator[tuple[Negocio, Negocio, Negocio]]:
     """A y B para el aislamiento; C solo para el tope por negocio."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.tenants import deactivate_tenant, purge_tenant
 
     salida: list[Negocio] = []

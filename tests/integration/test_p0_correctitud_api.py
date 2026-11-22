@@ -26,7 +26,7 @@ pytestmark = [
 
 
 async def _tenant(prefix: str, packs: list[str] | None = None):
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq(prefix)
     tid, _ = await onboard_tenant(
@@ -137,39 +137,26 @@ async def test_config_guardada_fuera_de_rango_no_tumba_el_get(app_client) -> Non
 # ------------------------------------------------------------------ 2. tope del plan
 
 
-async def test_habilitar_al_tope_del_plan_responde_409_y_queda_deshabilitada(app_client, monkeypatch) -> None:
-    from dataclasses import replace
-
-    from core.billing import plans
-
-    # Desde ADR-0142 ningún plan del catálogo limita las habilidades; el contrato del 409 se
-    # sigue probando con un `free` de prueba que trae `plugins: 1`.
-    free = plans.PLANS_BY_ID["free"]
-    monkeypatch.setitem(plans.PLANS_BY_ID, "free", replace(free, limits={**free.limits, "plugins": 1}))
-    tid = await _tenant("p0-tope", packs=["pack_commerce"])
-    await _plan(tid, "free")  # `plugins: 1`, y commerce ya ocupa el cupo
+async def test_activar_en_el_negocio_esta_retirado_y_configurar_no_habilita(app_client) -> None:
+    """HU-AOS-91: una habilidad es del negocio si algún agente activo la tiene instalada. `activate`/`deactivate`
+    responden 410 sin cambiar nada; guardar la config de una habilidad la deja configurada, no habilitada."""
+    tid = await _tenant("p0-retirado", packs=["pack_commerce"])
     headers = await api_headers(app_client, tid)
 
-    r = await app_client.post(
-        "/api/v1/admin/plugins/pack_calendar/action", headers=headers, json={"action": "activate"}
+    for accion in ("activate", "deactivate"):
+        r = await app_client.post("/api/v1/admin/plugins/pack_calendar/action", headers=headers, json={"action": accion})
+        assert r.status_code == 410, r.text
+        assert r.json()["error"]["code"] == "business_activation_retired"
+
+    r_cfg = await app_client.put(
+        "/api/v1/admin/plugins/pack_cobranza/config", headers=headers, json={"values": {"dias_tolerancia_cobro": 1}}
     )
-    assert r.status_code == 409, r.text
-    error = r.json()["error"]
-    assert error["code"] == "plan_limit_plugins"
-    assert error["details"] == {"metric": "plugins", "used": 1, "limit": 1, "enabled": False}
+    assert r_cfg.status_code == 200, r_cfg.text
 
     r_list = await app_client.get("/api/v1/admin/plugins", headers=headers)
     estado = {p["id"]: p["enabled_for_tenant"] for p in r_list.json()}
-    assert estado["pack_calendar"] is False and estado["pack_commerce"] is True
-
-    # Guardar la config de otra habilidad al tope tampoco la habilita ni guarda nada.
-    r_cfg = await app_client.put(
-        "/api/v1/admin/plugins/pack_cobranza/config", headers=headers,
-        json={"values": {"dias_tolerancia_cobro": 1}},
-    )
-    assert r_cfg.status_code == 409, r_cfg.text
-    r_get = await app_client.get("/api/v1/admin/plugins/pack_cobranza/config", headers=headers)
-    assert r_get.json()["values"].get("dias_tolerancia_cobro", 0) == 0
+    assert estado["pack_commerce"] is True
+    assert estado["pack_calendar"] is False and estado["pack_cobranza"] is False
 
 
 # ------------------------------------------------------------------ 3. plantillas

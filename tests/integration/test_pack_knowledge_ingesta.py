@@ -76,7 +76,8 @@ async def _vaciar_cola(encoladas: list[tuple[str, dict[str, Any]]]) -> list[str]
 
 async def _negocio() -> tuple[uuid.UUID, str, uuid.UUID]:
     """Negocio dado de alta por el camino real, con un especialista. Devuelve (tenant, slug, agente)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -254,8 +255,9 @@ async def test_tope_del_plan_cuenta_solo_el_negocio(app_client, raiz, cola) -> N
 
 
 async def test_purga_borra_la_carpeta_y_el_alta_nueva_no_hereda(app_client, raiz, cola) -> None:
+    from _habilidades import onboard_tenant
+
     from core import tenants as tenants_mod
-    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
 
     tid, slug, agente = await _negocio()

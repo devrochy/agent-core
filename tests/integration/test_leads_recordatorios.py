@@ -34,9 +34,9 @@ AHORA = datetime(2026, 11, 3, 15, 30, tzinfo=UTC)
 
 
 async def _negocio(horario: dict | None = None) -> uuid.UUID:
+    from _habilidades import onboard_tenant
     from sqlalchemy import select
 
-    from core.alta_negocio import onboard_tenant
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

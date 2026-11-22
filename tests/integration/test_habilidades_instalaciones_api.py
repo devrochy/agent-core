@@ -77,9 +77,8 @@ async def _conexion(tid: uuid.UUID, tipo: str = "instagram_meta") -> uuid.UUID:
 
 async def _negocio(packs: list[str]) -> tuple[uuid.UUID, uuid.UUID]:
     """Negocio con `packs` habilitados, una conexión conversacional y su release 1."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
-
-    from core.alta_negocio import onboard_tenant
 
     slug = uniq("aos16api")
     tid, _ = await onboard_tenant(name=f"AOS16 {slug}", slug=slug, packs=packs, sembrar_ejemplos=False, plan="premium")

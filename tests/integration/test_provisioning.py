@@ -98,7 +98,7 @@ def correos(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
 
 # ------------------------------------------------------------------ helpers
 async def _vendedor() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("vendedor")
     tid, _ = await onboard_tenant(
@@ -285,7 +285,7 @@ async def _master() -> str:
 async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, correos) -> None:
     """Gherkin «Alta automática»: por el despachador real del outbox, en menos de 2 minutos."""
     from core.admin.invitations_service import SIN_CONTRASENA
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.events.core_handlers import ensure_core_handlers
     from core.shared.tenant import tenant_scope
     from core.tasks.domain_events_dispatch import dispatch_due_events
@@ -325,9 +325,9 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
     assert pago.provider_reference == sub.provider_reference == pago.periodo
 
     assert negocio.settings["preset"]["id"] == "restaurante"
+    # El preset solo siembra configuración (HU-AOS-91): comercio llega con el agente que cree el dueño.
     async with tenant_scope(negocio.id):
-        spec = await load_active_spec(negocio.id)
-    assert "pack_commerce" in enabled_packs(spec)
+        assert "pack_commerce" not in await packs_del_negocio(negocio.id)
 
     owner = await _admin(email)
     assert owner is not None and owner.password_hash == SIN_CONTRASENA
@@ -472,7 +472,8 @@ async def test_el_registro_del_alta_solo_lo_ve_el_vendedor(vendedores, correos) 
 
 async def test_nunca_agrega_un_owner_a_un_negocio_ajeno(vendedores, correos) -> None:
     """Si el slug del alta ya es de otro negocio, revisión: sin invitación ni cambio de plan."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.provisioning.consumer import id_del_negocio, slug_del_negocio
 
     vendedor = await _vendedor()

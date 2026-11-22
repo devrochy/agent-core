@@ -83,7 +83,8 @@ async def _auditoria(tid: uuid.UUID) -> list[tuple[str, Any]]:
 @pytest.fixture(scope="module")
 async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
     """A (con el pack de agenda) y B (sin él), ambos con la bandera en su valor de fábrica."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant

@@ -29,9 +29,9 @@ _SPEC.loader.exec_module(journeys)
 
 
 async def _negocio_con_evento(topic: str) -> tuple[uuid.UUID, uuid.UUID]:
+    from _habilidades import onboard_tenant
     from sqlalchemy import select
 
-    from core.alta_negocio import onboard_tenant
     from core.db.models import DomainEvent
     from core.db.session import get_session
     from core.events.outbox import emit_domain

@@ -26,8 +26,9 @@ URL = "/api/v1/admin/conversations"
 
 
 async def _negocio() -> dict:
+    from _habilidades import onboard_tenant
+
     from core.admin.auth import hash_password
-    from core.alta_negocio import onboard_tenant
     from core.db.models import (
         Admin,
         AdminPermission,

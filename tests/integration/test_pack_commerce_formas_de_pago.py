@@ -50,8 +50,9 @@ async def _packs_registrados() -> None:
 
 
 async def _negocio_con_dos_agentes() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    from _habilidades import onboard_tenant
+
     from core.agents.instalaciones_agente import instalar_en_agente
-    from core.alta_negocio import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("formas")

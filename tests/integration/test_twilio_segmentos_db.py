@@ -96,7 +96,8 @@ def _plantilla(tid: uuid.UUID, conexion: uuid.UUID, nombre: str, **extra: Any) -
 
 async def _negocio() -> dict[str, Any]:
     """Negocio con una conexión de Twilio, plantillas de cada clase y dos clientes con consentimiento (ana, eva)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import Conversation, Customer, CustomerConsent
     from core.db.session import get_session
     from core.gateway.twilio import alta, bandera

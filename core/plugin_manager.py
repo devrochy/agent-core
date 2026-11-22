@@ -548,7 +548,7 @@ class PluginManager:
         `self._active` es global al proceso (código cargado en el servidor, no
         por tenant). Sin `enabled`, se listan todos los activos — comportamiento
         histórico, para quien llame sin conocer el tenant actual. Pasando
-        `enabled` (el `AgentSpec.packs` del tenant, vía `enabled_packs()`) se
+        `enabled` (los packs del negocio, `packs_del_negocio`, ADR-0206 §5) se
         filtra a los que además están habilitados para ESE tenant — si no, el
         menú de un pack activo globalmente por otro tenant aparecía igual para
         cualquiera, aunque `/admin/plugins` ya dijera "no habilitado".

@@ -129,8 +129,9 @@ def _verificar_listo(datos: dict[str, Any]) -> None:
     chat = aos["chat_web"]
     assert chat["activo"] and chat["clave"] and chat["enlace"] == f"{LANDING}/w/{chat['clave']}"
     keys = {a["key"] for a in aos["agentes"]}
-    assert {"coordinador", "ventas", "agenda"} <= keys, keys
-    assert "cobranza" not in keys  # la crea el tester desde el editor
+    # Cobranza también: una habilidad es del negocio solo si un agente la tiene (HU-AOS-91), y la app de campo del
+    # gestor la necesita.
+    assert {"coordinador", "ventas", "agenda", "cobranza"} <= keys, keys
     assert [a["key"] for a in aos["agentes"] if a["por_defecto"]] == ["ventas"]
     # La pestaña Datos del panel lo muestra en `contenido`, sin cambios en el panel.
     seccion = next(c for c in datos["contenido"] if c["habilidad"] == "Agent OS")
@@ -178,12 +179,6 @@ async def test_negocio_nuevo_queda_listo_para_el_agent_os(app_client: Any, tenan
     assert r.status_code == 200
     _verificar_listo(r.json()["datos"])
 
-    # El tester crea Cobranza desde el editor (key de la plantilla): volver a pulsar no la toca.
-    from core.agents import versiones
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        cobranza = await versiones.crear_agente(tid, key="cobranza", kind="specialist", name="Cobranza del tester")
     # Volver a pulsar: 200, sin contraseñas, misma clave y nada duplicado.
     antes = await _foto(tid)
     r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
@@ -192,10 +187,6 @@ async def test_negocio_nuevo_queda_listo_para_el_agent_os(app_client: Any, tenan
     _verificar_listo(r.json())
     assert r.json()["agent_os"]["chat_web"]["clave"] == clave
     assert await _foto(tid) == antes
-    assert await _sql(tid, "select name, status, deleted_at from agents where id = :a", a=cobranza.id) == [
-        ("Cobranza del tester", "active", None)
-    ]
-    assert (await _sql(tid, "select count(*) from agent_instances where agent_id = :a", a=cobranza.id))[0][0] == 0
 
 
 # ---------------------------------------------------------------- fallo a medias

@@ -28,7 +28,7 @@ def _url(agent_id) -> str:
 
 
 async def _negocio(packs: list[str] | None = None):
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("crm28")
     tid, _ = await onboard_tenant(

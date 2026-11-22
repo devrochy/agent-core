@@ -145,19 +145,7 @@ def test_plugin_config_error_trae_mensajes_en_espanol() -> None:
     }
 
 
-# ------------------------------------------------------------------ 2. tope del plan
-
-
-def test_tope_del_plan_responde_409_con_estado_real() -> None:
-    from core.api.routers.plugins import _plan_limit_error
-    from core.billing.enforcement import QuotaExceeded
-
-    err = _plan_limit_error(QuotaExceeded("plugins", 1, 1))
-    assert err.status_code == 409
-    assert err.code == "plan_limit_plugins"
-    assert err.details == {"metric": "plugins", "used": 1, "limit": 1, "enabled": False}
-    assert "1 habilidad" in err.message
-    assert "sigue deshabilitada" in err.message
+# 2. tope del plan: retirado con la activación a nivel negocio (HU-AOS-91); la cuota se cobra al instalar.
 
 
 # ------------------------------------------------------------------ 3. plantillas

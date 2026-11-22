@@ -184,7 +184,8 @@ class Escenario:
 
 
 async def _vendedor(*, con_pagos: bool = False) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.shared.tenant import tenant_scope
 
     slug = uniq("vendedor")
@@ -192,7 +193,8 @@ async def _vendedor(*, con_pagos: bool = False) -> uuid.UUID:
         name=f"Vendedor {slug}", slug=slug, packs=["pack_commerce", "pack_subscriptions"], plan="empresarial"
     )
     if con_pagos:
-        from core.admin.views import set_pack_for_tenant
+        from _habilidades import dar_habilidades
+
         from core.plugin_manager import plugin_manager
 
         async with tenant_scope(tid):
@@ -205,7 +207,7 @@ async def _vendedor(*, con_pagos: bool = False) -> uuid.UUID:
                     "sandbox": True,
                 },
             )
-            assert await set_pack_for_tenant("pack_payments", True) is None
+            await dar_habilidades(tid, ["pack_payments"])
     return tid
 
 
@@ -436,7 +438,7 @@ async def _cobrar_periodo(esc: Escenario, inicio: datetime) -> dict[str, Any]:
     from pack_subscriptions.models import Subscription
     from pack_subscriptions.periodos import etiqueta_periodo
 
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.db.session import get_session
     from core.payments import payment_registry
     from core.shared.tenant import tenant_scope
@@ -445,7 +447,7 @@ async def _cobrar_periodo(esc: Escenario, inicio: datetime) -> dict[str, Any]:
     if await _cargo(esc, periodo) is not None:
         return {"estado": "ya_existia", "periodo": periodo}
     async with tenant_scope(esc.vendedor):
-        cap = payment_registry.capability_for(enabled_packs(await load_active_spec(esc.vendedor)))
+        cap = payment_registry.capability_for(await packs_del_negocio(esc.vendedor))
         config = await _config()
         async with get_session() as s:
             sub = await s.get(Subscription, esc.subscription_id)
@@ -831,7 +833,8 @@ async def test_renovacion_genera_el_cobro_y_avisa_por_el_asistente(
 async def test_renovacion_por_el_panel_avisa_por_correo(vendedores, correos, alertas) -> None:
     """Gherkin «Renovación», canal panel: un negocio sin canal asistente recibe el correo con
     la referencia del período y el enlace a /plan."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.billing.renovacion import on_platform_renewal_due, renovar_negocio
     from core.db.models import TenantSubscription
     from core.db.session import get_session
@@ -972,7 +975,7 @@ async def test_plan_del_alta_vencido_se_desbloquea_pagando_por_el_panel(vendedor
 
 async def test_free_que_compra_un_plan_pago_cambia_de_plan_y_aplica_el_preset(vendedores, correos, alertas) -> None:
     """Gherkin «Cambio de plan desde el asistente»: sin otro negocio y con el preset pendiente."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.db.models import ProvisioningRequest, Tenant
     from core.db.session import get_session
     from core.provisioning.consumer import on_subscription_activated
@@ -1010,8 +1013,8 @@ async def test_free_que_compra_un_plan_pago_cambia_de_plan_y_aplica_el_preset(ve
         ).scalar_one()
     assert tenant.settings["preset"]["id"] == "restaurante"
     assert tenant.settings["alta"]["preset"]["estado"] == "aplicado"
-    async with tenant_scope(esc.negocio):
-        assert "pack_commerce" in enabled_packs(await load_active_spec(esc.negocio))
+    async with tenant_scope(esc.negocio):  # el preset no habilita packs (HU-AOS-91)
+        assert "pack_commerce" not in await packs_del_negocio(esc.negocio)
     assert negocios_del_cliente == 1
     async with tenant_scope(esc.vendedor):
         async with get_session() as s:
@@ -1263,7 +1266,8 @@ async def test_r05_un_pago_del_vendedor_que_llega_por_la_url_de_la_plataforma_se
 async def test_r05_un_pago_de_la_plataforma_sigue_aplicandose_en_su_negocio(
     vendedores, correos, alertas, pasarela, app_client, monkeypatch
 ) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.config import get_settings
 
     vendedor = await _vendedor()
@@ -1283,7 +1287,7 @@ async def test_r05_un_pago_de_la_plataforma_sigue_aplicandose_en_su_negocio(
 @pytest.mark.aislamiento
 async def test_un_pago_del_panel_por_otro_monto_no_se_aplica(vendedores, correos, alertas, pasarela, app_client) -> None:
     """El monto firmado del webhook tiene que ser el del link (como en `pack_payments`)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     vendedores()
     negocio, _ = await onboard_tenant(name="Negocio monto", slug=uniq("monto"))

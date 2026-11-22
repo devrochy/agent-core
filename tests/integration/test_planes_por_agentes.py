@@ -74,9 +74,10 @@ def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _negocio(plan: str) -> tuple[uuid.UUID, uuid.UUID]:
     """Negocio v3 en `plan` con una conexión conversacional y su Coordinador (ADR-0192: sin General)."""
+    from _habilidades import onboard_tenant
+
     from core.agents.base import asegurar_coordinador
     from core.agents.instancias import asegurar_instancias_base
-    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 

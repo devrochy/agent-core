@@ -31,7 +31,8 @@ async def _escalada(
     *, hace: int, estado: str = "pendiente", admin_id: uuid.UUID | None = None
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     """Negocio con una conversación escalada hace `hace` minutos. Devuelve (tenant, conv, escalación)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import Conversation, Customer, Escalation
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

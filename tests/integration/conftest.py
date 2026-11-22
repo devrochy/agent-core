@@ -421,8 +421,9 @@ async def moto_setup():
     # solo rellena lo que falte -- ej. una BD local vieja con el Tenant creado
     # pero sin AppSettings, de antes de que `escalation_config` existiera).
     # `seed_catalog` también es idempotente (docstring propio).
+    from _habilidades import onboard_tenant
+
     from cli.commands.tenant import seed_catalog
-    from core.alta_negocio import onboard_tenant
 
     moto_id, _ = await onboard_tenant(
         name="Tenant de ejemplo (moto)",

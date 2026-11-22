@@ -86,7 +86,8 @@ async def _sql(tid: uuid.UUID, sql: str, **params: Any) -> list[Any]:
 
 @pytest.fixture(scope="module")
 async def negocios() -> AsyncIterator[tuple[Negocio, Negocio]]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.kernel.opciones import bandera
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant

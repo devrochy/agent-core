@@ -94,7 +94,8 @@ class TenantCreate(BaseModel):
     business: str = ""
     language: str = "es"
     tone: str = "cercano"
-    packs: list[str] = []
+    # Sin `packs` (ADR-0206, HU-AOS-91): el alta no elige habilidades. Un panel viejo que lo siga mandando no
+    # falla: los campos de más se ignoran.
     escalation_triggers: list[str] = []
     admin_email: str = ""
     # Ya no se define una contraseña al crear el negocio (ADR-0175): el dueño la define con el
@@ -201,7 +202,6 @@ async def create_tenant(
             language=payload.language,
             persona={"tone": payload.tone},
             escalation_triggers=payload.escalation_triggers,
-            packs=payload.packs,
         )
     except ValueError as exc:
         raise ApiError.bad_request(str(exc)[:180], "invalid_tenant") from exc

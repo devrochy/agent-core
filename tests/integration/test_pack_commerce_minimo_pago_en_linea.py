@@ -46,7 +46,7 @@ class _Cuentas:
 
 
 async def _negocio():
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("minimo")
     tid, _ = await onboard_tenant(

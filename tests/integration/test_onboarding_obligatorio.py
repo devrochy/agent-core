@@ -38,7 +38,6 @@ pytestmark = [
     ),
 ]
 
-PACKS = ["pack_commerce"]
 PASSWORD = "clave-segura-123"
 
 
@@ -89,7 +88,7 @@ async def _negocio() -> uuid.UUID:
     from core.alta_negocio import onboard_tenant
 
     slug = uniq("hush10")
-    tid, _ = await onboard_tenant(name=f"HUSH10 {slug}", slug=slug, packs=PACKS, sembrar_ejemplos=False, plan="premium")
+    tid, _ = await onboard_tenant(name=f"HUSH10 {slug}", slug=slug, sembrar_ejemplos=False, plan="premium")
     return tid
 
 

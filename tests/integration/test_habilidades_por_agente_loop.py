@@ -77,9 +77,9 @@ async def _proceso() -> None:
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
     """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (especialista
     «atencion» por defecto, ADR-0192). (tid, conexión)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
 
-    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 

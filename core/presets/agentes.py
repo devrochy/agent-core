@@ -7,8 +7,8 @@ fin» de un preset v2 (`PresetManifest.agentes`, plantillas en `core/presets/pla
 2. **Precondiciones (D-35: un agente publicado tiene al menos una conexión):** el Coordinador y el
    General del backfill de HU-AOS-13 con versión publicada y al menos una conexión conversacional
    con Coordinador vivo. Sin eso no crea ningún agente.
-3. **Agente por plantilla** (si sus `habilidades` están habilitadas en el negocio, única lectura
-   de la habilitación: `packs_del_negocio`, ADR-0206 §5):
+3. **Agente por plantilla** (si sus `habilidades` están en el negocio o entre los `packs` del preset que el
+   despliegue trae: `packs_del_negocio`, ADR-0206 §5; las del preset se instalan en el agente que crea):
    - si NO existe un agente con esa `key`, lo crea (`specialist`) y publica su versión 1 con un
      contenido `agentspec/3` DERIVADO de la última versión del General (`derivar_contenido`);
    - si existe y lo creó el preset (registro en `tenants.settings["preset"]["agentes"]`), no
@@ -527,9 +527,13 @@ async def _instalar_plantilla(
     if aplicar and agent_id is not None:
         # ADR-0190 §2: las habilidades de la plantilla (y las opcionales que el negocio ya tiene, p. ej. Pagos en el
         # preset de comercio) quedan instaladas en ESTE agente. Idempotente: lo que ya estaba no se toca.
+        from core.agents.habilitacion import asegurar_habilidades
         from core.agents.instalaciones_agente import instalar_en_agente
 
         propias = set(plantilla.habilidades) | (set(plantilla.opcionales) & habilitados)
+        # Como al crear desde una plantilla en el editor: el código queda activo (y la cuota se mide) antes de
+        # instalarlas; las del preset pasan a ser del negocio al quedar en este agente (HU-AOS-91).
+        await asegurar_habilidades(tenant_id, sorted(propias), actor=None)
         for pack in sorted(propias):
             await instalar_en_agente(tenant_id, agent_id, pack, requiere_config=pack == "pack_payments")
     previas = await _instancias_previas(tenant_id, agent_id) if agent_id is not None else {}
@@ -725,8 +729,13 @@ async def _aplicar(
     if leido is None:
         reporte.omitido = "sin_spec"
         return reporte
-    habilitados = await packs_del_negocio(tenant_id, con_core=False)
     del leido  # el v2 puede llevar literales de las declarativas
+    modulos = list(modules) if modules is not None else plugin_manager.list_modules()
+    # Una habilidad es del negocio si algún agente activo la tiene instalada (ADR-0206, HU-AOS-91): las del preset
+    # todavía no lo están (las instala `_instalar_plantilla` en el agente que crea), así que cuentan las que el
+    # despliegue trae.
+    traidas = {m.id for m in modulos}
+    habilitados = await packs_del_negocio(tenant_id, con_core=False) | {p for p in manifest.packs if p in traidas}
     # Sin General (ADR-0192 §4): la base de cada especialista sale de los valores por defecto del negocio (ADR-0206 §6).
     base_del_negocio = contenido_base(await defaults_negocio.leer(tenant_id), playbooks_de_packs=_playbooks_de_packs())
     async with get_session() as session:
@@ -740,7 +749,6 @@ async def _aplicar(
         reporte.omitido = "sin_conexion"
         return reporte
 
-    modulos = list(modules) if modules is not None else plugin_manager.list_modules()
     catalogo = catalogo_de_acciones(modulos)
     publicados = _publicados(habilitados)
     playbooks_de_packs = _playbooks_de_packs()

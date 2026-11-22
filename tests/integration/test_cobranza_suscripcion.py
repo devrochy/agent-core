@@ -19,7 +19,7 @@ pytestmark = [
 
 
 async def _tenant_cobranza() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("sub")
     tenant_id, _ = await onboard_tenant(

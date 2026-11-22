@@ -27,9 +27,9 @@ pytestmark = [
 
 async def _negocio_con_cotizacion() -> tuple[uuid.UUID, uuid.UUID, str]:
     """Un negocio propio (sin promociones de otros tests) con una cotización de 20.000."""
+    from _habilidades import onboard_tenant
     from pack_commerce.models import Inventory, Product, ProductVariant, Quote, QuoteItem
 
-    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 

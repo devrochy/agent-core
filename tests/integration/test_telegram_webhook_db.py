@@ -72,7 +72,8 @@ async def otra_conexion() -> AsyncIterator[dict[str, Any]]:
 
 
 async def _negocio_con_bot(prefijo: str) -> AsyncIterator[dict[str, Any]]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.config import get_settings
     from core.gateway.telegram import alta
     from core.shared.tenant import tenant_scope

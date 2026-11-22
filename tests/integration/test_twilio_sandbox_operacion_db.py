@@ -82,7 +82,8 @@ class Twilio:
 
 @pytest.fixture(scope="module")
 async def negocio() -> AsyncIterator[uuid.UUID]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.gateway.twilio import bandera
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant
@@ -236,7 +237,8 @@ async def test_un_estado_firmado_no_confirma(negocio, app_client, gate, twilio) 
 
 
 async def test_dos_negocios_con_el_mismo_numero_no_se_cruzan(app_client, gate, twilio) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.gateway.twilio import bandera
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant
@@ -566,7 +568,8 @@ async def test_la_prueba_avanza_hasta_leido_y_solo_la_ultima(
 
 
 async def test_la_prueba_no_se_ve_desde_otro_negocio(negocio, app_client, gate, twilio) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.gateway.twilio import bandera, operacion
     from core.tenants import deactivate_tenant, purge_tenant
 

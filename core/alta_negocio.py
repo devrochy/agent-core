@@ -2,7 +2,8 @@
 
 Dar de alta un cliente en agent-core es 100% configuración: tenant + AgentSpec +
 AppSettings (con la persona inicial en `agent_defaults`, ADR-0206 §6) + conexión de canal +
-enablement de packs + preset. Cero código por cliente.
+preset (solo configuración). Las habilidades no se eligen en el alta: se instalan en el agente que
+las usa (ADR-0206, HU-AOS-91). Cero código por cliente.
 
 Vive aparte de `core/onboarding.py` (utilidades de los artefactos del tenant, que también
 usan los packs) para que el contrato `alta-fuera-del-llm` de `.importlinter` pueda
@@ -20,7 +21,6 @@ from sqlalchemy import select
 
 from core import onboarding
 from core.agents import defaults_negocio
-from core.agents.flow import seed_tenant_flow
 from core.agents.spec import DEFAULT_SPEC
 from core.db.models import (
     Admin,
@@ -31,30 +31,20 @@ from core.db.models import (
     TenantUser,
 )
 from core.db.session import get_session
-from core.onboarding import _pack_playbook_refs, _validate_slug
+from core.onboarding import _validate_slug
 from core.plugin_manager import plugin_manager
-from core.shared.exceptions import PluginConfigError, PluginError
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
 
 log = get_logger(__name__)
 
 
-def _default_spec_for(
-    slug: str,
-    tenant_id: uuid.UUID,
-    packs: list[str] | None,
-) -> dict:
-    """Packs y playbooks del negocio nuevo. La persona ya no va aquí: es un valor por defecto de los agentes
+def _default_spec_for(slug: str, tenant_id: uuid.UUID) -> dict:
+    """El spec v2 del negocio nuevo, sin packs: el alta no elige habilidades (ADR-0206, HU-AOS-91), se instalan en
+    el agente que las usa. La persona ya no va aquí: es un valor por defecto de los agentes
     (`app_settings.agent_defaults`, ADR-0206 §6) y la escribe `onboard_tenant`."""
     spec = deepcopy(DEFAULT_SPEC)
     spec["tenantId"] = str(tenant_id)
-    if packs:
-        spec["packs"] = list(packs)
-        existing = {p["name"] for p in spec.get("playbooks", [])}
-        for ref in _pack_playbook_refs(packs):
-            if ref["name"] not in existing:
-                spec["playbooks"].append(ref)
     # El contrato congelado es rey: un spec inválido NO llega a la BD (evita que
     # /admin/spec reviente al renderizar con model_validate).
     try:
@@ -137,7 +127,6 @@ async def onboard_tenant(
     language: str = "es",
     persona: dict | None = None,
     escalation_triggers: list[str] | None = None,
-    packs: list[str] | None = None,
     admin_email: str | None = None,
     admin_password: str | None = None,
     whatsapp: dict | None = None,
@@ -153,8 +142,8 @@ async def onboard_tenant(
     "verify_token"}. Si se pasa, las credenciales se cifran y se persisten
     (se espera que el llamador las haya verificado contra Meta antes). El
     `phone_number_id` no puede pertenecer ya a OTRO tenant (evita ruteo
-    cross-tenant del webhook). `preset`: id de `core/presets/` (ADR-0110), se aplica
-    después de los `packs` sueltos; `plan` asigna el plan de la suscripción inicial
+    cross-tenant del webhook). `preset`: id de `core/presets/` (ADR-0110), solo siembra configuración;
+    el alta no elige habilidades (ADR-0206, HU-AOS-91). `plan` asigna el plan de la suscripción inicial
     (sin él queda free y un preset de plan mayor falla). `agentes_base=False` no crea el General ni el
     Coordinador: lo usan los journeys, que montan su propia release.
     Devuelve (tenant_id, pasos).
@@ -263,7 +252,7 @@ async def onboard_tenant(
                         tenant_id=tenant_id,
                         version="1.0.0",
                         is_active=True,
-                        spec=_default_spec_for(slug, tenant_id, packs),
+                        spec=_default_spec_for(slug, tenant_id),
                     )
                 )
                 steps.append("agent_spec creado")
@@ -327,18 +316,6 @@ async def onboard_tenant(
                 steps.append(f"plan {plan} asignado")
             await session.commit()
 
-    for pack in packs or []:
-        async with tenant_scope(tenant_id):
-            try:
-                await plugin_manager.save_config(pack, {})
-                await plugin_manager.activate(pack)
-            except (PluginConfigError, PluginError) as exc:
-                # Un pack que exige claves (p. ej. pack_payments) no rompe el alta:
-                # queda pendiente de configurar desde el panel (ADR-0110).
-                steps.append(f"pack {pack} pendiente de configurar ({exc})")
-                continue
-        steps.append(f"pack {pack} configurado y activo")
-
     # El Coordinador antes del preset (ADR-0192 §1): los agentes del preset lo necesitan.
     if agentes_base:
         steps.extend(await _agentes_base_al_alta(tenant_id, nuevo=negocio_nuevo))
@@ -348,15 +325,6 @@ async def onboard_tenant(
 
         resultado = await apply_preset(tenant_id, preset, sembrar_ejemplos=sembrar_ejemplos)
         steps.extend(resultado.pasos)
-
-    # Flujo de atención (ADR-0054, ADR-0109): el flujo de los packs se compone en
-    # runtime; ya no se copia al flow.json del negocio. Esto solo normaliza un
-    # archivo existente (quita copias viejas). Best-effort: no tumba el alta.
-    if packs:
-        try:
-            steps.extend(seed_tenant_flow(slug, list(packs)))
-        except Exception:
-            log.warning("tenant_flow_seed_failed", slug=slug, exc_info=True)
 
     onboarding.ensure_tenant_docs(slug, name, business_description)
     await onboarding.ensure_brand_voice(tenant_id, slug)

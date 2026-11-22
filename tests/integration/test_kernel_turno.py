@@ -279,7 +279,8 @@ async def test_el_reencolado_por_cupo_saturado_conserva_los_ids(tenant_setup, mo
 
 # ---------------------------------------------------------------- bloqueos sin LLM
 async def test_negocio_pausado_bloquea_sin_llm(monkeypatch) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.orchestrator import consumer

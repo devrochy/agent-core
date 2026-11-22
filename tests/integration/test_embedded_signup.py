@@ -153,7 +153,7 @@ def _instalar(monkeypatch, graph: GraphFalso) -> Entorno:
 
 
 async def _negocio(prefix: str = "es") -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq(prefix)
     tid, _ = await onboard_tenant(name=f"ES {slug}", slug=slug, persona={"tone": "cercano"}, admin_email=ADMIN_EMAIL)

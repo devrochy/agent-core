@@ -6,8 +6,8 @@
   solo para esa conexión (scope `connection`). 201 creada; 200 si ya estaba (idempotente).
 - `DELETE /api/v1/admin/skills/installations/{id}` — la quita (borrado lógico).
 
-Semántica (parte 1): el scope de negocio sigue siendo la habilitación de siempre
-(`/admin/plugins/{id}/action`, `spec.packs`); una conexión con instalaciones propias congela en
+Semántica: el scope de negocio son las habilidades instaladas en sus agentes activos (`packs_del_negocio`,
+ADR-0206 §5, HU-AOS-91); una conexión con instalaciones propias congela en
 su próxima release SOLO esas (reemplazo entero, sin merge). Precondición: el pack está
 habilitado en el negocio (409 `pack_not_enabled`). La instalación no lleva versión: la fija la
 release. Instalar o quitar aplica con la próxima release de la conexión.

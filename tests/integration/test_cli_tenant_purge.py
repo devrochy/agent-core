@@ -46,7 +46,8 @@ def _invoke_cli(args: list[str]):
 
 
 async def _onboard_suspendido(prefix: str) -> tuple[uuid.UUID, str]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.tenants import deactivate_tenant
 
     slug = f"{prefix}-{uuid.uuid4().hex[:6]}"
@@ -103,7 +104,7 @@ async def test_cli_create_y_purge_por_cli() -> None:
     slug = f"cli-alta-{uuid.uuid4().hex[:6]}"
     res = await asyncio.to_thread(
         _invoke_cli,
-        ["tenant", "create", "-y", "--name", f"Alta CLI {slug}", "--slug", slug, "--packs", "pack_commerce"],
+        ["tenant", "create", "-y", "--name", f"Alta CLI {slug}", "--slug", slug],
     )
     assert res.exit_code == 0, res.output
     assert "Seed de packs completado" in res.output
