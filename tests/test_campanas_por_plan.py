@@ -308,3 +308,54 @@ async def test_seguimiento_de_leads_solo_con_campanas_completas(monkeypatch, pla
         assert registros[0]["status"] == "skipped"
         assert registros[0]["acciones"] == 0
         assert "plan" in registros[0]["resumen"]
+
+
+# ---------------------------------------------------------------- seguimiento de cotizaciones
+
+
+@pytest.mark.parametrize(("plan_id", "sale"), [("free", False), ("basic", False), ("premium", True), ("empresarial", True), (None, True)])
+async def test_seguimiento_de_cotizaciones_solo_con_campanas_completas(monkeypatch, plan_id, sale: bool) -> None:
+    """Decisión del dueño (2026-11-22): el reenganche de cotizaciones de pack_commerce es de campañas completas, como
+    el de leads. En Free y Basic no se envía y la tarjeta queda `skipped` con el motivo; sin suscripción no se bloquea."""
+    from pack_commerce import jobs
+
+    corridos: list[uuid.UUID] = []
+    registros: list[dict] = []
+
+    async def _negocios():
+        return [TID]
+
+    async def _si(*_a, **_k):
+        return True
+
+    async def _no(*_a, **_k):
+        return False
+
+    async def _config(_tid, _kind):
+        return object()
+
+    async def _del_negocio(tid, _cfg):
+        corridos.append(tid)
+        return 3, 3
+
+    async def _registrar(tenant_id, cron, **kw):
+        registros.append({"tenant_id": tenant_id, "cron": cron, **kw})
+
+    monkeypatch.setattr("core.billing.service.get_active_subscription", _sub(plan_id))
+    monkeypatch.setattr(jobs, "_tenant_ids", _negocios)
+    monkeypatch.setattr(jobs, "debe_correr", _si)
+    monkeypatch.setattr(jobs.pausa_automatica, "negocio_pausado", _no)
+    monkeypatch.setattr(jobs, "_config_del_negocio", _config)
+    monkeypatch.setattr(jobs, "_follow_up_quotes_del_negocio", _del_negocio)
+    monkeypatch.setattr(jobs, "registrar", _registrar)
+    await jobs.follow_up_quotes()
+
+    assert len(registros) == 1
+    if sale:
+        assert corridos == [TID]
+        assert registros[0]["acciones"] == 3
+    else:
+        assert corridos == []
+        assert registros[0]["status"] == "skipped"
+        assert registros[0]["acciones"] == 0
+        assert "plan" in registros[0]["resumen"]
