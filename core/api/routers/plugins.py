@@ -165,16 +165,16 @@ async def plugin_action(
     `activate` y `deactivate` responden 410 `business_activation_retired`: ya no hay interruptor del negocio, la
     habilidad se instala o se quita en el agente que la usa (`/admin/agents/{id}/skills`).
     """
-    module = plugin_manager.get(plugin_id)
-    if module is None or module.id == CORE_PACK_ID:
-        raise ApiError.not_found("Habilidad no encontrada.")
-
+    # El 410 va antes de buscar el módulo: no dice qué ids existen en el proceso.
     if payload.action != "retry":
         raise ApiError(
             410,
             "business_activation_retired",
             "Las habilidades se instalan por agente: instálala en el agente que la usa.",
         )
+    module = plugin_manager.get(plugin_id)
+    if module is None or module.id == CORE_PACK_ID:
+        raise ApiError.not_found("Habilidad no encontrada.")
     await plugin_manager.reactivate_for_tenant(principal.tenant_id, plugin_id)
     return Response(status_code=204)
 

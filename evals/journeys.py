@@ -417,7 +417,7 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
             *contenido["playbooks"],
             *(
                 {"name": ref["name"], "description": ref.get("description", "")[:300]}
-                for ref in _PLAYBOOKS_DE_LA_CORRIDA.get(tenant_id, [])
+                for ref in _PLAYBOOKS_DE_LA_CORRIDA.pop(tenant_id, [])
                 if ref["name"] not in presentes
             ),
         ][:60]
