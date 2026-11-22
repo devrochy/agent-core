@@ -2,7 +2,7 @@
 
 Puro, sin base ni LLM: tarifario `v2`, créditos congelados por `kind`, costo con caché y la fila
 `tts`. La medición contra la base (sin cobro doble, `v1`/`v2` mezclados, playground, 409 de la
-ingesta) está en `tests/integration/test_hu_bill_21_todo_el_gasto.py`.
+ingesta) está en `tests/integration/test_hu_bill_21_todo_el_gasto.py` (este archivo tiene otro nombre para no chocar en la recolección).
 """
 
 from __future__ import annotations
