@@ -18,12 +18,10 @@ nuevo: las consultas siguen entrando por `(tenant_id, periodo)` y `(tenant_id, p
 como pagos del plan sin período y sus `credit_grants` sin forma de distinguirlas; no se agrega una guarda
 porque el rol de migraciones no ve filas con la RLS forzada y sin negocio en contexto).
 
-**Numeración:** 0156 con `down_revision = "0154"` (la `credit_grants` de HU-BILL-22 en esta rama). Se
-renumera al integrar; la cadena final es `0153` tts → `0154` nivel_ia → `0155` credit_grants → `0156` esta
-(ADR-0209 §6).
+**Numeración:** 0156, después de `0155_credit_grants` (HU-BILL-22), como fija ADR-0209 §6: `0153` tts → `0154` nivel_ia → `0155` credit_grants → `0156` esta.
 
 Revision ID: 0156
-Revises: 0154
+Revises: 0155
 Create Date: 2026-11-22
 """
 
@@ -32,7 +30,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0156"
-down_revision = "0154"
+down_revision = "0155"
 branch_labels = None
 depends_on = None
 
