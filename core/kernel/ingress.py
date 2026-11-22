@@ -103,7 +103,7 @@ async def politicas_del_turno(conversation: Any, spec: Any) -> Bloqueo | None:
         if decision.salida == "colchon":
             log.info("turn_credit_buffer", tenant_id=str(tenant_id), conversation_id=str(conversation.id))
         elif decision.salida == "agotado":
-            return await _sin_credito(conversation, spec, decision)
+            return await _sin_credito(conversation, spec, decision, tenant_id)
 
     # Presupuesto agotado (ADR-0015): no se gasta más LLM en esta conversación
     # hasta que un admin suba el presupuesto o lo resetee.
@@ -113,7 +113,7 @@ async def politicas_del_turno(conversation: Any, spec: Any) -> Bloqueo | None:
     return None
 
 
-async def _sin_credito(conversation: Any, spec: Any, decision: Any) -> Bloqueo:
+async def _sin_credito(conversation: Any, spec: Any, decision: Any, tenant_id: Any) -> Bloqueo:
     """Sin saldo y sin colchón, sin LLM. Nada queda guardado en la conversación por el corte (solo la
     decisión del turno): cuando vuelve el saldo, el siguiente mensaje se atiende solo.
 
@@ -123,7 +123,7 @@ async def _sin_credito(conversation: Any, spec: Any, decision: Any) -> Bloqueo:
       El playground (canal `test`) va por aquí: ahí `escalate` no escala."""
     from core.shared.test_mode import is_test_channel
 
-    tenant_id = conversation.tenant_id
+    # Una sola fuente del negocio: el `tenant_scope` del turno, el mismo con el que se decidió.
     log.warning(
         "turn_quota_exceeded",
         tenant_id=str(tenant_id),
