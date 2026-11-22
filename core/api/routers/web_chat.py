@@ -225,8 +225,8 @@ async def _marca_propia(tenant_id: uuid.UUID) -> bool:
 
     try:
         return await marca_propia_del_negocio(tenant_id)
-    except Exception:
-        log.warning("web_chat_marca_propia_error", tenant_id=str(tenant_id), exc_info=True)
+    except Exception as exc:  # ruta pública: sin traza en el log
+        log.warning("web_chat_marca_propia_error", tenant_id=str(tenant_id), error=type(exc).__name__)
         return False
 
 
