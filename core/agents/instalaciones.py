@@ -125,12 +125,14 @@ async def instaladas_en_conexion(tenant_id: uuid.UUID, connection_id: uuid.UUID)
 
 
 async def listar(tenant_id: uuid.UUID, connection_id: uuid.UUID | None = None) -> list[InstalacionVista]:
-    """Instalaciones vivas del negocio (sin la `core` de secretos), opcionalmente de una conexión."""
+    """Instalaciones vivas del negocio y de sus conexiones (sin la `core` de secretos), opcionalmente de una
+    conexión. Las de agente (scope `agent`, ADR-0190) no van aquí: las lista `/admin/agents/{id}/skills`."""
     _exigir_scope(tenant_id)
     query = (
         select(PackInstallationRecord)
         .where(
             PackInstallationRecord.tenant_id == tenant_id,
+            PackInstallationRecord.scope.in_(("tenant", "connection")),
             PackInstallationRecord.pack_id != CORE_INSTALLATION_PACK,
             PackInstallationRecord.deleted_at.is_(None),
         )

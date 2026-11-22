@@ -50,10 +50,10 @@ async def _agentes(tid: uuid.UUID) -> dict[str, str]:
 
 
 async def test_el_alta_crea_solo_el_coordinador_con_su_version() -> None:
-    from _habilidades import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("hu68")
-    tid, pasos = await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+    tid, pasos = await onboard_tenant(name=f"HU68 {slug}", slug=slug, sembrar_ejemplos=False)
 
     assert await _agentes(tid) == {"coordinador": "core"}
     versiones = await _sql(tid, "select a.key, v.contract from agent_versions v join agents a on a.id = v.agent_id")
@@ -64,11 +64,11 @@ async def test_el_alta_crea_solo_el_coordinador_con_su_version() -> None:
 
 async def test_sin_agentes_base_el_alta_no_crea_agentes_ni_runtime() -> None:
     """Los journeys del gate montan su propio runtime: el alta con `agentes_base=False` los deja en paz."""
-    from _habilidades import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("hu53-sin")
     tid, pasos = await onboard_tenant(
-        name=f"HU53 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False, agentes_base=False
+        name=f"HU53 {slug}", slug=slug, sembrar_ejemplos=False, agentes_base=False
     )
 
     assert await _agentes(tid) == {}
@@ -76,11 +76,11 @@ async def test_sin_agentes_base_el_alta_no_crea_agentes_ni_runtime() -> None:
 
 
 async def test_repetir_el_alta_no_duplica_el_coordinador() -> None:
-    from _habilidades import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("hu68")
-    tid, _ = await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
-    await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False, tenant_id=tid)
+    tid, _ = await onboard_tenant(name=f"HU68 {slug}", slug=slug, sembrar_ejemplos=False)
+    await onboard_tenant(name=f"HU68 {slug}", slug=slug, sembrar_ejemplos=False, tenant_id=tid)
 
     assert await _agentes(tid) == {"coordinador": "core"}
     assert await _sql(tid, "select count(*) from agent_versions") == [(1,)]
@@ -88,10 +88,10 @@ async def test_repetir_el_alta_no_duplica_el_coordinador() -> None:
 
 # ------------------------------------------------------------------ alta del negocio nuevo (P-34)
 async def test_el_alta_no_tiene_paso_de_runtime() -> None:
-    from _habilidades import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("hu68")
-    tid, pasos = await onboard_tenant(name=f"HU68 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)
+    tid, pasos = await onboard_tenant(name=f"HU68 {slug}", slug=slug, sembrar_ejemplos=False)
 
     assert tid is not None
     assert not any(p.startswith("runtime v3") for p in pasos)
@@ -100,8 +100,7 @@ async def test_el_alta_no_tiene_paso_de_runtime() -> None:
 async def test_la_primera_conexion_nace_con_el_coordinador_y_su_release() -> None:
     """ADR-0205 §1–§2: ni el alta con preset ni la primera conexión crean especialistas; el handler del outbox
     construye la release 1 solo con el Coordinador, que atiende hasta que el dueño cree su agente."""
-    from _habilidades import onboard_tenant
-
+    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.events.core_handlers import on_connection_release_1
     from core.gateway import chat_web_conexion

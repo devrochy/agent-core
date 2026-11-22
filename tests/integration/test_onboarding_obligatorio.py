@@ -38,7 +38,6 @@ pytestmark = [
     ),
 ]
 
-PACKS = ["pack_commerce"]
 PASSWORD = "clave-segura-123"
 
 
@@ -86,10 +85,10 @@ def _ruteo_y_corte(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _negocio() -> uuid.UUID:
-    from _habilidades import onboard_tenant
+    from core.alta_negocio import onboard_tenant
 
     slug = uniq("hush10")
-    tid, _ = await onboard_tenant(name=f"HUSH10 {slug}", slug=slug, packs=PACKS, sembrar_ejemplos=False, plan="premium")
+    tid, _ = await onboard_tenant(name=f"HUSH10 {slug}", slug=slug, sembrar_ejemplos=False, plan="premium")
     return tid
 
 
