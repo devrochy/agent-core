@@ -195,9 +195,9 @@ async def test_el_turno_se_corta_con_el_credito_del_mes_agotado() -> None:
 
     tid = await _negocio()
     await _filas(tid, _fila(tid, credits="1499.0"))
-    assert await turn_quota_metric(tid) is None
+    assert (await turn_quota_metric(tid, uuid.uuid4())).salida == "normal"
     await _filas(tid, _fila(tid, credits="1.0"))
-    assert await turn_quota_metric(tid) == "creditos"
+    assert (await turn_quota_metric(tid, uuid.uuid4())).salida == "agotado"
 
 
 async def test_el_turno_no_se_corta_con_el_interruptor_apagado(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,7 +207,7 @@ async def test_el_turno_no_se_corta_con_el_interruptor_apagado(monkeypatch: pyte
     tid = await _negocio()
     await _filas(tid, _fila(tid, credits="5000.0"))
     monkeypatch.setattr(get_settings(), "billing_bloquear_por_creditos", False)
-    assert await turn_quota_metric(tid) is None
+    assert (await turn_quota_metric(tid, uuid.uuid4())).salida == "normal"
 
 
 async def test_el_credito_agotado_de_otro_negocio_no_corta_el_turno() -> None:
@@ -216,5 +216,5 @@ async def test_el_credito_agotado_de_otro_negocio_no_corta_el_turno() -> None:
     otro = await _negocio()
     await _filas(otro, _fila(otro, credits="5000.0"))
     tid = await _negocio()
-    assert await turn_quota_metric(otro) == "creditos"
-    assert await turn_quota_metric(tid) is None
+    assert (await turn_quota_metric(otro, uuid.uuid4())).salida == "agotado"
+    assert (await turn_quota_metric(tid, uuid.uuid4())).salida == "normal"

@@ -21,7 +21,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.billing.metrics import count_metric, get_metric
 from core.billing.plans import PACK_LIMIT_KEYS, get_plan
@@ -29,6 +29,9 @@ from core.billing.service import get_active_subscription
 from core.db.models import Tenant
 from core.shared.logger import get_logger
 from core.tenants import cargar_tenant_activo
+
+if TYPE_CHECKING:
+    from core.billing.creditos import DecisionDelTurno
 
 log = get_logger(__name__)
 
@@ -210,19 +213,19 @@ async def enforce_pack_growth(
         raise QuotaExceeded(key, math.ceil(usado), limite)
 
 
-async def turn_quota_metric(tenant_id: uuid.UUID) -> str | None:
-    """`"creditos"` si el negocio ya consumió el crédito del mes del ciclo, o None (HU-BILL-18).
+async def turn_quota_metric(tenant_id: uuid.UUID, conversation_id: uuid.UUID) -> DecisionDelTurno:
+    """Decisión del turno con el saldo del negocio: `normal`, `colchon` o `agotado` (ADR-0208 §2-6).
 
-    Bloqueo básico entre HU-BILL-18 y HU-BILL-20 (ADR-0208 §2-3): sin colchón, sin avisos y sin
-    escalar. El cálculo es el de `creditos.alcanza` sin el lock (`creditos.credito_agotado`); con
-    `BILLING_BLOQUEAR_POR_CREDITOS` apagado nunca bloquea."""
-    from core.billing.creditos import credito_agotado
+    Lectura sin lock consultivo (`creditos.decidir_turno`). La conversación decide si está abierta
+    (colchón) con el episodio releído, así que se llama después de `fijar_release_del_turno`. Con
+    `BILLING_BLOQUEAR_POR_CREDITOS` apagado siempre es `normal`."""
+    from core.billing.creditos import decidir_turno
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            return "creditos" if await credito_agotado(session, tenant_id) else None
+            return await decidir_turno(session, tenant_id, conversation_id)
 
 
 @dataclass(frozen=True)

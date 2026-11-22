@@ -10,7 +10,8 @@ textos que antes de mudarlas. Cada bloqueo deja su decisión en `core_decisions`
 - **Al disparar un turno diferido** (`conexion_pausada`, la llama el debounce): la conexión se
   pausó después de agendar el turno.
 - **En el preámbulo del loop** (`conversacion_bloqueada`, `politicas_del_turno`): conversación
-  pausada o escalada, cuota del período y presupuesto agotado.
+  pausada o escalada, saldo de créditos (con el colchón de las conversaciones abiertas, ADR-0208) y
+  presupuesto agotado.
 
 Lo que no es política se queda en el orquestador: el negocio no operativo y la cuota de altas
 descartan el inbound antes de que haya conversación (no hay turno ni fila), y la velocidad de
@@ -38,13 +39,24 @@ from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
-# Se agotó una cuota del período (mensajes o costo LLM). El texto real vive en
+# El negocio no tiene saldo de créditos y la conversación es nueva (ADR-0208 §3). El texto real vive en
 # core/playbooks/respuestas.md (`## quota_exhausted`); esto es el fallback
 # determinístico si el playbook no está disponible (mismo patrón que FALLBACK_REPLY).
 QUOTA_EXHAUSTED_REPLY = (
     "Por ahora no puedo seguir atendiendo esta conversación. "
     "Un asesor humano puede continuar la atención."
 )
+# Se agotó también el colchón de una conversación abierta y pasa a una persona (ADR-0208 §6). El texto
+# real vive en core/playbooks/respuestas.md (`## creditos_agotados`); esto es solo el fallback.
+CREDITOS_AGOTADOS_REPLY = (
+    "En este momento no puedo seguir atendiendo esta conversación. "
+    "Ya le avisé a una persona de nuestro equipo para que continúe contigo por este mismo chat."
+)
+# Resumen fijo de la escalación por créditos: sin contenido del cliente.
+RESUMEN_CREDITOS_AGOTADOS = "El negocio agotó el crédito del ciclo y la reserva de las conversaciones abiertas."
+# `quota_exhausted` se responde una vez por episodio (ADR-0208 §3). La llave lleva el inicio del episodio,
+# así que un episodio nuevo vuelve a avisar; el TTL solo limpia Redis.
+AVISO_SIN_CREDITO_TTL_S = 7 * 24 * 60 * 60
 
 
 @dataclass(frozen=True)
@@ -52,6 +64,8 @@ class Bloqueo:
     motivo: str
     # Texto de cierre que se responde (None = el turno no responde nada).
     texto: str | None = None
+    # El turno ya escaló a una persona: egress no vuelve a escalar si el envío falla.
+    escalado: bool = False
 
 
 async def conversacion_bloqueada(conversation: Any, customer: Any) -> bool:
@@ -75,26 +89,21 @@ async def conversacion_bloqueada(conversation: Any, customer: Any) -> bool:
 
 
 async def politicas_del_turno(conversation: Any, spec: Any) -> Bloqueo | None:
-    """Cuota del período y presupuesto de la conversación, antes de gastar LLM."""
-    # Crédito del mes (D-79, ADR-0208 §2-3, HU-BILL-18): el crédito es el único tope de consumo.
-    # Si el negocio ya consumió el crédito del mes del ciclo, se corta el turno antes de gastar
-    # LLM y se responde `quota_exhausted`. Colchón, avisos y escalación llegan en HU-BILL-20. El
-    # tope de clientes (estructural) se aplica en el alta del consumer.
+    """Saldo de créditos y presupuesto de la conversación, antes de gastar LLM. Corre después de
+    `fijar_release_del_turno`: la decisión relee el episodio que esa función abrió."""
+    # Crédito del ciclo (D-79, ADR-0208 §2-7): el crédito es el único tope de consumo. El tope de
+    # clientes (estructural) se aplica en el alta del consumer.
     tenant_id = get_current_tenant_id()
     if tenant_id is not None:
+        from core.billing.avisos_de_consumo import avisar_consumo
         from core.billing.enforcement import turn_quota_metric
 
-        blocked = await turn_quota_metric(tenant_id)
-        if blocked is not None:
-            log.warning(
-                "turn_quota_exceeded",
-                tenant_id=str(tenant_id),
-                metric=blocked,
-                conversation_id=str(conversation.id),
-            )
-            await bloquear(conversation, "quota")
-            closure = await load_response(spec, "quota_exhausted") or QUOTA_EXHAUSTED_REPLY
-            return Bloqueo("quota", closure)
+        decision = await turn_quota_metric(tenant_id, conversation.id)
+        await avisar_consumo(tenant_id, decision)
+        if decision.salida == "colchon":
+            log.info("turn_credit_buffer", tenant_id=str(tenant_id), conversation_id=str(conversation.id))
+        elif decision.salida == "agotado":
+            return await _sin_credito(conversation, spec, decision)
 
     # Presupuesto agotado (ADR-0015): no se gasta más LLM en esta conversación
     # hasta que un admin suba el presupuesto o lo resetee.
@@ -102,6 +111,75 @@ async def politicas_del_turno(conversation: Any, spec: Any) -> Bloqueo | None:
         await bloquear(conversation, "budget", status="silent")
         return Bloqueo("budget")
     return None
+
+
+async def _sin_credito(conversation: Any, spec: Any, decision: Any) -> Bloqueo:
+    """Sin saldo y sin colchón, sin LLM. Nada queda guardado en la conversación por el corte (solo la
+    decisión del turno): cuando vuelve el saldo, el siguiente mensaje se atiende solo.
+
+    - Conversación abierta (colchón agotado, ADR-0208 §6): pasa a una persona por el camino sin modelo
+      del ingreso. Queda escalada hasta que una persona la devuelva, aunque llegue saldo.
+    - Conversación nueva (§3): `quota_exhausted` una vez por episodio; los mensajes siguientes, en silencio.
+      El playground (canal `test`) va por aquí: ahí `escalate` no escala."""
+    from core.shared.test_mode import is_test_channel
+
+    tenant_id = conversation.tenant_id
+    log.warning(
+        "turn_quota_exceeded",
+        tenant_id=str(tenant_id),
+        metric="creditos",
+        conversation_id=str(conversation.id),
+        abierta=decision.abierta,
+    )
+    if decision.abierta and not is_test_channel(getattr(conversation, "channel", None)):
+        # Import en la llamada: los tests parchean `core.orchestrator.escalation.escalate`.
+        from core.orchestrator.escalation import escalate
+
+        # La decisión va antes que cualquier efecto (el `turn_id` de la auditoría sale de ella).
+        await bloquear(conversation, "quota", status="escalated")
+        await escalate(conversation.id, reason="creditos_agotados", summary=RESUMEN_CREDITOS_AGOTADOS)
+        marcar_escalado()
+        texto = await load_response(spec, "creditos_agotados") or CREDITOS_AGOTADOS_REPLY
+        return Bloqueo("quota", texto, escalado=True)
+
+    llave = _llave_sin_credito(tenant_id, conversation.id, decision.episodio)
+    if not await _tomar_aviso(llave, conversation.id):
+        await bloquear(conversation, "quota", status="silent")
+        return Bloqueo("quota")
+    try:
+        await bloquear(conversation, "quota")
+        texto = await load_response(spec, "quota_exhausted") or QUOTA_EXHAUSTED_REPLY
+    except Exception:
+        # El reintento del consumer no debe encontrar la llave tomada y callar.
+        await _soltar_aviso(llave, conversation.id)
+        raise
+    return Bloqueo("quota", texto)
+
+
+def _llave_sin_credito(tenant_id: Any, conversation_id: Any, episodio: Any) -> str:
+    inicio = int(episodio.timestamp()) if episodio is not None else 0
+    return f"creditos:sin_saldo:{tenant_id}:{conversation_id}:{inicio}"
+
+
+async def _tomar_aviso(llave: str, conversation_id: Any) -> bool:
+    """True si toca responder `quota_exhausted` en este episodio (`SET NX EX`, como `primer_aviso` de
+    `fuera_de_horario`). Si Redis no responde se responde igual: el mal menor es repetir el aviso."""
+    from core.memory.working import get_redis
+
+    try:
+        return bool(await get_redis().set(llave, "1", nx=True, ex=AVISO_SIN_CREDITO_TTL_S))
+    except Exception as exc:
+        log.warning("sin_credito_aviso_sin_redis", conversation_id=str(conversation_id), error=type(exc).__name__)
+        return True
+
+
+async def _soltar_aviso(llave: str, conversation_id: Any) -> None:
+    from core.memory.working import get_redis
+
+    try:
+        await get_redis().delete(llave)
+    except Exception as exc:
+        log.warning("sin_credito_soltar_aviso_fallo", conversation_id=str(conversation_id), error=type(exc).__name__)
 
 
 # ------------------------------------------------------------------ políticas de entrada

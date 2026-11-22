@@ -5218,6 +5218,7 @@
                     "envio_fallido",
                     "sin_resolver",
                     "limite_iteraciones",
+                    "creditos_agotados",
                     "otro"
                   ],
                   "type": "string"
@@ -48480,6 +48481,7 @@
               "envio_fallido",
               "sin_resolver",
               "limite_iteraciones",
+              "creditos_agotados",
               "otro"
             ],
             "title": "Reason Code"
@@ -59857,6 +59859,7 @@
               "envio_fallido",
               "sin_resolver",
               "limite_iteraciones",
+              "creditos_agotados",
               "otro"
             ],
             "title": "Reason Code",

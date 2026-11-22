@@ -353,10 +353,13 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         log.warning("turno_sin_agente_en_foco", conversation_id=str(conversation.id))
         return None
 
-    # Cuota del período (ADR-0045) y presupuesto agotado (ADR-0015): políticas del kernel.
+    # Saldo de créditos con el colchón de las conversaciones abiertas (ADR-0208) y presupuesto agotado
+    # (ADR-0015): políticas del kernel. Van después de fijar la release: el episodio ya está abierto.
     bloqueo = await politicas_del_turno(conversation, spec)
     if bloqueo is not None:
-        return TurnResult(text=bloqueo.texto) if bloqueo.texto is not None else None
+        if bloqueo.texto is None:
+            return None
+        return TurnResult(text=bloqueo.texto, escalated=bloqueo.escalado)
 
     # ---------------- 1. Memoria y contexto
     history = await _load_history(conversation_id)
