@@ -3,7 +3,8 @@
 `POST /api/v1/public/web-chat/{key}/messages` — un visitante envía un mensaje.
 `GET  /api/v1/public/web-chat/{key}/messages?after=<iso|seq>` — el widget
 recoge la respuesta del asistente por polling.
-`GET  /api/v1/public/web-chat/{key}/config` — config no sensible para el widget.
+`GET  /api/v1/public/web-chat/{key}/config` — config no sensible para el widget (incluye
+`marca_propia`: con `true` el widget no muestra «SolversHub», HU-BILL-25).
 
 Seguridad:
 - La `key` es pública (va en el fragmento del widget) y resuelve el tenant.
@@ -203,7 +204,7 @@ async def web_chat_config(key: str) -> JSONResponse:
     found = await _resolve_by_key(key)
     if found is None:
         return JSONResponse({"error": "unknown_key"}, status_code=404)
-    _tenant_id, config = found
+    tenant_id, config = found
     if not config.get("enabled"):
         return JSONResponse({"error": "disabled"}, status_code=403)
     return JSONResponse(
@@ -211,8 +212,22 @@ async def web_chat_config(key: str) -> JSONResponse:
             "enabled": True,
             "allowed_origins": list(config.get("allowed_origins", [])),
             "turnstile": bool(config.get("turnstile") or config.get("turnstile_secret")),
+            "marca_propia": await _marca_propia(tenant_id),
         }
     )
+
+
+async def _marca_propia(tenant_id: uuid.UUID) -> bool:
+    """¿El plan del negocio quita «SolversHub» del widget? (`features.marca_propia`, HU-BILL-25).
+
+    Falla hacia mostrar la marca: el billing nunca tumba el widget."""
+    from core.billing.features_del_plan import marca_propia_del_negocio
+
+    try:
+        return await marca_propia_del_negocio(tenant_id)
+    except Exception as exc:  # ruta pública: sin traza en el log
+        log.warning("web_chat_marca_propia_error", tenant_id=str(tenant_id), error=type(exc).__name__)
+        return False
 
 
 @router.post("/{key}/messages")

@@ -15,7 +15,8 @@ registro de métricas. Lo que queda en `limits` son topes estructurales, que sol
 `features` (ADR-0208 §9, ADR-0209): `canales` lista con el vocabulario de
 `ChannelConnection.channel` todos los canales conversacionales del plan; `nivel_ia`, `byok`,
 `acumulable_meses`, `descuento_recarga` (`None` = el plan no compra recargas), `marca_propia`,
-`historial_dias` (`None` = ilimitado), `campanas` y `soporte`.
+`historial_dias` (`None` = ilimitado; solo oculta en el panel, HU-BILL-25), `exportar` (CSV de
+conversaciones, HU-BILL-25), `campanas` y `soporte`.
 """
 
 from __future__ import annotations
@@ -96,6 +97,7 @@ PLANS: tuple[Plan, ...] = (
             "descuento_recarga": None,
             "marca_propia": False,
             "historial_dias": 30,
+            "exportar": False,
             "campanas": "ninguna",
             "soporte": "comunidad",
         },
@@ -123,6 +125,7 @@ PLANS: tuple[Plan, ...] = (
             "descuento_recarga": 0,
             "marca_propia": False,
             "historial_dias": 90,
+            "exportar": False,
             "campanas": "recordatorios",
             "soporte": "email",
         },
@@ -150,6 +153,7 @@ PLANS: tuple[Plan, ...] = (
             "descuento_recarga": 15,
             "marca_propia": True,
             "historial_dias": 365,
+            "exportar": True,
             "campanas": "completas",
             "soporte": "prioritario",
         },
@@ -177,6 +181,7 @@ PLANS: tuple[Plan, ...] = (
             "descuento_recarga": 25,
             "marca_propia": True,
             "historial_dias": None,
+            "exportar": True,
             "campanas": "completas",
             "soporte": "dedicado",
         },
