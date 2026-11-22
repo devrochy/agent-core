@@ -129,8 +129,9 @@ def _verificar_listo(datos: dict[str, Any]) -> None:
     chat = aos["chat_web"]
     assert chat["activo"] and chat["clave"] and chat["enlace"] == f"{LANDING}/w/{chat['clave']}"
     keys = {a["key"] for a in aos["agentes"]}
-    assert {"coordinador", "ventas", "agenda"} <= keys, keys
-    assert "cobranza" not in keys  # la crea el tester desde el editor
+    # Cobranza también: una habilidad es del negocio solo si un agente la tiene (HU-AOS-91), y la app de campo del
+    # gestor la necesita.
+    assert {"coordinador", "ventas", "agenda", "cobranza"} <= keys, keys
     assert [a["key"] for a in aos["agentes"] if a["por_defecto"]] == ["ventas"]
     # La pestaña Datos del panel lo muestra en `contenido`, sin cambios en el panel.
     seccion = next(c for c in datos["contenido"] if c["habilidad"] == "Agent OS")
