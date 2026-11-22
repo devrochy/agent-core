@@ -44,6 +44,7 @@ MotivoCodigo = Literal[
     "envio_fallido",
     "sin_resolver",
     "limite_iteraciones",
+    "creditos_agotados",
     # Lo que no encaja en ninguno (incluye el texto libre de antes de HU-UX-17).
     "otro",
 ]
@@ -65,6 +66,7 @@ ETIQUETAS: dict[str, str] = {
     "envio_fallido": "No se pudo enviar el mensaje",
     "sin_resolver": "Varios turnos sin resolver",
     "limite_iteraciones": "El asistente no llegó a una respuesta",
+    "creditos_agotados": "Se agotó el crédito del plan",
     "otro": "Otro",
 }
 
@@ -77,6 +79,8 @@ _EXACTOS: dict[str, str] = {
     "send_failed": "envio_fallido",
     "turns_unresolved": "sin_resolver",
     "max_iterations": "limite_iteraciones",
+    # Colchón agotado en una conversación abierta (ADR-0208 §6).
+    "creditos_agotados": "creditos_agotados",
 }
 
 # Prefijos que guardan los guardrails si su `reason` llega crudo a la escalación

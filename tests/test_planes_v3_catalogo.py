@@ -2,7 +2,7 @@
 
 - el catálogo v3: precios, créditos, límites y features de cada plan;
 - ninguna métrica retirada queda en el registro;
-- el turno se corta solo por el crédito del mes (`turn_quota_metric` → `"creditos"`), y no con la bandera apagada;
+- el turno se corta solo por el crédito del mes (`turn_quota_metric` → `agotado`), y no con la bandera apagada;
 - el alta de un cliente sigue bloqueándose al tope estructural de `clientes`;
 - un audio o una imagen entrante ya no se descarta por cuota.
 """
@@ -183,7 +183,7 @@ def credito(monkeypatch):  # type: ignore[no-untyped-def]
     """Suscripción y consumo falsos; `get_session` devuelve una sesión que falla si alguien toma el lock."""
     from core.billing import creditos, enforcement
 
-    estado = {"overview": _overview(), "usado": Decimal(0), "sql": []}
+    estado = {"overview": _overview(), "usado": Decimal(0), "sql": [], "abierta": (False, None)}
 
     async def _sub(_tid):  # type: ignore[no-untyped-def]
         return estado["overview"]
@@ -200,18 +200,22 @@ def credito(monkeypatch):  # type: ignore[no-untyped-def]
     async def _get_session():  # type: ignore[no-untyped-def]
         yield _Sesion()
 
+    async def _abierta(_session, _tid, _cid):  # type: ignore[no-untyped-def]
+        return estado["abierta"]
+
     monkeypatch.setattr(enforcement, "subscription_overview", _sub)
     monkeypatch.setattr(creditos, "medir_creditos", _medir)
+    monkeypatch.setattr(creditos, "conversacion_abierta", _abierta)
     monkeypatch.setattr("core.db.session.get_session", _get_session)
     return estado
 
 
-@pytest.mark.parametrize(("usado", "esperado"), [(11_999.9, None), (12_000, "creditos"), (15_000, "creditos")])
+@pytest.mark.parametrize(("usado", "esperado"), [(11_999.9, "normal"), (12_000, "agotado"), (15_000, "agotado")])
 async def test_turn_quota_metric_corta_con_el_credito_del_mes_agotado(credito, usado, esperado) -> None:
     from core.billing.enforcement import turn_quota_metric
 
     credito["usado"] = Decimal(str(usado))
-    assert await turn_quota_metric(uuid.uuid4()) == esperado
+    assert (await turn_quota_metric(uuid.uuid4(), uuid.uuid4())).salida == esperado
     # Sin lock consultivo en el turno (ADR-0208 §2).
     assert not any("advisory" in sql for sql in credito["sql"])
 
@@ -231,7 +235,7 @@ async def test_sin_suscripcion_o_sin_credito_en_el_plan_no_corta(credito, overvi
     else:
         sin_inicio = _overview()
         credito["overview"] = sin_inicio.__class__(**{**sin_inicio.__dict__, "period_start": None})
-    assert await turn_quota_metric(uuid.uuid4()) is None
+    assert (await turn_quota_metric(uuid.uuid4(), uuid.uuid4())).salida == "normal"
 
 
 async def test_con_la_bandera_apagada_no_corta(credito, monkeypatch) -> None:
@@ -240,19 +244,20 @@ async def test_con_la_bandera_apagada_no_corta(credito, monkeypatch) -> None:
 
     monkeypatch.setattr(get_settings(), "billing_bloquear_por_creditos", False)
     credito["usado"] = Decimal(50_000)
-    assert await turn_quota_metric(uuid.uuid4()) is None
+    credito["abierta"] = (True, datetime.now(UTC))
+    assert (await turn_quota_metric(uuid.uuid4(), uuid.uuid4())).salida == "normal"
 
 
-async def test_credito_agotado_exige_el_tenant_scope(credito) -> None:
-    from core.billing.creditos import credito_agotado
+async def test_decidir_turno_exige_el_tenant_scope(credito) -> None:
+    from core.billing.creditos import decidir_turno
 
     with pytest.raises(RuntimeError, match="tenant_scope"):
-        await credito_agotado(SimpleNamespace(), uuid.uuid4())
+        await decidir_turno(SimpleNamespace(), uuid.uuid4(), uuid.uuid4())
 
 
-async def test_alcanza_y_credito_agotado_comparten_el_saldo(credito) -> None:
+async def test_alcanza_y_decidir_turno_comparten_el_saldo(credito) -> None:
     """`alcanza` mide lo mismo (y sí toma el lock): con el crédito agotado, una acción de 1 crédito no alcanza."""
-    from core.billing.creditos import alcanza, credito_agotado
+    from core.billing.creditos import alcanza, decidir_turno
     from core.billing.enforcement import QuotaExceeded
     from core.shared.tenant import tenant_scope
 
@@ -264,7 +269,7 @@ async def test_alcanza_y_credito_agotado_comparten_el_saldo(credito) -> None:
             credito["sql"].append(str(stmt))
 
     async with tenant_scope(tid):
-        assert await credito_agotado(_Sesion(), tid) is True
+        assert (await decidir_turno(_Sesion(), tid, uuid.uuid4())).salida == "agotado"
         assert not any("advisory" in sql for sql in credito["sql"])
         with pytest.raises(QuotaExceeded) as exc:
             await alcanza(_Sesion(), tid, 1)

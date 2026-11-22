@@ -16,7 +16,8 @@ sin contador paralelo):
 
 Acciones de IA cotizadas (HU-BILL-16, ADR-0194): `cotizar` dice cuánto cuesta antes de gastar,
 `alcanza` verifica el saldo del mes y `imagen_ya_cobrada` evita cobrar dos veces la misma foto.
-`credito_agotado` es la lectura del turno (HU-BILL-18): el mismo cálculo, sin lock ni excepción.
+`decidir_turno` es la lectura del turno (HU-BILL-18/20): el mismo cálculo, sin lock ni excepción, más el
+colchón de las conversaciones abiertas (ADR-0208 §4-5).
 
 Se excluye el playground del panel (conversaciones del canal `test`): una prueba del panel no
 consume el crédito del negocio.
@@ -29,6 +30,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
+from typing import Literal
 
 from sqlalchemy import and_, case, func, literal, or_, select, text
 
@@ -236,6 +238,10 @@ def cotizar(concepto: Concepto, unidades: int, key_mode: KeyMode) -> int:
 class SaldoDeCreditos:
     usado: Decimal
     limite: int | None  # None = el plan no define crédito (o no hay suscripción): no se limita
+    # Ventana del ciclo medida (`ventana_mensual`); None cuando no se limita. El inicio fija la clave
+    # idempotente de los avisos de consumo (HU-BILL-20).
+    inicio: datetime | None = None
+    fin: datetime | None = None
 
     @property
     def disponible(self) -> Decimal | None:
@@ -293,28 +299,92 @@ async def alcanza(
     raise QuotaExceeded("creditos", creditos_enteros(saldo.usado), saldo.limite)
 
 
-async def credito_agotado(
+# Colchón para las conversaciones abiertas (ADR-0208 §5, D-79 con P-06 opción A): el 5 % del crédito
+# mensual del plan por ciclo. Se deriva, sin columna ni contador: colchón usado = max(0, consumido − saldo).
+# La plataforma lo absorbe (ADR-0209 §3). Un plan sin crédito mensual no tiene colchón.
+COLCHON_FRACCION = Decimal("0.05")
+
+SalidaDelTurno = Literal["normal", "colchon", "agotado"]
+
+
+@dataclass(frozen=True)
+class DecisionDelTurno:
+    """Qué hace el turno con el saldo del negocio (ADR-0208 §2-6).
+
+    - `normal`: hay saldo (o no se limita, o la bandera está apagada).
+    - `colchon`: sin saldo, pero la conversación está abierta y el colchón alcanza: se atiende.
+    - `agotado`: sin saldo. Con `abierta` el colchón también se agotó (pasa a una persona); sin ella
+      es una conversación nueva (`quota_exhausted` una vez por episodio).
+
+    `episodio`: inicio del episodio vigente releído en la decisión (None si no se miró o no hay)."""
+
+    salida: SalidaDelTurno
+    saldo: SaldoDeCreditos
+    abierta: bool = False
+    episodio: datetime | None = None
+    colchon_limite: Decimal = Decimal(0)
+
+    @property
+    def colchon_usado(self) -> Decimal:
+        if self.saldo.limite is None:
+            return Decimal(0)
+        return max(Decimal(0), self.saldo.usado - Decimal(self.saldo.limite))
+
+
+def tamano_del_colchon(limite: int | None) -> Decimal:
+    """Créditos del colchón del ciclo: el 5 % del crédito mensual; 0 sin crédito mensual."""
+    return Decimal(0) if not limite else Decimal(limite) * COLCHON_FRACCION
+
+
+async def conversacion_abierta(
     session,  # type: ignore[no-untyped-def]
     tenant_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+) -> tuple[bool, datetime | None]:
+    """`(abierta, inicio del episodio)` de la conversación (ADR-0208 §4).
+
+    Abierta = episodio vigente (`conversations.episode_started_at`) con al menos una fila `turn` del
+    ledger de esa conversación desde su inicio y con tokens (mismo criterio que `hubo_llamada`): un turno
+    bloqueado escribe 0 tokens y no abre la conversación. El inicio se **relee** aquí, después de que
+    `fijar_release_del_turno` abrió el episodio: la fila `conversation` del loop lo trae desactualizado."""
+    _exigir_scope(tenant_id)
+    fila = (
+        await session.execute(
+            text(
+                "SELECT c.episode_started_at, EXISTS ("
+                "  SELECT 1 FROM usage_ledger u "
+                "  WHERE u.tenant_id = c.tenant_id AND u.conversation_id = c.id AND u.kind = 'turn' "
+                "  AND u.created_at >= c.episode_started_at AND u.input_tokens + u.output_tokens > 0"
+                ") FROM conversations c WHERE c.tenant_id = :t AND c.id = :c"
+            ),
+            {"t": tenant_id, "c": conversation_id},
+        )
+    ).first()
+    if fila is None or fila[0] is None:
+        return False, None
+    return bool(fila[1]), fila[0]
+
+
+async def decidir_turno(
+    session,  # type: ignore[no-untyped-def]
+    tenant_id: uuid.UUID,
+    conversation_id: uuid.UUID,
     *,
     now: datetime | None = None,
-) -> bool:
-    """¿El negocio ya consumió todo el crédito del mes? Lo consulta la cabecera del turno
-    (`enforcement.turn_quota_metric`, HU-BILL-18, ADR-0208 §2-3): con el crédito agotado el turno
-    se corta con `quota_exhausted` antes de llamar al LLM.
+) -> DecisionDelTurno:
+    """Decisión del turno con el saldo del ciclo (`enforcement.turn_quota_metric`, ADR-0208 §2-6).
 
-    Mismo mes, mismo límite y mismo consumo que `alcanza` (`_saldo_del_mes`), pero **sin** el lock
-    consultivo: el turno no escribe en la misma transacción, y una carrera entre dos turnos solo
-    deja pasar uno de más. No levanta `QuotaExceeded`. Sin suscripción, sin `period_start` o sin
-    crédito en el plan devuelve False. Con `BILLING_BLOQUEAR_POR_CREDITOS` apagado mide, registra
-    un warning si habría bloqueado y devuelve False. `session` debe estar dentro del
-    `tenant_scope(tenant_id)`."""
+    Mismo mes, límite y consumo que `alcanza` (`_saldo_del_mes`), **sin** el lock consultivo: una carrera
+    entre dos turnos se resuelve dentro del colchón. La conversación solo se consulta sin saldo. Con
+    `BILLING_BLOQUEAR_POR_CREDITOS` apagado mide, registra un warning si habría cortado y devuelve
+    `normal`. `session` debe estar dentro del `tenant_scope(tenant_id)`."""
     from core.config import get_settings
 
     _exigir_scope(tenant_id)
     saldo = await _saldo_del_mes(session, tenant_id, now=now, con_lock=False)
+    colchon = tamano_del_colchon(saldo.limite)
     if saldo.limite is None or saldo.usado < saldo.limite:
-        return False
+        return DecisionDelTurno("normal", saldo, colchon_limite=colchon)
     if not get_settings().billing_bloquear_por_creditos:
         log.warning(
             "billing_credito_agotado_sin_bloqueo",
@@ -322,8 +392,12 @@ async def credito_agotado(
             usado=float(saldo.usado),
             limite=saldo.limite,
         )
-        return False
-    return True
+        return DecisionDelTurno("normal", saldo, colchon_limite=colchon)
+    abierta, episodio = await conversacion_abierta(session, tenant_id, conversation_id)
+    decision = DecisionDelTurno("agotado", saldo, abierta=abierta, episodio=episodio, colchon_limite=colchon)
+    if abierta and decision.colchon_usado < colchon:
+        return DecisionDelTurno("colchon", saldo, abierta=True, episodio=episodio, colchon_limite=colchon)
+    return decision
 
 
 async def _saldo_del_mes(
@@ -333,7 +407,8 @@ async def _saldo_del_mes(
     now: datetime | None,
     con_lock: bool,
 ) -> SaldoDeCreditos:
-    """Consumido y límite del mes del ciclo, el cálculo común de `alcanza` y `credito_agotado`.
+    """Consumido y límite del mes del ciclo, el cálculo común de `alcanza` y `decidir_turno`. Es el único
+    lugar del saldo: las recargas y lo acumulado (ADR-0209, HU-BILL-22) se suman aquí.
 
     La ventana es la de `ventana_mensual` desde el ciclo de la suscripción y el límite es
     `Plan.monthly_credits`, igual que `/admin/plan` (`plan_view.credito_del_mes`). Sin suscripción,
@@ -353,7 +428,7 @@ async def _saldo_del_mes(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": f"billing:creditos:{tenant_id}"}
         )
     usado = (await medir_creditos(session, tenant_id, desde=inicio, hasta=fin)).total
-    return SaldoDeCreditos(usado=usado, limite=plan.monthly_credits)
+    return SaldoDeCreditos(usado=usado, limite=plan.monthly_credits, inicio=inicio, fin=fin)
 
 
 async def imagen_ya_cobrada(session, tenant_id: uuid.UUID, image_key: str) -> bool:  # type: ignore[no-untyped-def]
@@ -377,14 +452,17 @@ async def imagen_ya_cobrada(session, tenant_id: uuid.UUID, image_key: str) -> bo
 
 
 __all__ = [
+    "COLCHON_FRACCION",
     "ESTADOS_PLANTILLA_ENVIADA",
     "ConsumoDeCreditos",
     "CreditoPorAgente",
+    "DecisionDelTurno",
     "SaldoDeCreditos",
     "alcanza",
+    "conversacion_abierta",
     "cotizar",
-    "credito_agotado",
     "creditos_enteros",
+    "decidir_turno",
     "imagen_ya_cobrada",
     "medir_creditos",
 ]

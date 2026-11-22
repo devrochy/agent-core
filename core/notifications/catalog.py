@@ -1,7 +1,7 @@
 """Eventos de notificación que son del core (ADR-0167).
 
 Los textos de los eventos de un pack viven en el pack. Aquí solo están los de core:
-escalación, conexión pausada y mensajes fallidos. Son constantes de código (infraestructura
+escalación, conexión pausada, mensajes fallidos y consumo del crédito. Son constantes de código (infraestructura
 determinista, no prompts) y `data` lleva solo ids, nunca datos del cliente.
 """
 
@@ -218,6 +218,53 @@ def cliente_esperando(
         },
         target={"entity": "conversacion", "id": str(conversation_id), "section": "escalations"},
     )
+
+
+# ---------------------------------------------------------------- consumo del crédito (HU-BILL-20, ADR-0208 §7)
+UMBRALES_DE_CONSUMO = ("80", "100", "colchon")
+_AVISOS_DE_CONSUMO: dict[str, tuple[str, str, str, str]] = {
+    # umbral: (event_key, severidad, título, cuerpo)
+    "80": (
+        "core.credit_80",
+        "warning",
+        "Usaste el 80 % del crédito del mes",
+        "Tu negocio ya consumió el 80 % del crédito de este ciclo. Revisa el consumo en Plan y consumo.",
+    ),
+    "100": (
+        "core.credit_100",
+        "critical",
+        "Usaste todo el crédito del mes",
+        "Tu negocio consumió todo el crédito de este ciclo. Revisa el consumo y tu plan en Plan y consumo.",
+    ),
+    "colchon": (
+        "core.credit_buffer",
+        "critical",
+        "Tus conversaciones usan la reserva",
+        "Sin crédito en este ciclo, las conversaciones que ya estaban en curso se atienden con una reserva "
+        "pequeña. Cuando se acabe, pasan a una persona de tu equipo.",
+    ),
+}
+
+
+def consumo_de_credito(umbral: str, *, ciclo: datetime) -> NotificationSpec:
+    """El negocio cruzó un umbral de consumo del crédito del ciclo: 80 %, 100 % o la entrada al colchón.
+
+    `ciclo` (inicio de `ventana_mensual`) acota la deduplicación: un aviso por negocio, umbral y ciclo."""
+    event_key, severidad, titulo, cuerpo = _AVISOS_DE_CONSUMO[umbral]
+    return NotificationSpec(
+        event_key=event_key,
+        category="sistema",
+        severity=severidad,
+        title=titulo,
+        body=cuerpo,
+        dedupe_key=consumo_dedupe_key(umbral, ciclo=ciclo),
+        section="plan",
+        data={"type": "core.credit_threshold", "threshold": umbral},
+    )
+
+
+def consumo_dedupe_key(umbral: str, *, ciclo: datetime) -> str:
+    return f"creditos:{umbral}:{int(ciclo.timestamp())}"
 
 
 # ---------------------------------------------------------------- canary (HU-AOS-32, adenda de ADR-0117 §6)
