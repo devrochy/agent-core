@@ -246,8 +246,8 @@ async def test_agendar_rechaza_un_horario_no_ofrecido_y_ofrece_los_disponibles(p
     conv = await _conversacion(tid)
     guion = _Guion([
         ("iniciar_procedimiento", {"procedure_id": proc}),
-        ("actualizar_tarea", {"slots": {"horario": f"{dia}T07:00:00"}}),   # antes de abrir: no ofrecido
-        ("actualizar_tarea", {"slots": {"horario": f"{dia}T10:00:00"}}),
+        ("actualizar_tarea", {"slots": {"start_datetime": f"{dia}T07:00:00"}}),   # antes de abrir: no ofrecido
+        ("actualizar_tarea", {"slots": {"start_datetime": f"{dia}T10:00:00"}}),
         "Perfecto, ¿a qué correo te envío la confirmación?",
     ])
     await _turno(conv, guion, monkeypatch, "quiero una cita a las 7 de la mañana")
@@ -255,11 +255,11 @@ async def test_agendar_rechaza_un_horario_no_ofrecido_y_ofrece_los_disponibles(p
     assert any("Ese horario no está disponible" in v and "09:00, 10:00" in v for v in guion.vistos)
     tarea, estado = await _tarea(conv, proc)
     assert estado == "active" and tarea.stage == "datos"
-    assert (tarea.slots.get("horario") or {}).get("value", "").startswith(f"{dia}T10:00:00")
+    assert (tarea.slots.get("start_datetime") or {}).get("value", "").startswith(f"{dia}T10:00:00")
 
     args = {"title": "Cita con Ana", "start_datetime": f"{dia}T10:00:00", "attendee_email": "ana@example.com"}
     guion = _Guion([
-        ("actualizar_tarea", {"slots": {"correo": "ana@example.com"}}),
+        ("actualizar_tarea", {"slots": {"attendee_email": "ana@example.com"}}),
         ("create_calendar_event", args),
         "Te agendo el martes a las 10, ¿confirmas?",
     ])
