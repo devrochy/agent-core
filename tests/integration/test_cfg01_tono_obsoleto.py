@@ -41,7 +41,7 @@ async def _sesion(app_client, tid) -> str:
 
 async def test_alta_con_y_sin_preset_no_escribe_tono() -> None:
     """Gherkin «Altas sin `tono`»: el alta directa y el alta con preset dejan `behavior_config` sin la clave."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("cfg01")
     tid, _ = await onboard_tenant(name=f"N {slug}", slug=slug, persona={"tone": "cercano"})
@@ -54,7 +54,7 @@ async def test_alta_con_y_sin_preset_no_escribe_tono() -> None:
 
 async def test_apk_vieja_envia_tono_y_no_se_escribe(app_client) -> None:
     """Gherkin «APK vieja»: el PUT con `tono` responde 200, no lo escribe y guarda el resto."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("cfg01api")
     tid, _ = await onboard_tenant(name=f"N {slug}", slug=slug, persona={"tone": "cercano"})
@@ -75,7 +75,8 @@ async def test_apk_vieja_envia_tono_y_no_se_escribe(app_client) -> None:
 
 async def test_lectura_compatible_con_tono_guardado_de_antes(app_client) -> None:
     """Gherkin «Lectura compatible»: un `tono` viejo se sigue devolviendo y un guardado no lo cambia."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -98,9 +99,10 @@ async def test_lectura_compatible_con_tono_guardado_de_antes(app_client) -> None
 
 async def test_cli_configure_tone_escribe_la_persona() -> None:
     """Gherkin «CLI»: `agent-core configure tone` cambia `persona.tone` y no toca `behavior_config`."""
+    from _habilidades import onboard_tenant
+
     from cli.commands.configure import cambiar_tono_persona
     from core.agents import defaults_negocio
-    from core.alta_negocio import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("cfg01cli")

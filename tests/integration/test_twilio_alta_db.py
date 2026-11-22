@@ -82,7 +82,8 @@ class TwilioFalso:
 
 @pytest.fixture(scope="module")
 async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant
 

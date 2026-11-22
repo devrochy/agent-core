@@ -70,7 +70,8 @@ def _twilio(e164: str, ac: str = AC) -> httpx.MockTransport:
 
 @pytest.fixture(scope="module")
 async def conexion() -> AsyncIterator[dict[str, Any]]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.gateway.twilio import alta, bandera
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant
@@ -316,7 +317,8 @@ TOKEN_B = "token-del-negocio-b"
 @pytest.fixture(scope="module")
 async def conexion_b() -> AsyncIterator[dict[str, Any]]:
     """Otro negocio con su propia cuenta de Twilio y su número."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.gateway.twilio import alta, bandera
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant
@@ -402,7 +404,8 @@ async def test_el_numero_que_pasa_a_otro_negocio_corta_la_ruta_vieja(
     conexion_b, app_client
 ) -> None:
     """A conecta un número, lo borra y B lo conecta (con otra cuenta): la ruta de A queda en 404 y B recibe."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.gateway.connections import delete_connection
     from core.gateway.twilio import alta, bandera
     from core.shared.tenant import tenant_scope

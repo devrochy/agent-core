@@ -65,7 +65,8 @@ def herramienta(monkeypatch: pytest.MonkeyPatch) -> Herramienta:
 
 @pytest.fixture(scope="module")
 async def negocio() -> AsyncIterator[uuid.UUID]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.tenants import deactivate_tenant, purge_tenant
 
     slug = f"confa-{uuid.uuid4().hex[:8]}"
@@ -305,7 +306,8 @@ async def test_el_pendiente_no_pisa_el_resto_del_estado(negocio: uuid.UUID, herr
 
 
 async def test_aislamiento_otro_negocio_no_confirma_con_sus_mensajes(negocio: uuid.UUID, herramienta: Herramienta) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.session import get_session
     from core.kernel.confirmacion_pendiente import leer_entrantes, resolver_llamada
     from core.shared.tenant import tenant_scope

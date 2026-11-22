@@ -392,8 +392,9 @@ async def test_reconectar_revive_el_numero_y_la_waba_con_sus_plantillas_y_conver
 
 
 async def test_otro_negocio_puede_reclamar_un_numero_eliminado() -> None:
+    from _habilidades import onboard_tenant
+
     from core.admin.meta_health_service import soft_delete_connection
-    from core.alta_negocio import onboard_tenant
     from core.db.models import MessageTemplate, MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

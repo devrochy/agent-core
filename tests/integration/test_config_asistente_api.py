@@ -20,7 +20,7 @@ BASE = "/api/v1/admin/settings"
 
 async def _negocio(app_client) -> tuple[str, str]:
     """Un negocio nuevo y la cookie de un admin que actúa sobre él."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"asis-{os.urandom(3).hex()}"
     tid, _ = await onboard_tenant(

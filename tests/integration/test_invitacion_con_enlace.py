@@ -43,7 +43,7 @@ async def _sin_bloqueos_de_invitacion():
 
 
 async def _negocio() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("invitado")
     tenant_id, _ = await onboard_tenant(name=f"Negocio {slug}", slug=slug)

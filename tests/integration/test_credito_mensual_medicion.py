@@ -38,7 +38,7 @@ RAIZ = Path(__file__).resolve().parents[2]
 
 
 async def _negocio(plan: str = "basic") -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"credito-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Crédito {slug}", slug=slug, sembrar_ejemplos=False, plan=plan)

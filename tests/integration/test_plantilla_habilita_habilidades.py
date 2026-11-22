@@ -61,7 +61,7 @@ def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _negocio_sin_packs() -> uuid.UUID:
     """El negocio del self-service en Free: sin packs, sin preset."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"habil-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"HABIL {slug}", slug=slug, packs=[], sembrar_ejemplos=False)

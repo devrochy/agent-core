@@ -42,7 +42,8 @@ async def _switch_tenant(app_client, session_cookie: str, tenant_id: uuid.UUID) 
 
 
 async def _setup_connected_tenant():
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.gateway import meta_token_store

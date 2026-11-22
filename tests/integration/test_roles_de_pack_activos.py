@@ -35,7 +35,7 @@ GESTOR = "pack_cobranza:gestor"
 
 async def _negocio(prefijo: str, *, con_agente_de_cobranza: bool) -> tuple[uuid.UUID, str]:
     """Negocio con `pack_cobranza` en el spec; con o sin especialista de Cobranza publicado."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq(prefijo)
     email = f"{slug}@test.local"

@@ -41,7 +41,7 @@ async def _sql(tid: uuid.UUID, sql: str, **params: Any) -> list[Any]:
 
 
 async def _negocio() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("pruebas")
     tid, _ = await onboard_tenant(name=f"Pruebas {slug}", slug=slug, persona={"tone": "cercano"})

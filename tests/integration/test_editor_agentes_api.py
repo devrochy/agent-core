@@ -73,9 +73,8 @@ def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
-
-    from core.alta_negocio import onboard_tenant
 
     slug = f"aos24-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"AOS24 {slug}", slug=slug, packs=PACKS, sembrar_ejemplos=False, plan="premium")

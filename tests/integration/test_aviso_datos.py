@@ -24,7 +24,7 @@ PASSWORD = "Colab-Crm16-2026!"
 
 
 async def _negocio() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("crm16")
     tid, _ = await onboard_tenant(

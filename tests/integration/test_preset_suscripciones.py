@@ -42,8 +42,9 @@ CATALOGO = {
 
 async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> None:
     """Gherkin «Reproducible»: packs del preset y proveedor `pack_subscriptions`."""
+    from _habilidades import onboard_tenant
+
     from core.agents.spec import enabled_packs, load_active_spec
-    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
     from core.subscriptions import proveedor_configurado
@@ -63,7 +64,8 @@ async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> N
 
 
 async def test_voz_de_marca_se_reemplaza_solo_si_se_pide(tmp_path, monkeypatch) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.onboarding import ensure_brand_voice
@@ -97,10 +99,10 @@ async def test_voz_de_marca_se_reemplaza_solo_si_se_pide(tmp_path, monkeypatch) 
 async def test_aplicar_preset_a_un_negocio_existente_no_mezcla_ejemplos() -> None:
     """Un negocio con catálogo propio no recibe los productos de ejemplo del preset
     ni le pisan los atributos de un SKU que coincida (visto al aplicar HU-SH-01 en test)."""
+    from _habilidades import onboard_tenant
     from pack_commerce.models import ProductVariant
     from pack_commerce.seed import seed_catalog
 
-    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.presets.apply import apply_preset
     from core.shared.tenant import tenant_scope

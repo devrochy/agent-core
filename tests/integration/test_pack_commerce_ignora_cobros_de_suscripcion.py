@@ -41,9 +41,9 @@ async def test_una_referencia_sub_se_ignora_sin_alarma_y_una_de_pedido_sin_pedid
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import pack_commerce.module as modulo_commerce
+    from _habilidades import onboard_tenant
     from pack_commerce.module import CRMModule
 
-    from core.alta_negocio import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     tid, _ = await onboard_tenant(name="Comercio", slug=uniq("subref"), packs=["pack_commerce"], sembrar_ejemplos=False)

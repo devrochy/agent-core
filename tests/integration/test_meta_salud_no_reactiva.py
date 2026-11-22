@@ -24,7 +24,8 @@ CHECK_FALLIDO = {"phone_quality": {"ok": False}}  # cualquier check fallido → 
 
 
 async def _conexion(status: str) -> tuple[uuid.UUID, uuid.UUID]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

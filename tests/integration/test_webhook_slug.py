@@ -56,7 +56,7 @@ def _meta_payload(phone_id: str, wa_id: str, message_id: str, body: str) -> dict
 
 
 async def _onboard(slug: str, phone: str, verify_token: str) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Webhook {slug}",
@@ -177,7 +177,8 @@ async def test_handshake_por_slug_usa_verify_token_byok_sin_channel_connection(a
     """Si el tenant no tiene `ChannelConnection` (caso BYOK vía
     `MetaConnection`) pero sí guardó un `verify_token` propio en el
     wizard BYOK, el handshake lo prioriza antes de caer al `.env` global."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.gateway import meta_byok
@@ -217,7 +218,8 @@ async def test_handshake_por_slug_prioriza_byok_sobre_token_global(app_client, m
     """Regresión: con `WHATSAPP_VERIFY_TOKEN` global NO vacío, el token BYOK del
     tenant debe seguir ganando. Antes `effective_credentials()` (que cae al
     `.env`) tapaba la rama BYOK y el self-check del wizard respondía 403."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.config import get_settings
     from core.db.models import MetaConnection
     from core.db.session import get_session
@@ -265,7 +267,8 @@ async def test_handshake_por_slug_prioriza_byok_sobre_token_global(app_client, m
 
 async def test_handshake_por_slug_rechaza_token_de_otro_tenant(app_client) -> None:
     """Aislamiento: el token BYOK de un tenant NO debe validar el slug de otro."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.gateway import meta_byok
@@ -311,7 +314,8 @@ async def test_handshake_por_slug_rechaza_token_de_otro_tenant(app_client) -> No
 async def test_handshake_por_slug_acepta_el_token_de_cada_conexion(app_client) -> None:
     """HU-CONN-05: cada conexión que apunta a la URL del negocio re-verifica su suscripción
     con su propio token (antes la manual tapaba a la BYOK y su handshake daba 403)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.gateway import meta_byok
@@ -364,7 +368,7 @@ async def test_handshake_por_slug_acepta_el_token_de_cada_conexion(app_client) -
 
 async def test_tone_invalido_rechazado() -> None:
     """El onboarding NO persiste un spec fuera del contrato (evita el 500 en /admin/spec)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     with pytest.raises(ValueError):
         await onboard_tenant(
@@ -379,7 +383,7 @@ async def _tenant_con_byok(
     prefix: str, *, status: str, app_id: str, app_secret: str | None = None, verify_token: str | None = None,
     connected_at=None, origin: str = "byok", phone: str | None = None,
 ) -> tuple[uuid.UUID, str]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"{prefix}-{uuid.uuid4().hex[:6]}"
     tid, _ = await onboard_tenant(name=f"BYOK {slug}", slug=slug, persona={"tone": "cercano"})

@@ -99,9 +99,9 @@ async def _sql(tid: uuid.UUID, sql: str, **params: Any) -> list[Any]:
 @pytest.fixture(scope="module")
 async def negocios() -> AsyncIterator[tuple[Negocio, Negocio, Negocio]]:
     """A y B con la bandera encendida; `apagado` sin ella (el valor por defecto)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import montar_release_en
 
-    from core.alta_negocio import onboard_tenant
     from core.kernel.opciones import bandera
     from core.shared.tenant import tenant_scope
     from core.tenants import deactivate_tenant, purge_tenant

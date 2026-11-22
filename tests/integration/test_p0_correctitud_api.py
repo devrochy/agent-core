@@ -26,7 +26,7 @@ pytestmark = [
 
 
 async def _tenant(prefix: str, packs: list[str] | None = None):
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq(prefix)
     tid, _ = await onboard_tenant(

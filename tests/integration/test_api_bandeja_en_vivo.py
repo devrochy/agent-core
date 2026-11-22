@@ -35,9 +35,9 @@ async def _negocio() -> dict:
       una nota del agente y costo.
     - `sin_mensajes`: sin conexión ni mensajes, iniciada hace 2 h.
     """
+    from _habilidades import onboard_tenant
     from sqlalchemy import text
 
-    from core.alta_negocio import onboard_tenant
     from core.db.models import (
         ChannelConnection,
         Conversation,

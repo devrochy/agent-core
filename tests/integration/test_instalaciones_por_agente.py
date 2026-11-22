@@ -51,7 +51,7 @@ async def _packs_registrados() -> None:
 
 
 async def _negocio() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("hpa")
     tid, _ = await onboard_tenant(name=f"HPA {slug}", slug=slug, packs=[], sembrar_ejemplos=False, plan="premium")
@@ -185,10 +185,10 @@ async def test_load_config_combina_negocio_y_agente() -> None:
 async def test_la_release_congela_las_habilidades_del_agente() -> None:
     """El componente del agente lleva `skills` (solo ids) y el cargador las expone como `packs`; sin instalaciones
     propias no hay `skills` (hereda las del negocio hasta la resiembra)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
 
     from core.agents.instalaciones_agente import guardar_config_del_agente, instalar_en_agente
-    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.releases.build import construir
     from core.releases.cargar import cargar_release
@@ -232,11 +232,12 @@ async def test_la_release_congela_las_habilidades_del_agente() -> None:
 async def test_backfill_instala_en_agentes_existentes_sin_borrar() -> None:
     """HU-AOS-65: el backfill instala en el agente `ventas` existente las habilidades de su plantilla; dry-run no
     escribe y reaplicar no duplica."""
+    from _habilidades import onboard_tenant
+
     from core.agents.instalaciones_agente import (
         backfill_habilidades_por_agente,
         instaladas_en_agente,
     )
-    from core.alta_negocio import onboard_tenant
     from core.shared.tenant import tenant_scope
 
     slug = uniq("hpabf")
@@ -262,9 +263,10 @@ async def test_backfill_instala_en_agentes_existentes_sin_borrar() -> None:
 async def test_backfill_suma_conocimiento_si_el_agente_lo_usa(monkeypatch: pytest.MonkeyPatch) -> None:
     """Un agente que ya busca en documentos (`buscar_conocimiento` en su borrador) recibe Conocimiento si el negocio lo
     tiene: así no lo pierde en su próxima release. Dry-run (el venv local puede no registrar el pack)."""
+    from _habilidades import onboard_tenant
+
     import core.agents.spec as spec_mod
     from core.agents.instalaciones_agente import backfill_habilidades_por_agente
-    from core.alta_negocio import onboard_tenant
 
     original = spec_mod.enabled_packs
     monkeypatch.setattr(spec_mod, "enabled_packs", lambda spec: set(original(spec)) | {"pack_knowledge"})

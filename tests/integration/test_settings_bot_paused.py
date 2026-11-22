@@ -30,7 +30,7 @@ PASSWORD = "clave-segura-123"
 
 
 async def _negocio(prefijo: str) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"{prefijo}-{os.urandom(3).hex()}"
     tid, _ = await onboard_tenant(

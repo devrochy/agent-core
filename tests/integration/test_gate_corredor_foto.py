@@ -73,9 +73,8 @@ async def sesion_en_eval(tid: uuid.UUID) -> AsyncIterator[AsyncSession]:
 
 
 async def _negocio_con_release() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
-
-    from core.alta_negocio import onboard_tenant
 
     slug = uniq("foto")
     tid, _ = await onboard_tenant(name=f"Foto {slug}", slug=slug, persona={"tone": "cercano"})

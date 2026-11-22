@@ -91,7 +91,8 @@ class _Twilio:
 
 
 async def _negocio(prefijo: str) -> dict[str, Any]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.gateway.twilio import alta, bandera
     from core.shared.tenant import tenant_scope
 

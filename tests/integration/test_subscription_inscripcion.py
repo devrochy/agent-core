@@ -33,7 +33,7 @@ DATOS = {"nombre": "Ana Gómez", "email": "ana@ejemplo.co", "telefono": "+573001
 
 # ----------------------------------------------------------------------------- ayudas
 async def _negocio() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("insc")
     tid, _ = await onboard_tenant(

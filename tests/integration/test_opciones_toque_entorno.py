@@ -154,9 +154,9 @@ async def tocar_real(envio: Envio, payload: str, conversation: Any, customer: An
 
 @pytest.fixture(scope="module")
 async def negocio_opciones() -> AsyncIterator[tuple[uuid.UUID, str]]:
+    from _habilidades import onboard_tenant
     from release_de_prueba import montar_release_en
 
-    from core.alta_negocio import onboard_tenant
     from core.tenants import deactivate_tenant, purge_tenant
 
     slug = f"opte-{uuid.uuid4().hex[:8]}"
@@ -285,9 +285,9 @@ async def v3() -> AsyncIterator[tuple[tuple[uuid.UUID, uuid.UUID], tuple[uuid.UU
 
     (Un binding AUSENTE no sirve de caso negativo: la conversión a v3 crea uno por cada acción ofrecida sin
     binding —el consentimiento del lector tolerante— y la release ya lo trae explícito.)"""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
 
-    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.releases.packs import sync_packs
     from core.tenants import deactivate_tenant, purge_tenant

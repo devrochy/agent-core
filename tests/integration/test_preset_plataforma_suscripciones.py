@@ -66,7 +66,8 @@ async def _negocio_con_preset(preset: str) -> tuple[uuid.UUID, Any]:
     """El alta real: negocio con su número de WhatsApp y el preset. Desde ADR-0205 §1 el alta no crea
     especialistas (solo el Coordinador): los agentes del preset se aplican aquí a mano, como
     `agent-core db presets-v2`, para revisar lo que el preset sugiere."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.presets import load_preset
     from core.presets.agentes import aplicar_agentes
     from core.shared.tenant import tenant_scope

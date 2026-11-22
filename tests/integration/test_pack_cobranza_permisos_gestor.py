@@ -65,11 +65,11 @@ async def _montar(app_client, nombre: str) -> Escenario:
     from datetime import date, timedelta
     from decimal import Decimal
 
+    from _habilidades import onboard_tenant
     from pack_cobranza.models import Cartera, Cliente, Cuota, Gestor, Prestamo
 
     from core.access import policy
     from core.admin.auth import hash_password
-    from core.alta_negocio import onboard_tenant
     from core.db.models import Admin, TenantUser
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

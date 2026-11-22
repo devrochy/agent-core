@@ -46,7 +46,8 @@ def _invoke_cli(args: list[str]):
 
 
 async def _onboard_suspendido(prefix: str) -> tuple[uuid.UUID, str]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.tenants import deactivate_tenant
 
     slug = f"{prefix}-{uuid.uuid4().hex[:6]}"

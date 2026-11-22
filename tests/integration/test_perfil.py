@@ -28,7 +28,7 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
 
 async def _negocio(sufijo: str, owner_email: str) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Perfil {sufijo}",

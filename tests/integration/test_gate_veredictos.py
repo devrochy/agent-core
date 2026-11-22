@@ -52,9 +52,8 @@ async def _packs_registrados() -> None:
 
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
     """(tid, conexión, release activa)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
-
-    from core.alta_negocio import onboard_tenant
 
     slug = uniq("veredicto")
     tid, _ = await onboard_tenant(name=f"Veredicto {slug}", slug=slug, persona={"tone": "cercano"})

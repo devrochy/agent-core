@@ -30,7 +30,7 @@ PACK = "leads"  # el provider del lead es del core desde ADR-0193 (`/pack/pack_c
 
 
 async def _negocio(zona: str | None = None) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("seg")
     tid, _ = await onboard_tenant(

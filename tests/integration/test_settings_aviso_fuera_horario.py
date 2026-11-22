@@ -20,7 +20,7 @@ pytestmark = [
 
 
 async def test_identity_devuelve_el_aviso_por_defecto_con_el_nombre_guardado(app_client) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"fh-{os.urandom(3).hex()}"
     tid, _ = await onboard_tenant(

@@ -38,7 +38,7 @@ def _uniq(prefix: str) -> str:
 
 
 async def _onboard(slug: str, whatsapp_phone: str = "") -> tuple[uuid.UUID, str]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Tenant desechable {slug}",

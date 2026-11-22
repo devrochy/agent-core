@@ -41,7 +41,8 @@ MOTIVOS = [
 
 
 async def _negocio_con_escalaciones(motivos: list[tuple[str, str]]) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import Conversation, Customer, Escalation
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

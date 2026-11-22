@@ -29,8 +29,8 @@ CALLBACK = "/api/v1/pack/calendar/oauth/callback"
 
 async def _tenant_con_google() -> uuid.UUID:
     from _api_helpers import ADMIN_EMAIL
+    from _habilidades import onboard_tenant
 
-    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 

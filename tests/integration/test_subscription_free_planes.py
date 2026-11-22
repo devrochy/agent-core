@@ -30,7 +30,7 @@ AHORA = datetime(2026, 11, 20, 12, 0, tzinfo=UTC)
 
 
 async def _negocio(packs: list[str] | None = None) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("free")
     tid, _ = await onboard_tenant(

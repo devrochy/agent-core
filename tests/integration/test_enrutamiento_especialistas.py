@@ -76,9 +76,9 @@ async def _proceso() -> None:
 async def _negocio() -> tuple[uuid.UUID, uuid.UUID]:
     """Negocio v3 con commerce y calendar, una conexión conversacional y su release 1 (especialista
     «atencion» por defecto, ADR-0192). (tid, conexión)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
 
-    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
@@ -430,9 +430,9 @@ async def _negocio_con_preset_suscripciones() -> tuple[uuid.UUID, uuid.UUID, Any
     """Negocio v3 con commerce, calendar y subscriptions, una conexión y `presets-v2 --aplicar`
     (su función) del preset `suscripciones`. Devuelve (tid, conexión, reporte, id y manifiesto de
     la release candidata, sin promover)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
 
-    from core.alta_negocio import onboard_tenant
     from core.plugin_manager import plugin_manager
     from core.presets.agentes import backfill_presets_v2
     from core.shared.tenant import tenant_scope

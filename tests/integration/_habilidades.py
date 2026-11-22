@@ -1,0 +1,58 @@
+"""Habilidades del negocio en los tests de integración (HU-AOS-91 parte C, ADR-0206).
+
+Una habilidad es del negocio solo si algún agente activo la tiene instalada: el alta ya no elige packs. Los tests que
+antes pedían `onboard_tenant(packs=[...])` usan `onboard_tenant` de aquí, que da de alta el negocio sin packs y luego
+instala esas habilidades en un especialista de prueba (`habilidades-de-prueba`), como lo hace el dueño al crear su
+primer agente. El especialista no tiene versión publicada: no entra en ningún release ni atiende conversaciones.
+"""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Iterable
+from typing import Any
+
+KEY_DE_PRUEBA = "habilidades-de-prueba"
+
+
+async def dar_habilidades(tenant_id: uuid.UUID, packs: Iterable[str], *, key: str = KEY_DE_PRUEBA) -> uuid.UUID:
+    """Activa `packs` en el negocio y los instala en el especialista de prueba (lo crea si no existe). Devuelve su id."""
+    from sqlalchemy import select
+
+    from core.agents import versiones
+    from core.agents.habilitacion import asegurar_habilidades
+    from core.agents.instalaciones_agente import instalar_en_agente
+    from core.db.models import AgentRecord
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    pedidos = sorted(set(packs))
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            agent_id = (
+                await session.execute(
+                    select(AgentRecord.id).where(
+                        AgentRecord.tenant_id == tenant_id, AgentRecord.key == key, AgentRecord.deleted_at.is_(None)
+                    )
+                )
+            ).scalar_one_or_none()
+        if agent_id is None:
+            agent_id = (
+                await versiones.crear_agente(tenant_id, key=key, kind="specialist", name="Habilidades de prueba")
+            ).id
+        if pedidos:
+            await asegurar_habilidades(tenant_id, pedidos, actor=None)
+        for pack in pedidos:
+            await instalar_en_agente(tenant_id, agent_id, pack, requiere_config=pack == "pack_payments")
+    return agent_id
+
+
+async def onboard_tenant(*args: Any, packs: list[str] | None = None, **kwargs: Any) -> tuple[uuid.UUID, list[str]]:
+    """`core.alta_negocio.onboard_tenant` sin packs, más `dar_habilidades(packs)`."""
+    from core.alta_negocio import onboard_tenant as alta
+
+    tenant_id, pasos = await alta(*args, **kwargs)
+    if packs:
+        await dar_habilidades(tenant_id, packs)
+        pasos = [*pasos, *(f"pack {p} instalado en {KEY_DE_PRUEBA}" for p in sorted(set(packs)))]
+    return tenant_id, pasos

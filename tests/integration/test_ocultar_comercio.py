@@ -39,7 +39,7 @@ async def _sql(tid: uuid.UUID, sql: str, **params: Any) -> list[Any]:
 
 async def _negocio_con_comercio() -> dict[str, uuid.UUID]:
     """Negocio con comercio y un producto, un pedido y una cotización de un cliente."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"aos71o-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"AOS71 {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False)

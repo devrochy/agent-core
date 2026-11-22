@@ -60,8 +60,9 @@ def vision(monkeypatch):  # type: ignore[no-untyped-def]
 
 
 async def _negocio_con_agente() -> tuple[uuid.UUID, uuid.UUID]:
+    from _habilidades import onboard_tenant
+
     from core.agents.instalaciones_agente import guardar_config_del_agente, instalar_en_agente
-    from core.alta_negocio import onboard_tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 

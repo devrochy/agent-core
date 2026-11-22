@@ -77,7 +77,7 @@ async def _dueno(app_client, tid: uuid.UUID) -> dict[str, str]:
 
 
 async def _negocio_con_ventas(app_client) -> tuple[uuid.UUID, dict[str, str], str]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"hda-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"HDA {slug}", slug=slug, packs=[], sembrar_ejemplos=False)

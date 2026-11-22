@@ -29,7 +29,7 @@ async def _cookie_for_new_tenant(app_client, prefix: str) -> str:
 
 
 async def _cookie_and_tenant(app_client, prefix: str):
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"{prefix}-{os.urandom(3).hex()}"
     tid, _ = await onboard_tenant(

@@ -64,7 +64,8 @@ async def _opciones(tid: uuid.UUID, clave: str, versiones: int = 1, ligar: dict[
 @pytest.fixture(scope="module")
 async def negocios() -> AsyncIterator[dict[str, Negocio]]:
     """`a`: las cuatro fuentes pobladas; `b`: vacío con bandera; `c`: con plantillas con opciones y la bandera apagada."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.kernel.opciones import bandera
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope

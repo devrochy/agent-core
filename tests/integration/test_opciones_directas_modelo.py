@@ -57,7 +57,8 @@ async def _owner(tid: uuid.UUID) -> AsyncIterator[Any]:
 
 async def _negocio(prefijo: str) -> tuple[uuid.UUID, str, uuid.UUID]:
     """(tenant, slug, conversación) de un negocio nuevo."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import Conversation, Customer
 
     slug = f"{prefijo}-{uuid.uuid4().hex[:8]}"

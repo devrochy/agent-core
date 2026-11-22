@@ -47,8 +47,9 @@ async def test_numero_ya_de_otro_tenant_da_byok_error_limpio(monkeypatch) -> Non
 
     Desde ADR-0095 lo frena la comprobación de reclamo antes de tocar las tablas (el
     unique global de `phone_number_id` queda como segunda barrera): B no crea nada."""
+    from _habilidades import onboard_tenant
+
     import core.gateway.meta_byok as byok_mod
-    from core.alta_negocio import onboard_tenant
     from core.db.models import MetaConnection, PhoneNumber
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -102,9 +103,9 @@ async def test_numero_ya_de_otro_tenant_da_byok_error_limpio(monkeypatch) -> Non
 async def test_eliminar_conexion_libera_numero_y_waba(app_client) -> None:
     """Eliminar una conexión deja sus números y WABAs con `deleted_at` (ADR-0122): ya no
     rutean, así otro negocio los puede reclamar, pero sus plantillas se conservan."""
+    from _habilidades import onboard_tenant
     from sqlalchemy import select, text
 
-    from core.alta_negocio import onboard_tenant
     from core.db.models import MessageTemplate, MetaConnection, PhoneNumber, WabaAccount
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope

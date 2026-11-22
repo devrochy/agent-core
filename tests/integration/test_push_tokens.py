@@ -27,7 +27,7 @@ PW = "password123"
 
 
 async def _tenant(email: str, slug: str) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     tid, _ = await onboard_tenant(
         name=f"Tenant {slug}",

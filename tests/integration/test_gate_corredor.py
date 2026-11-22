@@ -95,9 +95,9 @@ def _guion(ruta: Path, datos: dict[str, list[bool]]) -> None:
 
 async def _negocio_y_candidata(nombre: str = "Otro") -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
     """(tenant, conexión, release activa, candidata que toca todos los procedimientos)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
 
-    from core.alta_negocio import onboard_tenant
     from core.releases.build import construir
     from core.shared.tenant import tenant_scope
 

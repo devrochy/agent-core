@@ -36,7 +36,7 @@ NUMERO_OK = {"number_registered": {"ok": True, "detail": "status=CONNECTED"}}
 # ------------------------------------------------------------------ ayudantes
 async def _negocio(**alta) -> tuple[uuid.UUID, str]:  # type: ignore[no-untyped-def]
     """Negocio nuevo con su dueño (contraseña conocida). Devuelve (tenant, correo del dueño)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("pasos")
     email = f"{slug}@correo-prueba.co"

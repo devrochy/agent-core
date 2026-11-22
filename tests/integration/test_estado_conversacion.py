@@ -64,7 +64,7 @@ async def _owner() -> AsyncIterator[Any]:
 
 
 async def _negocio() -> tuple[uuid.UUID, str]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = f"estado-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"Estado {slug}", slug=slug, packs=[], sembrar_ejemplos=False)

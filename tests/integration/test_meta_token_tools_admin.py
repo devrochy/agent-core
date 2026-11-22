@@ -25,7 +25,8 @@ STORED_TOKEN = "token-guardado"
 
 
 async def _setup_connected_tenant() -> tuple[uuid.UUID, uuid.UUID, str]:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.db.models import MetaConnection
     from core.db.session import get_session
     from core.gateway import meta_token_store

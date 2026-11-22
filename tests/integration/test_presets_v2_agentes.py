@@ -70,9 +70,8 @@ def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
 
 async def _negocio(*, otra_conexion: bool = False) -> tuple[uuid.UUID, uuid.UUID]:
     """Negocio con su conexión (y otra, si se pide) y release 1. Devuelve (negocio, primera conexión)."""
+    from _habilidades import onboard_tenant
     from release_de_prueba import release_inicial
-
-    from core.alta_negocio import onboard_tenant
 
     slug = f"aos46-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(name=f"AOS46 {slug}", slug=slug, packs=PACKS, sembrar_ejemplos=False, plan="premium")

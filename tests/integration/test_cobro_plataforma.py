@@ -184,7 +184,8 @@ class Escenario:
 
 
 async def _vendedor(*, con_pagos: bool = False) -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.shared.tenant import tenant_scope
 
     slug = uniq("vendedor")
@@ -831,7 +832,8 @@ async def test_renovacion_genera_el_cobro_y_avisa_por_el_asistente(
 async def test_renovacion_por_el_panel_avisa_por_correo(vendedores, correos, alertas) -> None:
     """Gherkin «Renovación», canal panel: un negocio sin canal asistente recibe el correo con
     la referencia del período y el enlace a /plan."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.billing.renovacion import on_platform_renewal_due, renovar_negocio
     from core.db.models import TenantSubscription
     from core.db.session import get_session
@@ -1263,7 +1265,8 @@ async def test_r05_un_pago_del_vendedor_que_llega_por_la_url_de_la_plataforma_se
 async def test_r05_un_pago_de_la_plataforma_sigue_aplicandose_en_su_negocio(
     vendedores, correos, alertas, pasarela, app_client, monkeypatch
 ) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
+
     from core.config import get_settings
 
     vendedor = await _vendedor()
@@ -1283,7 +1286,7 @@ async def test_r05_un_pago_de_la_plataforma_sigue_aplicandose_en_su_negocio(
 @pytest.mark.aislamiento
 async def test_un_pago_del_panel_por_otro_monto_no_se_aplica(vendedores, correos, alertas, pasarela, app_client) -> None:
     """El monto firmado del webhook tiene que ser el del link (como en `pack_payments`)."""
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     vendedores()
     negocio, _ = await onboard_tenant(name="Negocio monto", slug=uniq("monto"))

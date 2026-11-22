@@ -23,7 +23,7 @@ URL = "/api/v1/admin/leads"
 
 
 async def _negocio() -> uuid.UUID:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     slug = uniq("agentes")
     tid, _ = await onboard_tenant(
@@ -294,7 +294,7 @@ async def test_iconos_veraces_y_filtro_por_agente_sin_cruzar_negocios(app_client
 
 
 async def test_filtro_por_agente_invalido_es_400(app_client) -> None:
-    from core.alta_negocio import onboard_tenant
+    from _habilidades import onboard_tenant
 
     # Un negocio sin Cobranza: su clave no se puede filtrar aunque exista en el registro.
     slug = uniq("soloventas")
