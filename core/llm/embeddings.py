@@ -261,7 +261,9 @@ def creditos_de_ingesta(caracteres: int) -> Decimal:
     from core.billing.tarifario import creditos_por_evento, trm_vigente
 
     tokens = max(0, caracteres) // 4 + 1
-    return creditos_por_evento(costo_usd(MODELO_OPENAI, tokens), "embedding", "platform", trm_vigente())
+    creditos = creditos_por_evento(costo_usd(MODELO_OPENAI, tokens), "embedding", "platform", trm_vigente())
+    # Nunca 0: con el saldo justo en el límite, `alcanza(0)` dejaría gastar.
+    return max(creditos, Decimal("0.1"))
 
 
 async def embeber_conocimiento(

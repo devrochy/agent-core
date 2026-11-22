@@ -166,7 +166,9 @@ async def test_la_vision_del_ledger_se_desglosa_aparte_de_la_ia() -> None:
         "llm_turn": Decimal("5.0"),
         "stt": Decimal(0),
         "vision": Decimal("9.2"),
+        "tts": Decimal(0),
         "template_sent": Decimal(0),
+        "playground": Decimal(0),
     }
     assert consumo.total == Decimal("14.2")
     # Las claves no cambian (el panel las nombra) y la suma por agente sigue cuadrando.

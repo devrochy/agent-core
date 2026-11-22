@@ -38,6 +38,7 @@ async def registrar_consumo(
     si falla se avisa y el flujo sigue."""
     tenant_id = get_current_tenant_id()
     if tenant_id is None:
+        log.warning("media_ledger_sin_scope", kind=kind)
         return
     try:
         async with get_session() as session:
