@@ -8,9 +8,12 @@ siempre ocurre dentro de un `tenant_scope`: RLS acota la fila al tenant actual.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agentcore_contracts import AgentSpec
+
+if TYPE_CHECKING:
+    from core.agents.turno import AgenteDelTurno
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,7 +25,7 @@ from core.shared.tenant import get_current_tenant_id
 CORE_PACK_ID = "core"
 
 
-def enabled_packs(spec: AgentSpec) -> set[str]:
+def enabled_packs(spec: AgentSpec | AgenteDelTurno) -> set[str]:
     """Packs habilitados para el tenant según `spec.packs` (ADR-0019).
 
     El pack del core ("core") siempre está habilitado: sus tools son plomería del
@@ -31,7 +34,7 @@ def enabled_packs(spec: AgentSpec) -> set[str]:
     return set(spec.packs) | {CORE_PACK_ID}
 
 
-def enabled_business_packs(spec: AgentSpec) -> set[str]:
+def enabled_business_packs(spec: AgentSpec | AgenteDelTurno) -> set[str]:
     """Packs de NEGOCIO del tenant, SIN el core.
 
     Es la cuenta que consumen las cuotas de plan (ADR-0045, métrica `plugins`) y

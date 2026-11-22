@@ -19,7 +19,6 @@ from typing import Any, ClassVar
 from sqlalchemy import func, select
 
 from core.agents.playbooks import load_playbook
-from core.agents.spec import load_active_spec
 from core.datos_cliente.guardar import guardar as guardar_datos
 from core.db.models import Conversation, Customer, Message, UsageLedger
 from core.db.session import get_session
@@ -179,16 +178,24 @@ class CoreSkill(BaseSkill):
         name = str(args.get("name", "")).strip()
         if not name:
             return {"error": "name vacío"}
-        spec = await load_active_spec()
+        # La allowlist es la del agente del turno (ADR-0206 §4), no la de `agent_specs`.
+        from core.agents.turno import del_turno
+
+        spec = del_turno()
+        if spec is None:
+            return {"error": f"playbook '{name}' no disponible para este tenant"}
         content = await load_playbook(spec, name)
         if content is None:
             return {"error": f"playbook '{name}' no disponible para este tenant"}
         return {"content": content}
 
     async def _get_conversation_usage(self, args: dict[str, Any], ctx: ToolContext) -> dict[str, Any]:
-        spec = await load_active_spec()
+        # El presupuesto es el del KernelSpec de la release (ADR-0206 §4), el mismo que corta el turno.
+        from core.agents.turno import del_turno
+
+        spec = del_turno()
         spent = await conversation_spent(ctx.conversation_id)
-        budget = spec.policies.budgetUsdPerConversation
+        budget = spec.policies.budgetUsdPerConversation if spec is not None else None
         return {
             "spent_usd": round(spent, 6),
             "budget_usd": budget,

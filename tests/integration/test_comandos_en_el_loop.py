@@ -136,10 +136,10 @@ def _habilitar(pack_de_prueba: Any, monkeypatch) -> None:  # type: ignore[no-unt
     # El pack de prueba no existe en el binario, así que ninguna release puede concederlo: estos
     # Gherkin miden la mecánica del motor y corren el turno sin release (ADR-0191); la concesión por
     # release la cubren los tests de HU-ARCH-34.
-    async def _sin_release(*_a: Any, **_k: Any) -> None:
-        return None
+    # Desde HU-AOS-90 el turno no lee `agent_specs`: el agente del turno se arma desde el negocio.
+    from _turno_sin_release import instalar
 
-    monkeypatch.setattr("core.orchestrator.loop.fijar_release_del_turno", _sin_release)
+    instalar(monkeypatch)
 
 
 @pytest.fixture(scope="module")

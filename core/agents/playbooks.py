@@ -21,8 +21,12 @@ import re
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agentcore_contracts import AgentSpec
+
+if TYPE_CHECKING:
+    from core.agents.turno import TienePlaybooks
 
 from core.agents.spec import load_active_spec
 from core.shared.logger import get_logger
@@ -67,7 +71,7 @@ class ErrorDeLectura(Exception):
 
 
 async def load_playbook(
-    spec_or_tenant: AgentSpec | uuid.UUID | str | None,
+    spec_or_tenant: AgentSpec | TienePlaybooks | uuid.UUID | str | None,
     name: str,
     *,
     tenant_slug: str | None = None,
@@ -82,7 +86,7 @@ async def load_playbook(
     lanza `ErrorDeLectura` en vez de devolver None (lo compilado no se cachea con un bloque de
     menos; un nombre que no existe sigue siendo None, que es determinista).
 
-    Acepta un `AgentSpec` (evals/tests) o un tenant (resuelve su spec activo).
+    Acepta el agente del turno (`AgenteDelTurno`), un `AgentSpec` (evals/tests) o un tenant (resuelve su spec activo).
     `tenant_slug`: si el caller ya lo resolvió (ej. `build_system_blocks`,
     que arma varios playbooks por turno), evita una query repetida por cada
     uno -- si no se pasa, esta función lo resuelve ella misma (una query,
@@ -91,7 +95,8 @@ async def load_playbook(
     from core.shared.tenant import get_current_tenant_id
 
     scope = get_current_tenant_id()
-    if isinstance(spec_or_tenant, AgentSpec):
+    if isinstance(spec_or_tenant, AgentSpec) or hasattr(spec_or_tenant, "playbooks"):
+        # Un `AgentSpec` (evals) o el agente del turno (`AgenteDelTurno`, ADR-0206 §1): la allowlist es la suya.
         spec = spec_or_tenant
     else:
         # La allowlist sale del spec del negocio pedido y el override del `tenant_scope`:

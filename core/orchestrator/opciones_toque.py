@@ -5,7 +5,7 @@ que lo que solo el loop sabe se inyecta desde aquí (`Bordes`): el entorno de un
 envío de mensajes por la cola normal.
 
 **Entorno fuera del loop** (el punto frágil del ADR): un turno resuelve el spec y la release con
-`load_active_spec` → `fijar_release_del_turno` → `spec_del_turno`, bajo `con_release`. El toque lo repite igual
+`fijar_release_del_turno` → `del_turno`, bajo `con_release`. El toque lo repite igual
 para que la tool corra con los MISMOS bindings que tendría en un turno del agente en foco (los
 de la versión congelada de ese agente). Es la misma asignación sticky por episodio que haría el siguiente mensaje del cliente: abre el
 episodio y puede fijar la release y el dueño de la conversación, pero no cambia nada que el próximo turno no
@@ -29,8 +29,8 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from core.agents.spec import enabled_packs, load_active_spec
-from core.agents.spec_de_release import spec_del_turno
+from core.agents.spec import enabled_packs
+from core.agents.turno import del_turno
 from core.db.models import utcnow
 from core.gateway.connection_types import capacidades_de, capacidades_del_canal
 from core.kernel.opciones import activaciones, payload, resolver, respuesta_texto
@@ -61,6 +61,8 @@ class _EntornoDelTurno:
         from core.plugin_manager import plugin_manager
 
         spec = self._spec
+        if spec is None:  # sin agente en foco no hay ficha: el toque falla cerrado
+            return None
         registrada = mcp_host.get_tool(tool)
         # Prioridad al host, como el loop: una declarativa no puede ocultar una tool registrada.
         declarativa = None if registrada is not None else next((t for t in tools_for_spec(spec) if t.name == tool), None)
@@ -96,9 +98,8 @@ def abrir_entorno(conversation: Any, customer: Any) -> AbstractAsyncContextManag
     async def _abrir() -> AsyncIterator[_EntornoDelTurno]:
         token = release_vigente.abrir()
         try:
-            spec = await load_active_spec()
             await fijar_release_del_turno(conversation, enrutar=False)
-            yield _EntornoDelTurno(conversation, customer, spec_del_turno(spec))
+            yield _EntornoDelTurno(conversation, customer, del_turno())
         finally:
             release_vigente.cerrar(token)
 

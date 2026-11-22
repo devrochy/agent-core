@@ -216,6 +216,12 @@ def _raw_or_interpolated(value: Any, arguments: dict[str, Any]) -> Any:
 
 
 def tools_for_spec(spec) -> list[MCPTool]:  # type: ignore[no-untyped-def]
-    """Tools declarativas del tenant (`spec.extensions["tools"]`)."""
-    raw = (spec.extensions or {}).get("tools") if spec.extensions else None
+    """Tools declarativas del agente del turno: `AgenteDelTurno.declarativas`, de `AgentSpecV3.declarativeTools`
+    (ADR-0206 §1). Un `AgentSpec` v2 (el runner de evals, hasta HU-AOS-91) las trae en `extensions["tools"]`."""
+    if spec is None:
+        return []
+    if hasattr(spec, "declarativas"):
+        raw = spec.declarativas
+    else:
+        raw = (spec.extensions or {}).get("tools") if getattr(spec, "extensions", None) else None
     return [build_tool(d) for d in validate_declarative_tools(raw)]

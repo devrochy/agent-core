@@ -217,7 +217,7 @@ def test_schemas_de_encargar_y_consultar() -> None:
 async def test_el_ejecutor_de_consultas_usa_la_identidad_del_destino(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 
-    import core.agents.spec_de_release as spec_mod
+    import core.agents.turno as spec_mod
     from core.orchestrator import loop
 
     vistas: list[Any] = []
@@ -231,7 +231,7 @@ async def test_el_ejecutor_de_consultas_usa_la_identidad_del_destino(monkeypatch
     monkeypatch.setattr(loop.release_vigente, "kernel_del_turno", lambda: None)
     confirmar = {"valor": False}
     spec = SimpleNamespace(tools=[SimpleNamespace(tool="estado_demo", requiresConfirmation=False)])
-    monkeypatch.setattr(spec_mod, "spec_v2_desde_release", lambda *a, **k: spec)
+    monkeypatch.setattr(spec_mod, "agente_del_turno", lambda *a, **k: spec)
     monkeypatch.setattr(loop, "_execute_tool_safely", _ejecutar)
     destino = _Agente("suscripciones", {})
     ejecutar = loop._ejecutor_de_consulta(SimpleNamespace(), SimpleNamespace())
