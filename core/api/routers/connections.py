@@ -20,6 +20,8 @@ from core.admin.permissions import effective_access
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
 from core.api.forms import coerce_schema_values, redact_secrets
+from core.api.plan_limits import plan_conexion_responses, plan_limit_error
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.db.models import AuditLog, PhoneNumber, utcnow
 from core.db.session import get_owned, get_session
 from core.gateway.connection_types import WEBCHAT, setup_url
@@ -616,7 +618,7 @@ async def reveal_connection_credentials(
     return RevealedSecretsResponse(secrets=secrets)
 
 
-@router.post("/manual", status_code=204)
+@router.post("/manual", status_code=204, responses=plan_conexion_responses())
 async def save_manual_connection(
     payload: ManualSaveRequest,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
@@ -653,6 +655,9 @@ async def save_manual_connection(
         await save_connection(
             payload.label or ctype.label, values, payload.connection_id, type_id=ctype.id
         )
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        # Tope o canal del plan (ADR-0208 §8-9, HU-BILL-19): no se guardó nada.
+        raise plan_limit_error(exc) from None
     except ValueError as exc:
         # Errores de negocio con texto pensado para el usuario.
         raise ApiError.bad_request(
@@ -665,7 +670,7 @@ async def save_manual_connection(
     return Response(status_code=204)
 
 
-@router.post("/{connection_id}/action", status_code=204)
+@router.post("/{connection_id}/action", status_code=204, responses=plan_conexion_responses())
 async def connection_action(
     connection_id: uuid.UUID,
     payload: ConnectionActionRequest,
@@ -711,14 +716,18 @@ async def connection_action(
 
     from core.gateway.connections import delete_connection, set_active, set_primary
 
-    if payload.action == "activate":
-        await set_active(connection_id, True)
-    elif payload.action == "deactivate":
-        await set_active(connection_id, False)
-    elif payload.action == "primary":
-        await set_primary(connection_id)
-    else:
-        await delete_connection(connection_id)
+    try:
+        if payload.action == "activate":
+            await set_active(connection_id, True)
+        elif payload.action == "deactivate":
+            await set_active(connection_id, False)
+        elif payload.action == "primary":
+            await set_primary(connection_id)
+        else:
+            await delete_connection(connection_id)
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        # Reanudar (o marcar principal) una pausada es un alta para el plan (HU-BILL-19): sigue pausada.
+        raise plan_limit_error(exc) from None
     await audit_connection_action(principal, _ACCION_AUDITADA[payload.action], str(connection_id))
     return Response(status_code=204)
 
@@ -738,6 +747,8 @@ async def _pausar_chat_web(
             previo = await chat_web_conexion.establecer_habilitado(
                 session, principal.tenant_id, connection_id, enabled=enabled
             )
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from None
     except chat_web_conexion.WidgetDesincronizado:
         raise ApiError(
             409,

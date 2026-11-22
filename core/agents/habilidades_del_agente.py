@@ -160,9 +160,13 @@ async def configurar(
         await desinstalar_de_agente(tenant_id, agent_id, pack_id, actor=actor)
         return HabilidadDelAgente(pack_id=pack_id, instalada=False, status=None, config={})
     # El negocio tiene la habilidad si algún agente la tiene: crons, panel y `payment_registry` leen la del negocio.
+    # Instalarla en ESTE agente exige su `min_plan` (HU-BILL-19, en `asegurar_habilidades`); si el agente ya la tiene
+    # (guardar su configuración) no se vuelve a medir: se conserva aunque el plan haya bajado.
     from core.agents.habilitacion import asegurar_habilidades
+    from core.agents.instalaciones_agente import instaladas_en_agente
 
-    await asegurar_habilidades(tenant_id, [pack_id], actor=actor)
+    if pack_id not in set(await instaladas_en_agente(tenant_id, agent_id, solo_activas=False)):
+        await asegurar_habilidades(tenant_id, [pack_id], actor=actor)
     requiere = pack_id == PAGOS
     await instalar_en_agente(tenant_id, agent_id, pack_id, requiere_config=requiere, actor=actor)
     if config is not None:

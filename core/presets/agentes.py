@@ -533,7 +533,12 @@ async def _instalar_plantilla(
         propias = set(plantilla.habilidades) | (set(plantilla.opcionales) & habilitados)
         # Como al crear desde una plantilla en el editor: el código queda activo antes de
         # instalarlas; las del preset pasan a ser del negocio al quedar en este agente (HU-AOS-91).
-        await asegurar_habilidades(tenant_id, sorted(propias), actor=None)
+        # Solo las que el agente todavía no tiene: esas exigen su `min_plan` (HU-BILL-19); las que ya tiene se
+        # conservan aunque el plan haya bajado.
+        from core.agents.instalaciones_agente import instaladas_en_agente
+
+        ya_en_el_agente = set(await instaladas_en_agente(tenant_id, agent_id, solo_activas=False))
+        await asegurar_habilidades(tenant_id, sorted(propias - ya_en_el_agente), actor=None)
         for pack in sorted(propias):
             await instalar_en_agente(tenant_id, agent_id, pack, requiere_config=pack == "pack_payments")
     previas = await _instancias_previas(tenant_id, agent_id) if agent_id is not None else {}

@@ -21,8 +21,9 @@ pytestmark = [
 ]
 
 
-async def _negocio_con_byok() -> tuple[uuid.UUID, uuid.UUID, str, str]:
-    """Negocio con una conexión BYOK lista (secreto y token) y un número suyo."""
+async def _negocio_con_byok(*, plan: str | None = None) -> tuple[uuid.UUID, uuid.UUID, str, str]:
+    """Negocio con una conexión BYOK lista (secreto y token) y un número suyo. `plan`: el de la suscripción (los
+    tests de varias conexiones piden uno con cupo, HU-BILL-19)."""
     from _habilidades import onboard_tenant
 
     from core.db.models import MetaConnection, PhoneNumber, WabaAccount
@@ -32,7 +33,7 @@ async def _negocio_con_byok() -> tuple[uuid.UUID, uuid.UUID, str, str]:
 
     slug = uniq("registrar")
     tid, _ = await onboard_tenant(
-        name=f"Registrar {slug}", slug=slug, persona={"tone": "cercano"}, admin_email="admin@local"
+        name=f"Registrar {slug}", slug=slug, persona={"tone": "cercano"}, admin_email="admin@local", plan=plan
     )
     app_id, waba_id, phone_id = uniq("app"), uniq("waba"), uniq("ph")
     async with tenant_scope(tid):

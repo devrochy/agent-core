@@ -2,7 +2,8 @@
 
 Las métricas se **derivan** de la tabla que ya es su fuente de verdad (no hay
 un contador paralelo): `customers`, `usage_ledger`/`messages` (créditos, ADR-0144) y, desde
-HU-BILL-05 (D-35, ADR-0142), `agents`/`agent_instances` y `tenant_user`/`tenant_invitations`.
+HU-BILL-05 (D-35, ADR-0142), `agents`/`agent_instances` y `tenant_user`/`tenant_invitations`, y desde HU-BILL-19
+(ADR-0208 §8) `channel_connections` (`conexiones` y `correos`).
 Cada métrica se declara una sola vez acá; el panel y el enforcement la consumen.
 
 Desde los planes v3 (D-79, ADR-0208 §1, HU-BILL-18) el crédito es el único tope de consumo: los
@@ -34,6 +35,23 @@ from core.db.models import (
 from core.db.session import get_session
 from core.shared.tenant import tenant_scope
 from core.shared.test_mode import TEST_CHANNEL
+
+# Vocabulario de `ChannelConnection.channel` (ADR-0208 §8-9). `conexiones` cuenta solo estos canales
+# conversacionales: quedan fuera el correo (tiene su tope en `correos`), el Centro de pruebas
+# (`TEST_CHANNEL`) y lo que no conversa (Google Calendar, `channel = ""`). WhatsApp cubre Meta, Twilio,
+# Plivo y el vínculo por QR; el chat web es `web`.
+CANALES_CONVERSACIONALES: frozenset[str] = frozenset({"whatsapp", "instagram", "messenger", "telegram", "web"})
+CANAL_CORREO = "email"
+
+
+def metrica_de_canal(channel: str | None) -> str | None:
+    """La métrica estructural que consume una conexión de `channel`: `correos`, `conexiones` o None
+    (el canal no tiene tope: Centro de pruebas, calendario)."""
+    if channel == CANAL_CORREO:
+        return "correos"
+    if channel in CANALES_CONVERSACIONALES:
+        return "conexiones"
+    return None
 
 MetricScope = Literal["period", "lifetime"]
 
@@ -71,6 +89,23 @@ METRICS: tuple[Metric, ...] = (
         unit="colaboradores",
         scope="lifetime",
         description="Cuentas activas con acceso al negocio sin el propietario, más invitaciones pendientes.",
+    ),
+    Metric(
+        key="conexiones",
+        label="Conexiones",
+        unit="conexiones",
+        scope="lifetime",
+        description=(
+            "Conexiones vivas y activas de canales conversacionales (WhatsApp, Instagram, Messenger, "
+            "Telegram y chat web). No cuentan los correos ni la conexión del Centro de pruebas."
+        ),
+    ),
+    Metric(
+        key="correos",
+        label="Correos conectados",
+        unit="correos",
+        scope="lifetime",
+        description="Conexiones vivas y activas de correo (`channel = email`).",
     ),
     Metric(
         key="creditos",
@@ -154,7 +189,31 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
         return await _count_agents(session, tenant_id)
     if key == "colaboradores":
         return await _count_collaborators(session, tenant_id)
+    if key == "conexiones":
+        return await _count_connections(session, tenant_id, CANALES_CONVERSACIONALES)
+    if key == "correos":
+        return await _count_connections(session, tenant_id, (CANAL_CORREO,))
     return 0
+
+
+async def _count_connections(session, tenant_id: uuid.UUID, canales) -> int:
+    """Conexiones vivas (`deleted_at` nulo) y activas del negocio en `canales` (ADR-0208 §8). Una
+    pausada libera su cupo y reanudarla vuelve a medir el tope (`connections.set_active`). La
+    canónica de un número de Meta cuenta aunque su cuenta esté pausada: no tiene estado propio
+    (ADR-0122) y vuelve a responder al reanudar la cuenta."""
+    return int(
+        (
+            await session.execute(
+                select(func.count(ChannelConnection.id)).where(
+                    ChannelConnection.tenant_id == tenant_id,
+                    ChannelConnection.deleted_at.is_(None),
+                    ChannelConnection.active.is_(True),
+                    ChannelConnection.channel.in_(tuple(canales)),
+                )
+            )
+        ).scalar()
+        or 0
+    )
 
 
 async def _count_agents(session, tenant_id: uuid.UUID) -> int:

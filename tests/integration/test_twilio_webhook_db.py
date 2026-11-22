@@ -78,6 +78,7 @@ async def conexion() -> AsyncIterator[dict[str, Any]]:
 
     slug = f"twh-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(
+        plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
         name=f"Twilio {slug}", slug=slug, packs=[], sembrar_ejemplos=False
     )
     e164 = _numero()
@@ -325,6 +326,7 @@ async def conexion_b() -> AsyncIterator[dict[str, Any]]:
 
     slug = f"twb-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(
+        plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
         name=f"Twilio {slug}", slug=slug, packs=[], sembrar_ejemplos=False
     )
     e164 = _numero()
@@ -413,6 +415,7 @@ async def test_el_numero_que_pasa_a_otro_negocio_corta_la_ruta_vieja(
 
     slug = f"twc-{uuid.uuid4().hex[:8]}"
     tid_c, _ = await onboard_tenant(
+        plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
         name=f"Twilio {slug}", slug=slug, packs=[], sembrar_ejemplos=False
     )
     ac_c, token_c = "AC" + "8" * 32, "token-c"

@@ -105,6 +105,7 @@ async def _negocio() -> dict[str, Any]:
 
     slug = uniq("twseg")
     tid, _ = await onboard_tenant(
+        plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
         name=f"Segmentos {slug}", slug=slug, persona={"tone": "cercano"}, admin_email="admin@local",
         packs=["pack_commerce"], sembrar_ejemplos=False,
     )

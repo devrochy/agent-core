@@ -17,6 +17,12 @@ número cambie de cuenta: reconectarlo o pasarlo a otra cuenta religa la misma f
 `asegurar_conexion_del_numero` corre dentro de la transacción del alta
 (`meta_asset_claims.numero_para_conexion`, los cinco caminos de ADR-0122 §6) y en el backfill
 (`core/gateway/conexion_canonica_backfill.py`).
+
+**Plan (ADR-0208 §8-9, HU-BILL-19).** Crear una fila canónica es dar de alta una conexión: exige el
+canal del plan y el tope `conexiones` (`canales_del_plan.exigir_alta_de_conexion`) en la misma
+transacción, después del candado del activo (orden de candados: activo → billing). Volver a ligar la
+misma fila (`religada`, `ya_estaba`) no es un alta y no se mide. El backfill y la reversión de un alta
+BYOK fallida pasan `exigir_plan=False`: reconstruyen lo que el negocio ya tenía.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from typing import Any, Literal
 
 from sqlalchemy import select, text
 
+from core.billing.canales_del_plan import exigir_alta_de_conexion, verificar_alta_de_conexion
 from core.db.models import ChannelConnection, utcnow
 from core.gateway.connection_types import (
     INSTAGRAM_META,
@@ -57,6 +64,7 @@ async def asegurar_conexion_del_numero(
     meta_connection_id: uuid.UUID,
     *,
     aplicar: bool = True,
+    exigir_plan: bool = True,
 ) -> Resultado:
     """Crea o religa la conexión canónica de `phone_number_id` hacia su cuenta.
 
@@ -66,7 +74,10 @@ async def asegurar_conexion_del_numero(
 
     Va en la MISMA sesión que el alta (o el lote del backfill). El llamador serializa por
     número (`claim_assets` toma `meta_asset:phone:<id>`), así dos altas del mismo número no
-    crean dos filas. Con `aplicar=False` solo dice qué haría (dry-run del backfill)."""
+    crean dos filas. Con `aplicar=False` solo dice qué haría (dry-run del backfill).
+
+    Crear la fila exige el plan (`exigir_plan`, ver el docstring del módulo) y puede levantar
+    `QuotaExceeded` o `CanalNoIncluido`: el alta entera se deshace."""
     type_id, category = _tipo()
     viva = (
         await session.execute(
@@ -97,6 +108,8 @@ async def asegurar_conexion_del_numero(
         return "religada"
 
     if aplicar:
+        if exigir_plan:
+            await exigir_alta_de_conexion(session, tenant_id, CANAL)
         session.add(
             ChannelConnection(
                 tenant_id=tenant_id,
@@ -128,7 +141,14 @@ async def asegurar_conexion_en_vuelo(
     alta, una reconexión o una baja que corrió mientras esperaba manda (nunca se religa una fila
     que otra alta ya dejó viva, y no se crea para un número liberado o de una cuenta dada de baja).
     Con instancias, como las altas. None si no corresponde crearla (el consumer sigue como antes,
-    sin conexión) o si no se pudo."""
+    sin conexión) o si no se pudo.
+
+    **No exige el plan** (HU-BILL-19, decisión documentada en el changelog): corre en el camino del
+    mensaje entrante y solo repara la fila de un número que el negocio YA tiene conectado (fila viva en
+    `phone_numbers` y cuenta fuera de `draft`; el alta de ese número ya pasó por
+    `numero_para_conexion`, que sí exige). Bloquear aquí descartaría o dejaría sin conexión los mensajes
+    de un canal existente. Si el negocio está por encima del tope, se registra un aviso y nada más: como
+    con cualquier negocio sobre el tope, conserva lo que tiene y solo no crece."""
     from core.agents.instancias import instancias_al_alta
     from core.db.models import MetaConnection, PhoneNumber
 
@@ -176,14 +196,30 @@ async def asegurar_conexion_en_vuelo(
         return None
     try:
         async with session.begin_nested():
-            await asegurar_conexion_del_numero(session, tenant_id, phone_number_id, cuenta)
+            await asegurar_conexion_del_numero(session, tenant_id, phone_number_id, cuenta, exigir_plan=False)
     except Exception:
         log.warning("conexion_en_vuelo_fallo", tenant_id=str(tenant_id), phone_number_id=phone_number_id, exc_info=True)
         return None
     conexion = await _viva()
     if conexion is not None:
+        await _avisar_si_supera_el_tope(session, tenant_id)
         await instancias_al_alta(session, tenant_id, phone_number_id, cuenta)
     return conexion
+
+
+async def _avisar_si_supera_el_tope(session: Any, tenant_id: uuid.UUID) -> None:
+    """Aviso (sin bloquear) de que la reparación en vuelo dejó al negocio por encima de `conexiones`."""
+    from core.billing.enforcement import quota_decision
+
+    try:
+        decision = await quota_decision(tenant_id, "conexiones", session=session)
+    except Exception:  # un aviso nunca tumba el mensaje
+        log.warning("conexion_en_vuelo_sin_medir_tope", tenant_id=str(tenant_id), exc_info=True)
+        return
+    if decision.limit is not None and decision.used > decision.limit:
+        log.warning(
+            "conexion_en_vuelo_sobre_el_tope", tenant_id=str(tenant_id), used=decision.used, limit=decision.limit
+        )
 
 
 async def _asegurar_conexion_de_activo(
@@ -195,6 +231,7 @@ async def _asegurar_conexion_de_activo(
     tipo_id: str,
     channel: str,
     nombre: str,
+    exigir_plan: bool = True,
 ) -> tuple[uuid.UUID, Resultado]:
     tipo = get_connection_type(tipo_id)
     if tipo is None:  # el catálogo es código: no pasa salvo que alguien borre el tipo
@@ -223,6 +260,8 @@ async def _asegurar_conexion_de_activo(
         viva.updated_at = utcnow()
         await session.flush()
         return viva.id, "religada"
+    if exigir_plan:
+        await exigir_alta_de_conexion(session, tenant_id, channel)
     conexion = ChannelConnection(
         tenant_id=tenant_id,
         channel=channel,
@@ -274,3 +313,44 @@ async def asegurar_conexion_de_cuenta_ig(
     return await _asegurar_conexion_de_activo(
         session, tenant_id, ig_user_id, meta_connection_id, tipo_id=INSTAGRAM_META, channel="instagram", nombre=nombre
     )
+
+
+async def _hay_canonica_viva(session: Any, tenant_id: uuid.UUID, channel: str, external_id: str | None = None) -> bool:
+    query = select(ChannelConnection.id).where(
+        ChannelConnection.tenant_id == tenant_id,
+        ChannelConnection.provider == PROVEEDOR,
+        ChannelConnection.channel == channel,
+        ChannelConnection.meta_connection_id.is_not(None),
+        ChannelConnection.deleted_at.is_(None),
+    )
+    if external_id is not None:
+        query = query.where(ChannelConnection.external_id == external_id)
+    return (await session.execute(query.limit(1))).first() is not None
+
+
+async def verificar_antes_del_oauth(tenant_id: uuid.UUID, channel: str) -> None:
+    """Chequeo previo, sin lock, antes de abrir el popup de Meta (ADR-0208 §8: no cortar al dueño después
+    de completar el OAuth). Levanta `CanalNoIncluido` o `QuotaExceeded`.
+
+    El canal se exige siempre. El tope `conexiones` solo si el negocio NO tiene ya una conexión canónica
+    viva de ese canal: con una, el OAuth puede ser una reconexión (token vencido, otra cuenta de Meta), que
+    vuelve a ligar la misma fila y no es un alta; bloquearla sería un falso 409. En ese caso, y en una
+    carrera, manda el `enforce_growth` del insert."""
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        if await _hay_canonica_viva(session, tenant_id, channel):
+            from core.billing.canales_del_plan import exigir_canal
+
+            await exigir_canal(tenant_id, channel, session=session)
+            return
+        await verificar_alta_de_conexion(tenant_id, channel, session=session)
+
+
+async def exigir_cupo_de_activo(session: Any, tenant_id: uuid.UUID, channel: str, external_id: str) -> None:
+    """Exige el plan para el activo `external_id` (Página, cuenta de Instagram) si todavía no tiene su fila
+    canónica viva: lo usan las altas que escriben su fila propia ANTES de crear la canónica, para no dejar
+    la cuenta a medias si el plan no alcanza. Mismo candado que el alta (`exigir_alta_de_conexion`)."""
+    if await _hay_canonica_viva(session, tenant_id, channel, external_id):
+        return
+    await exigir_alta_de_conexion(session, tenant_id, channel)

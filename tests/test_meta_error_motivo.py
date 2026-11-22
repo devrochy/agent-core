@@ -64,8 +64,13 @@ async def test_agregar_numero_devuelve_el_motivo_de_meta(monkeypatch):
     async def fake_add(*_args, **_kwargs):
         raise _invalid_parameter(msg="El nombre visible no cumple las reglas de Meta.")
 
+    async def con_cupo(*_args, **_kwargs):
+        return None
+
     monkeypatch.setattr(service, "resolve_waba_and_credentials", fake_resolve)
     monkeypatch.setattr("core.gateway.meta_phone_numbers.add_phone_number", fake_add)
+    # El chequeo del plan (HU-BILL-19) lee la BD: aquí el negocio tiene cupo.
+    monkeypatch.setattr("core.billing.canales_del_plan.verificar_alta_de_conexion", con_cupo)
 
     error = await service.add_number(
         TENANT, str(CONNECTION), cc="57", phone_number="3001234567", verified_name="Business Wap"

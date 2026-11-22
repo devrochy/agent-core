@@ -18,9 +18,12 @@ from pydantic import BaseModel, Field, SecretStr
 
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses_de
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.config import get_settings
 from core.gateway import meta_instagram_alta as alta
 from core.gateway import meta_instagram_login_alta as login_alta
+from core.gateway.conexion_canonica import verificar_antes_del_oauth
 
 router = APIRouter(prefix="/admin/meta/instagram", tags=["admin · instagram"])
 
@@ -118,25 +121,24 @@ async def instagram_state(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> InstagramState:
     """Si el alta puede completarse aquí (app de Meta configurada y plan que incluye Instagram)."""
-    from core.billing.enforcement import subscription_overview
+    from core.billing.canales_del_plan import canal_permitido
 
     tenant_id = _negocio(principal)
     settings = get_settings()
     faltan = alta.faltan_para_instagram(settings)
-    resumen = await subscription_overview(tenant_id)
     return InstagramState(
         meta_configured=not faltan,
         app_id=settings.meta_app_id or "",
         config_id=alta.config_id_de_instagram(settings),
         graph_api_version=settings.graph_api_version,
         missing_settings=faltan,
-        plan_includes=alta.plan_incluye_instagram(resumen.plan_id),
+        plan_includes=await canal_permitido(tenant_id, "instagram"),
         login_available=not (login_faltan := login_alta.login_disponible(settings)),
         login_missing=login_faltan,
     )
 
 
-@router.post("/attempt", response_model=InstagramAttemptOut, status_code=201)
+@router.post("/attempt", response_model=InstagramAttemptOut, status_code=201, responses=plan_limit_responses_de("conexiones", canal=True))
 async def instagram_attempt(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> InstagramAttemptOut:
@@ -145,8 +147,12 @@ async def instagram_attempt(
     tenant_id = _negocio(principal)
     try:
         await alta.exigir_plan(tenant_id)
+        # Antes del popup: el tope de conexiones, sin lock, para no cortar al dueño después del OAuth (HU-BILL-19).
+        await verificar_antes_del_oauth(tenant_id, "instagram")
     except alta.InstagramAltaError as exc:
         raise _traducir(exc) from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from exc
     return InstagramAttemptOut(
         attempt=await alta.iniciar_intento(tenant_id, principal.admin.id), expires_in=alta.INTENTO_TTL_S
     )
@@ -232,7 +238,9 @@ class InstagramLoginCompleteOut(BaseModel):
     subscribed_fields: list[str] = []
 
 
-@router.post("/login/start", response_model=InstagramLoginStartOut, status_code=201)
+@router.post(
+    "/login/start", response_model=InstagramLoginStartOut, status_code=201, responses=plan_limit_responses_de("conexiones", canal=True)
+)
 async def instagram_login_start(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> InstagramLoginStartOut:
@@ -243,10 +251,12 @@ async def instagram_login_start(
         iniciado = await login_alta.iniciar_login(tenant_id, principal.admin.id)
     except alta.InstagramAltaError as exc:
         raise _traducir(exc) from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from exc
     return InstagramLoginStartOut(url=iniciado.url, expires_in=iniciado.expires_in)
 
 
-@router.post("/login/complete", response_model=InstagramLoginCompleteOut)
+@router.post("/login/complete", response_model=InstagramLoginCompleteOut, responses=plan_limit_responses_de("conexiones", canal=True))
 async def instagram_login_complete(
     payload: InstagramLoginCompleteIn,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
@@ -261,6 +271,8 @@ async def instagram_login_complete(
         )
     except alta.InstagramAltaError as exc:
         raise _traducir(exc) from exc
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from exc
     return InstagramLoginCompleteOut(
         ig_user_id=cuenta.ig_user_id, username=cuenta.username, channel_connection_id=cuenta.channel_connection_id,
         connection_id=cuenta.connection_id, subscribed=cuenta.suscrita, subscribed_fields=list(cuenta.campos),

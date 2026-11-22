@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from core.api.deps import Principal, require, require_owner_or_master
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses_de
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.gateway.telegram import alta as svc
 
 router = APIRouter(prefix="/admin/connections/telegram", tags=["connections"])
@@ -166,7 +168,14 @@ async def _auditar(principal: Principal, accion: str, connection_id: uuid.UUID) 
     "",
     response_model=ConexionTelegramOut,
     status_code=201,
-    responses={**_ERRORES, 200: {"description": "El bot ya estaba conectado en este negocio: se actualizó."}},
+    responses={
+        **_ERRORES,
+        409: {
+            "description": (_ERRORES.get(409, {}).get("description", "") + " "
+                            + plan_limit_responses_de("conexiones", canal=True)[409]["description"]).strip()
+        },
+        200: {"description": "El bot ya estaba conectado en este negocio: se actualizó."},
+    },
 )
 async def conectar(
     payload: TelegramAltaIn,
@@ -185,6 +194,9 @@ async def conectar(
         )
     except svc.AltaError as exc:
         raise _api_error(exc) from None
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        # Telegram desde Basic y el tope `conexiones` (ADR-0208 §8-9, HU-BILL-19): no se guardó nada.
+        raise plan_limit_error(exc) from None
     await _auditar(principal, "telegram.connected", resultado.connection_id)
     if not resultado.created:
         response.status_code = 200

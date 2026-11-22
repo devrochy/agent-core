@@ -69,7 +69,7 @@ async def conexion() -> AsyncIterator[dict[str, Any]]:
     from core.tenants import deactivate_tenant, purge_tenant
 
     slug = f"tls-{uuid.uuid4().hex[:8]}"
-    tid, _ = await onboard_tenant(name=f"Telegram {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+    tid, _ = await onboard_tenant(plan="empresarial", name=f"Telegram {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
     settings = get_settings()
     antes = (settings.public_base_url, settings.telegram_habilitado)
     settings.public_base_url, settings.telegram_habilitado = BASE, True

@@ -54,7 +54,9 @@ from core.admin.waweb_service import (
 )
 from core.api.deps import Principal, es_owner_o_master, require, require_owner_or_master
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses_de
 from core.api.schemas import ReadinessRun, readiness_run_out
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.db.session import get_session
 from core.gateway.meta_connection_state import get_live_meta_connection
 
@@ -340,19 +342,26 @@ async def list_business_numbers(
     )
 
 
-@router.post("/connections/{connection_id}/numbers", status_code=204)
+@router.post(
+    "/connections/{connection_id}/numbers",
+    status_code=204,
+    responses=plan_limit_responses_de("conexiones", canal=True),
+)
 async def add_connection_number(
     connection_id: str,
     payload: AddNumberRequest,
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
-    error = await add_number(
-        principal.tenant_id,
-        connection_id,
-        cc=payload.cc,
-        phone_number=payload.phone_number,
-        verified_name=payload.verified_name,
-    )
+    try:
+        error = await add_number(
+            principal.tenant_id,
+            connection_id,
+            cc=payload.cc,
+            phone_number=payload.phone_number,
+            verified_name=payload.verified_name,
+        )
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from None
     if error is not None:
         raise ApiError.bad_request(error, "add_number_failed")
     return Response(status_code=204)
@@ -506,21 +515,28 @@ async def get_waweb_state(
     return WawebState(**state)
 
 
-@router.post("/waweb/accept-risk", status_code=204)
+@router.post("/waweb/accept-risk", status_code=204, responses=plan_limit_responses_de("conexiones", canal=True))
 async def accept_waweb_risk(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
-    error = await waweb_accept_risk(principal.tenant_id, principal.admin.id)
+    """Acepta el aviso de riesgo y crea (o reanuda) la conexión por QR: es un alta para el plan (HU-BILL-19)."""
+    try:
+        error = await waweb_accept_risk(principal.tenant_id, principal.admin.id)
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from None
     if error is not None:
         raise ApiError.bad_request(error, "accept_risk_failed")
     return Response(status_code=204)
 
 
-@router.post("/waweb/reset", status_code=204)
+@router.post("/waweb/reset", status_code=204, responses=plan_limit_responses_de("conexiones", canal=True))
 async def reset_waweb_session(
     principal: Annotated[Principal, Depends(require("connections", write=True))],
 ) -> Response:
-    error = await waweb_reset_session(principal.tenant_id)
+    try:
+        error = await waweb_reset_session(principal.tenant_id)
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        raise plan_limit_error(exc) from None
     if error is not None:
         raise ApiError.bad_request(error, "reset_failed")
     return Response(status_code=204)

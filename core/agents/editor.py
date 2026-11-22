@@ -308,6 +308,23 @@ async def crear_desde_plantilla(
     from core.billing.enforcement import enforce_metric
 
     await enforce_metric(tenant_id, "agentes")
+    # `min_plan` de TODAS las habilidades que quedarán en este agente (ADR-0208 §10, HU-BILL-19), también las que el
+    # negocio ya tiene en otro: se conservan donde están, pero no se instalan en uno nuevo. Antes de escribir nada.
+    from core.billing.habilidades_del_plan import HabilidadNoIncluida, exigir_min_plan
+
+    try:
+        await exigir_min_plan(tenant_id, plantilla.habilidades)
+    except HabilidadNoIncluida as exc:
+        raise ErrorDelEditor(
+            409,
+            exc.code,
+            exc.message,
+            {
+                "skills": ", ".join(sorted(exc.packs)),
+                "min_plan": str(exc.details.get("min_plan") or ""),
+                "plan": str(exc.details.get("plan") or ""),
+            },
+        ) from None
     por_habilitar = sorted(set(plantilla.habilidades) - habilitados)
     habilitadas: list[str] = []
     sin_configurar: dict[str, str] = {}

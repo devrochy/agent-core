@@ -25,10 +25,18 @@ from typing import Any
 
 from sqlalchemy import select
 
+from core.billing.canales_del_plan import (
+    CanalNoIncluido,
+    codigo_y_mensaje,
+    exigir_canal,
+    plan_incluye_canal,
+)
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.config import get_settings
 from core.db.models import IgAccount, MetaConnection, utcnow
 from core.db.session import get_session
 from core.gateway import meta_token_store
+from core.gateway.conexion_canonica import exigir_cupo_de_activo
 from core.gateway.meta_asset_claims import MetaAssetError, claim_messaging_assets
 from core.gateway.meta_errors import GraphError
 from core.gateway.meta_graph import graph_fetch
@@ -51,7 +59,6 @@ from core.gateway.meta_messenger_alta import (
     _campos_de_la_app,
     _consumir_intento,
     evaluar_pagina,
-    plan_incluye_canal,
 )
 from core.gateway.meta_messenger_alta import iniciar_intento as _iniciar_intento
 from core.shared.logger import get_logger
@@ -118,15 +125,12 @@ def plan_incluye_instagram(plan_id: str | None) -> bool:
 
 
 async def exigir_plan(tenant_id: uuid.UUID) -> None:
-    from core.billing.enforcement import subscription_overview
-
-    resumen = await subscription_overview(tenant_id)
-    if not plan_incluye_instagram(resumen.plan_id):
-        raise InstagramAltaError(
-            f"Tu plan {resumen.plan_name} no incluye Instagram. Mejora tu plan para conectar tus cuentas.",
-            code="plan_channel_not_included",
-            status=409,
-        )
+    """409 `plan_channel_not_included` si el plan no incluye Instagram (Premium y Empresarial, D-79). Un negocio sin
+    suscripción no se bloquea (mismo criterio que el resto del enforcement)."""
+    try:
+        await exigir_canal(tenant_id, CANAL)
+    except CanalNoIncluido as exc:
+        raise InstagramAltaError(exc.message, code=exc.code, status=409) from exc
 
 
 def config_id_de_instagram(settings: Any) -> str:
@@ -364,6 +368,10 @@ async def conectar_cuentas(
         except MetaAssetError as exc:
             omitidas.append(CuentaOmitida(ig_user_id, exc.code, exc.message))
             continue
+        except (QuotaExceeded, PlanNoIncluye) as exc:
+            # Cada cuenta es una conexión (ADR-0208 §8): la que no cabe en el plan se omite.
+            omitidas.append(CuentaOmitida(ig_user_id, *codigo_y_mensaje(exc)))
+            continue
         try:
             suscrita, campos = await _suscribir_y_verificar(
                 candidata.page_id, candidata.page_access_token, settings.meta_app_id,
@@ -390,6 +398,9 @@ async def _guardar_cuenta(
     assert cuenta_ig.page_access_token is not None
     async with get_session() as session:
         await claim_messaging_assets(session, tenant_id, ig_user_id=cuenta_ig.ig_user_id)
+        # El plan antes de escribir la cuenta y su token: si no alcanza, nada queda a medias (HU-BILL-19). La
+        # decisión definitiva es la de `activar_ruta`, al crear la conexión canónica.
+        await exigir_cupo_de_activo(session, tenant_id, CANAL, cuenta_ig.ig_user_id)
         cuenta = await session.get(MetaConnection, connection_id)
         if cuenta is None or cuenta.deleted_at is not None:
             raise MetaAssetError(

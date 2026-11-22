@@ -90,6 +90,7 @@ async def negocio() -> AsyncIterator[uuid.UUID]:
 
     slug = f"tso-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(
+        plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
         name=f"Sandbox {slug}", slug=slug, packs=[], sembrar_ejemplos=False
     )
     async with tenant_scope(tid):
@@ -246,7 +247,7 @@ async def test_dos_negocios_con_el_mismo_numero_no_se_cruzan(app_client, gate, t
     creados = []
     for _ in range(2):
         slug = f"tsx-{uuid.uuid4().hex[:8]}"
-        tid, _ = await onboard_tenant(name=slug, slug=slug, packs=[], sembrar_ejemplos=False)
+        tid, _ = await onboard_tenant(plan="empresarial", name=slug, slug=slug, packs=[], sembrar_ejemplos=False)
         async with tenant_scope(tid):
             await bandera.fijar(tid, "whatsapp_twilio", True, actor="test")
         creados.append((tid, slug))
@@ -576,7 +577,7 @@ async def test_la_prueba_no_se_ve_desde_otro_negocio(negocio, app_client, gate, 
     _, hecha = await _sandbox(negocio, twilio)
     sid = await _en(negocio, operacion.enviar_prueba, negocio, hecha.connection_id, "+573001234567")
     slug = f"tso-{uuid.uuid4().hex[:8]}"
-    otro, _ = await onboard_tenant(name=f"Otro {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+    otro, _ = await onboard_tenant(plan="empresarial", name=f"Otro {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
     try:
         await _en(otro, bandera.fijar, otro, "whatsapp_twilio", True, actor="test")
         h = await api_headers(app_client, otro)

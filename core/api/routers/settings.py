@@ -35,6 +35,8 @@ from core.agents.defaults_negocio import DefaultsDelNegocio
 from core.agents.instalaciones_agente import packs_del_negocio
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses_de
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
 from core.config import DEBOUNCE_DELAY_MS, get_settings
 from core.config_limites import leer_entero, rango
 from core.config_registro import (
@@ -979,7 +981,7 @@ async def get_web_chat_settings(
     return _web_chat_out(app_settings)
 
 
-@router.put("/web-chat", response_model=WebChatSettings)
+@router.put("/web-chat", response_model=WebChatSettings, responses=plan_limit_responses_de("conexiones", canal=True))
 async def save_web_chat_settings(
     payload: WebChatUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
@@ -1009,6 +1011,9 @@ async def save_web_chat_settings(
                 turnstile_secret=payload.turnstile_secret,
             )
             despues = await chat_web_conexion.estado_bajo_candado(session, principal.tenant_id)
+    except (QuotaExceeded, PlanNoIncluye) as exc:
+        # Habilitar el widget es un alta de conexión (ADR-0208 §8-9, HU-BILL-19): no se guardó nada.
+        raise plan_limit_error(exc) from None
     except IntegrityError:
         # Sin el detalle de la BD: un choque de la clave (índice global `uq_cc_webchat_key`)
         # no debe delatar que otro negocio la usa. Con 192 bits aleatorios no pasa en la práctica.

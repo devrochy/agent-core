@@ -36,6 +36,7 @@ async def _new_tenant(prefix: str) -> uuid.UUID:
 
     slug = uniq(prefix)
     tid, _ = await onboard_tenant(
+        plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
         name=f"Tenant {slug}", slug=slug, business_description="Test de credenciales de Meta.",
         persona={"tone": "cercano"}, admin_email=ADMIN_EMAIL,
     )

@@ -19,7 +19,8 @@ async def dar_habilidades(
     tenant_id: uuid.UUID, packs: Iterable[str], *, key: str = KEY_DE_PRUEBA, chequear: bool = True
 ) -> uuid.UUID:
     """Activa `packs` en el negocio y los instala en el especialista de prueba (lo crea si no existe). Devuelve su id.
-    `chequear=False` instala sin el chequeo previo (cuota y activación): para medir la cuota misma."""
+    `chequear=False` instala sin el chequeo previo (cuota y activación): para medir la cuota misma. Es un fixture: no
+    exige el `min_plan` de los packs (HU-BILL-19), que se prueba en `test_topes_estructurales_conexiones.py`."""
     from sqlalchemy import select
 
     from core.agents import versiones
@@ -44,7 +45,7 @@ async def dar_habilidades(
                 await versiones.crear_agente(tenant_id, key=key, kind="specialist", name="Habilidades de prueba")
             ).id
         if pedidos and chequear:
-            await asegurar_habilidades(tenant_id, pedidos, actor=None)
+            await asegurar_habilidades(tenant_id, pedidos, actor=None, exigir_plan=False)
         for pack in pedidos:
             # Activa, también Pagos: es lo que daba la habilitación del negocio de antes.
             await instalar_en_agente(tenant_id, agent_id, pack)

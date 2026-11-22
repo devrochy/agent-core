@@ -9,6 +9,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from core.billing.enforcement import PlanNoIncluye, QuotaExceeded
+
 
 def qr_data_uri(data: str) -> str:
     """QR (texto) → data URI PNG. Único lugar que genera la imagen."""
@@ -53,6 +55,8 @@ async def accept_risk(tenant_id: uuid.UUID | None, admin_id: uuid.UUID) -> str |
 
     try:
         await waweb.accept_risk(tenant_id, admin_id)
+    except (QuotaExceeded, PlanNoIncluye):
+        raise  # 409 del plan (HU-BILL-19): lo traduce quien llama
     except Exception as exc:
         return str(exc)[:140]
     return None
@@ -65,6 +69,8 @@ async def reset_session(tenant_id: uuid.UUID | None) -> str | None:
 
     try:
         await waweb.reset_session(tenant_id)
+    except (QuotaExceeded, PlanNoIncluye):
+        raise  # 409 del plan (HU-BILL-19): lo traduce quien llama
     except Exception as exc:
         return str(exc)[:140]
     return None

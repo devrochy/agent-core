@@ -50,7 +50,7 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
     creados: list[tuple[uuid.UUID, str]] = []
     for prefijo in ("tga", "tgb"):
         slug = f"{prefijo}-{uuid.uuid4().hex[:8]}"
-        tid, _ = await onboard_tenant(name=f"Telegram {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+        tid, _ = await onboard_tenant(plan="empresarial", name=f"Telegram {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
         creados.append((tid, slug))
     yield creados[0][0], creados[1][0]
     for tid, slug in creados:
