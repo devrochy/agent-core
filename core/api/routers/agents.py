@@ -442,7 +442,7 @@ async def get_agent(
     return AgentDetail(**base.model_dump(), draft=_draft(borrador), versions=[_version(v) for v in versiones])
 
 
-_PATCH_409 = {
+_PATCH_409: dict[int | str, dict[str, Any]] = {
     409: {
         "description": (
             "`plan_nivel_ia_not_included` con `error.details = {nivel_ia, plan}` si el plan no incluye el nivel "
