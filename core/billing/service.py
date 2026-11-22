@@ -280,6 +280,8 @@ async def aplicar_pago_de_periodo(
     )
 
     plan_previo = sub.plan_id
+    status_previo = sub.status
+    ciclo_previo = (sub.period_start, sub.dia_ancla)
     cubre_hoy = periodo.inicio <= now < periodo.fin
     if periodo.desde_cero or not tiene_periodo_pago(sub.plan_id, sub.status) or sub.period_end is None:
         sub.plan_id = plan.id
@@ -305,6 +307,9 @@ async def aplicar_pago_de_periodo(
     sub.provider = provider
     sub.provider_reference = provider_reference
     sub.updated_at = utcnow()
+    await _cerrar_ventana_abandonada(
+        session, tenant_id, sub, ciclo_previo=ciclo_previo, plan_previo=plan_previo, status_previo=status_previo, now=now
+    )
     if sub.plan_id != plan_previo:
         # El plan cambió: los links pendientes de otro plan dejan de servir. Si alguien paga
         # uno igual, queda como pago doble y no devuelve el negocio al plan viejo.
@@ -328,6 +333,48 @@ async def aplicar_pago_de_periodo(
         period_end=sub.period_end.isoformat() if sub.period_end else None,
     )
     return PagoDePeriodo(APLICADO, referencia, propio.id)
+
+
+async def _cerrar_ventana_abandonada(
+    session: AsyncSession,
+    tenant_id: uuid.UUID,
+    sub: TenantSubscription,
+    *,
+    ciclo_previo: tuple[datetime | None, int | None],
+    plan_previo: str | None,
+    status_previo: str | None,
+    now: datetime,
+) -> None:
+    """Si el pago reinició `period_start` (al volver tras cancelar o tras más de un período vencido), la
+    ventana de créditos que corría hoy se abandona: se cierra aquí, en la misma transacción, con el mismo
+    arrastre que el cron, y los abonos pasan a la ventana nueva (ADR-0209 §3, HU-BILL-22).
+
+    La ventana abandonada se mide hasta el inicio de la nueva (acotado a la abandonada), que hace de «fin del
+    ciclo que cierra» para el `vence_en` del sobrante, con el `dia_ancla` nuevo. El sobrante del mes se
+    acumula con el plan y el estado que tenía la suscripción ANTES del pago."""
+    from core.billing.cierre_de_ciclo import cerrar_ciclo, meses_que_acumula
+    from core.billing.periodos import ventana_mensual
+
+    inicio_previo, ancla_previa = ciclo_previo
+    if inicio_previo is None or sub.period_start is None or sub.period_start == inicio_previo:
+        return
+    viejo_inicio, viejo_fin = ventana_mensual(inicio_previo, ancla_previa, now)
+    nuevo_inicio, nuevo_fin = ventana_mensual(sub.period_start, sub.dia_ancla, now)
+    if nuevo_inicio == viejo_inicio:
+        return
+    hasta = min(max(nuevo_inicio, viejo_inicio), viejo_fin)
+    plan = get_plan(plan_previo or "")
+    await cerrar_ciclo(
+        session,
+        tenant_id,
+        credito_mensual=plan.monthly_credits if plan else None,
+        acumulable_meses=meses_que_acumula(plan_previo, status_previo),
+        inicio=viejo_inicio,
+        hasta=hasta,
+        siguiente_inicio=nuevo_inicio,
+        siguiente_fin=nuevo_fin,
+        dia_ancla=sub.dia_ancla,
+    )
 
 
 async def registrar_periodo_pagado(

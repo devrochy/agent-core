@@ -51,6 +51,9 @@ log = get_logger(__name__)
 MIN_FRASES = 3
 # Tope de conexiones por publicación (una release por conexión).
 MAX_CONEXIONES = 20
+# Textos de publicar sin el nombre del modelo: el gestor nunca lo ve (ADR-0210 §5).
+NOTA_MODELO_DEL_NEGOCIO = "Se usó el modelo de IA de tu negocio: el del agente no lo sirve tu proveedor."
+AVISO_LLAVE_PROPIA = "Tu negocio usa su propia llave de IA (Configuración): su modelo manda sobre el nivel del agente."
 # Ventana del promedio de tokens por turno del costo estimado.
 DIAS_DE_CONSUMO = 30
 
@@ -480,6 +483,8 @@ class ContextoDeModelos:
     models: list[Modelo] = field(default_factory=list)
     # El que usa un agente cuyo modelo ya no sirve (HU-AOS-79): ver `modelo_del_negocio`.
     business_model: str = ""
+    # BYOK (proveedor y llave, `niveles.usa_llave_propia`): sin ella manda el nivel de IA (ADR-0210 §3).
+    llave_propia: bool = False
 
 
 def _familia(model: str) -> str:
@@ -567,7 +572,8 @@ async def contexto_de_modelos(tenant_id: uuid.UUID) -> ContextoDeModelos:
         ajustes = (
             await session.execute(
                 text(
-                    "SELECT llm_provider, llm_model FROM app_settings WHERE tenant_id = :t AND deleted_at IS NULL LIMIT 1"
+                    "SELECT llm_provider, llm_model, llm_api_key_encrypted FROM app_settings "
+                    "WHERE tenant_id = :t AND deleted_at IS NULL LIMIT 1"
                 ),
                 {"t": tenant_id},
             )
@@ -612,6 +618,7 @@ async def contexto_de_modelos(tenant_id: uuid.UUID) -> ContextoDeModelos:
         turnos,
         modelos,
         business_model=modelo_del_negocio(provider, byok, get_settings().llm_model),
+        llave_propia=bool(ajustes is not None and ajustes[0] and ajustes[2]),
     )
 
 
@@ -790,13 +797,14 @@ async def publicar_en_conexiones(
         contenido, {s.id: s for s in superpoderes(habilitados)}, procedimientos_del_enfoque(agente.key)
     )
     contexto = await contexto_de_modelos(tenant_id)
-    # HU-AOS-79: el dueño ya no elige el modelo. Uno retirado o de otro proveedor no bloquea:
-    # la versión se congela con el del negocio y queda anotado.
+    # HU-AOS-79: el dueño ya no elige el modelo. Con la llave de la plataforma lo fija el nivel de IA al
+    # publicar (ADR-0210 §3). Con llave propia, uno retirado o de otro proveedor no bloquea: la versión se
+    # congela con el del negocio y queda anotado, sin nombrar el modelo (§5: la nota la lee el gestor).
     modelo_reemplazo: str | None = None
     nota_de_modelo = ""
-    if problema_de_modelo(contenido, contexto.provider) is not None:
+    if contexto.llave_propia and problema_de_modelo(contenido, contexto.provider) is not None:
         modelo_reemplazo = contexto.business_model
-        nota_de_modelo = f"Se usó el modelo de tu negocio: {modelo_reemplazo}."
+        nota_de_modelo = NOTA_MODELO_DEL_NEGOCIO
     # HU-AOS-59: lo que el binario ya retiró, en palabras simples, ANTES de publicar la versión.
     issues += problemas_de_publicacion(contenido, binario_de(plugin_manager.list_modules()))
     disponibles = {
@@ -844,10 +852,8 @@ async def publicar_en_conexiones(
         modelo=modelo_reemplazo,
     )
     avisos: list[str] = [nota_de_modelo] if nota_de_modelo else []
-    if contexto.byok_model:
-        avisos.append(
-            f"Tu negocio fija el modelo {contexto.byok_model} en Configuración: ese manda sobre el del agente."
-        )
+    if contexto.llave_propia and contexto.byok_model:
+        avisos.append(AVISO_LLAVE_PROPIA)
     resultados: list[ResultadoConexion] = []
     for cid in connection_ids:
         resultado = ResultadoConexion(cid, "existing" if disponibles[cid].installed else "created")

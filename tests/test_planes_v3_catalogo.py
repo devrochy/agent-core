@@ -211,6 +211,11 @@ def credito(monkeypatch):  # type: ignore[no-untyped-def]
     monkeypatch.setattr(creditos, "medir_creditos", _medir)
     monkeypatch.setattr(creditos, "conversacion_abierta", _abierta)
     monkeypatch.setattr("core.db.session.get_session", _get_session)
+
+    async def _sin_abonos(_session, _tid, _ciclo):  # type: ignore[no-untyped-def]
+        return []  # credit_grants del ciclo (HU-BILL-22): sin abonos, el saldo es el crédito del mes
+
+    monkeypatch.setattr(creditos, "leer_abonos", _sin_abonos)
     return estado
 
 

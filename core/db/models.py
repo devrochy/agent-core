@@ -1445,6 +1445,27 @@ class UsageLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class CreditGrant(Base):
+    """Abono de créditos de un ciclo (migración 0155, ADR-0209 §1, HU-BILL-22). Solo de inserción.
+
+    `ciclo` = inicio exacto de la ventana de `ventana_mensual` en que cuenta. `tipo`: `acumulado` (con
+    `vence_en`: fin del último ciclo en que puede contar) | `recarga` (sin vencimiento). `origen`: id del
+    pago de la recarga o inicio del ciclo donde nació lo acumulado; al cerrar un ciclo lo que queda se
+    reinserta para el siguiente con el mismo `origen`. Única por `(tenant_id, ciclo, tipo, origen)`.
+    """
+
+    __tablename__ = "credit_grants"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    ciclo: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    tipo: Mapped[str] = mapped_column(Text, nullable=False)  # acumulado | recarga
+    creditos: Mapped[Decimal] = mapped_column(Numeric(12, 1), nullable=False)
+    vence_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    origen: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 # ------------------------------------------------- planes y facturación (ADR-0045 / ADR-0046)
 class Plan(Base):
     """Catálogo de planes. Tabla de SISTEMA (sin RLS, sin `tenant_id`).
@@ -2603,6 +2624,8 @@ class AgentRecord(Base):
     )
     source_template: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default="active", server_default="active")
+    # Nivel de IA del agente (ADR-0210, 0153): `estandar` | `avanzado`. Se traduce al modelo al publicar.
+    nivel_ia: Mapped[str] = mapped_column(Text, nullable=False, default="estandar", server_default="estandar")
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

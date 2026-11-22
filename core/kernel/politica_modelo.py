@@ -44,13 +44,20 @@ def politica_por_defecto() -> ModelPolicy:
     return KernelSpec().modelPolicy
 
 
-def decidir(riesgo_alto: bool, politica: ModelPolicy, modelo_agente: str) -> Eleccion | None:
-    """None = la llamada sigue con el modelo de siempre. Solo `risk: high` cambia algo."""
+def decidir(
+    riesgo_alto: bool, politica: ModelPolicy, modelo_agente: str, *, techo: str | None = None
+) -> Eleccion | None:
+    """None = la llamada sigue con el modelo de siempre. Solo `risk: high` cambia algo.
+
+    `techo`: el nivel de IA que incluye el plan (ADR-0210 §4). `highRiskStage.model` no sube por encima de él."""
+    from core.llm.niveles import recortar
+
     if not riesgo_alto:
         return None
     alto = politica.highRiskStage
     # Un modelo de otra familia que la del turno no se puede pedir con su proveedor: se ignora.
     modelo = alto.model if alto.model and misma_familia(alto.model, modelo_agente) else modelo_agente
+    modelo = recortar(modelo, techo)  # type: ignore[arg-type]
     if modelo == modelo_agente and not alto.thinking:
         return None  # la etapa no pide nada distinto
     return Eleccion(model=modelo, thinking=alto.thinking)

@@ -61,6 +61,7 @@ from core.llm.difficulty_router import (
     TURNOS_SIN_RESOLVER_THRESHOLD,
     route_model,
 )
+from core.llm.niveles import recortar, techo_del_negocio
 from core.llm.prompt_builder import (
     DEFAULT_TIMEZONE,
     PromptContext,
@@ -531,13 +532,16 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     )
 
     turnos_sin_resolver = int(conversation.state.get("turnos_sin_resolver", 0))
+    # Techo del nivel de IA según el plan (ADR-0210 §4): ningún modelo del turno sube por encima del nivel que el
+    # plan incluye. None con llave propia o sin plan. No toca el spec (cacheado por versión) ni su hash.
+    techo_ia = await _techo_del_turno(app_settings)
     routing = route_model(
         message=latest_message,
         turnos_sin_resolver=turnos_sin_resolver,
-        default_model=_resolved_model(app_settings, spec, settings.llm_model),
+        default_model=_resolved_model(app_settings, spec, settings.llm_model, techo=techo_ia),
         # v2.0.0 (ADR-0050): el modelo de razonamiento es por tenant
         # (`spec.model.router`); cae al global del .env si no está seteado.
-        reasoning_model=spec.model.router or settings.llm_model_reasoning,
+        reasoning_model=recortar(spec.model.router or settings.llm_model_reasoning, techo_ia, "router"),
         routing_enabled=settings.difficulty_routing,
         requires_tools=bool(active_tools),
         long_message_threshold=difficulty_long_message_threshold,
@@ -548,7 +552,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         app_settings, routing.model, thinking=routing.reason == "complex_signals"
     )
     # Política de modelo por riesgo (HU-AOS-09): None salvo con el motor activo.
-    politica = _politica_del_turno(motor, app_settings, spec, routing)
+    politica = _politica_del_turno(motor, app_settings, spec, routing, techo=techo_ia)
     if politica is not None:
         provider = politica.envolver(provider)
     tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
@@ -660,7 +664,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             # falla y el tenant definió `spec.model.fallback` (distinto), se
             # intenta UNA vez con ese modelo antes de escalar.
             metricas_negocio.llm_fallo(routing.model)
-            fallback_model = spec.model.fallback
+            fallback_model = recortar(spec.model.fallback, techo_ia) if spec.model.fallback else spec.model.fallback
             recovered = None
             if fallback_model and fallback_model != routing.model:
                 try:
@@ -1795,13 +1799,28 @@ async def _mark_budget_exhausted(conversation_id: uuid.UUID) -> None:
             conversation.state = state
 
 
-def _resolved_model(app_settings: AppSettings | None, spec, env_model: str) -> str:  # type: ignore[no-untyped-def]
-    """Prioridad: BYOK del panel > spec.model.primary > env."""
+def _resolved_model(  # type: ignore[no-untyped-def]
+    app_settings: AppSettings | None, spec, env_model: str, *, techo: str | None = None
+) -> str:
+    """Prioridad: BYOK del panel > nivel efectivo según el plan > spec.model.primary > env (ADR-0210 §4).
+
+    El nivel efectivo es el techo del plan (`techo`): el modelo que sale no sube por encima de él. Con llave
+    propia `techo` es None y no recorta nada."""
     if app_settings and app_settings.llm_model:
-        return app_settings.llm_model
-    if spec is not None and spec.model.primary:
-        return spec.model.primary
-    return env_model
+        modelo = app_settings.llm_model
+    elif spec is not None and spec.model.primary:
+        modelo = spec.model.primary
+    else:
+        modelo = env_model
+    return recortar(modelo, techo)  # type: ignore[arg-type]
+
+
+async def _techo_del_turno(app_settings: AppSettings | None) -> str | None:
+    """Nivel de IA más alto que incluye el plan del negocio (ADR-0210 §4). None con llave propia: ahí manda el
+    modelo del negocio y solo se cobra el fee (§7)."""
+    if _usa_llave_propia(app_settings):
+        return None
+    return await techo_del_negocio(get_current_tenant_id())
 
 
 def _resolved_provider(  # type: ignore[no-untyped-def]
@@ -1827,7 +1846,9 @@ def _usa_llave_propia(app_settings: AppSettings | None) -> bool:
     return bool(app_settings and app_settings.llm_provider and app_settings.llm_api_key_encrypted)
 
 
-def _politica_del_turno(motor: ContextoMotor | None, app_settings: AppSettings | None, spec, routing):  # type: ignore[no-untyped-def]
+def _politica_del_turno(  # type: ignore[no-untyped-def]
+    motor: ContextoMotor | None, app_settings: AppSettings | None, spec, routing, *, techo: str | None = None
+):
     """Política de modelo por riesgo del turno (HU-AOS-09, ADR-0132), o None.
 
     Solo con motor (todo turno con negocio). Riesgo alto: la etapa en foco al empezar
@@ -1846,12 +1867,12 @@ def _politica_del_turno(motor: ContextoMotor | None, app_settings: AppSettings |
 
     alto = eleccion = None
     if routing.reason == "default":
-        eleccion = decidir(motor.riesgo_alto, politica_por_defecto(), routing.model)
+        eleccion = decidir(motor.riesgo_alto, politica_por_defecto(), routing.model, techo=techo)
         if eleccion is not None:
             alto = _resolved_provider(app_settings, eleccion.model, thinking=eleccion.thinking)
             if isinstance(alto, OpenAICompatibleProvider):
                 alto.reintentar_4xx = False  # un 400 degrada ya, sin 4,5 s de reintentos
-    fallback = spec.model.fallback
+    fallback = recortar(spec.model.fallback, techo) if spec.model.fallback else spec.model.fallback
     declarado = bool(fallback) and fallback != routing.model
     respaldo = (
         _resolved_provider_fallback(app_settings, fallback)
