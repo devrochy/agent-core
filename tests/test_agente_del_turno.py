@@ -18,6 +18,7 @@ from agentcore_contracts import AgentSpec
 
 from core.agents.base import contenido_base, kernel_del_negocio
 from core.agents.claves import KEY_COORDINADOR
+from core.agents.defaults_negocio import DefaultsDelNegocio
 from core.agents.turno import (
     AgenteDelTurno,
     VistaInvalida,
@@ -96,7 +97,9 @@ def _congelados(raw: dict[str, Any], catalogo: Mapping[str, ActionInfo]) -> tupl
     especialista sale de la configuración y la plantilla le pone bindings, reglas y declarativas."""
     del catalogo
     spec = AgentSpec.model_validate(raw)
-    contenido = contenido_base(spec)
+    # Los valores por defecto del negocio (`agent_defaults`, ADR-0206 §6) con lo que traía el v2 (como el backfill 0152).
+    defaults = DefaultsDelNegocio.model_validate(spec.model_dump(mode="json"))
+    contenido = contenido_base(defaults)
     contenido["tools"] = [b.model_dump(mode="json") for b in spec.tools]
     contenido["guardrails"] = [
         {"name": "gratis", "kind": "forbidden_phrase", "phrases": ["gratis para siempre"], "action": "escalate"},
@@ -119,7 +122,7 @@ def _congelados(raw: dict[str, Any], catalogo: Mapping[str, ActionInfo]) -> tupl
     )
     kernel = AgenteCongelado(
         instance_id=uuid.uuid4(), agent_id=uuid.uuid4(), key=KEY_COORDINADOR, role="core", version_id=uuid.uuid4(),
-        version=1, contract="kernelspec/1", content=kernel_del_negocio(spec),
+        version=1, contract="kernelspec/1", content=kernel_del_negocio(defaults),
     )
     return especialista, kernel, spec
 

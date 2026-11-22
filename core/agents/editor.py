@@ -230,19 +230,14 @@ async def habilitados_del_negocio(tenant_id: uuid.UUID) -> set[str]:
 
 
 async def _base_del_negocio(tenant_id: uuid.UUID) -> dict[str, Any]:
-    """Base de un agente nuevo desde la configuración del negocio (ADR-0192 §4: sin General;
-    ADR-0191 §4: Configuración siembra el contenido inicial, no edita agentes existentes)."""
+    """Base de un agente nuevo desde los valores por defecto del negocio (ADR-0192 §4: sin General;
+    ADR-0191 §4: Configuración siembra el contenido inicial, no edita agentes existentes; ADR-0206 §6:
+    viven en `app_settings.agent_defaults`)."""
+    from core.agents import defaults_negocio
     from core.agents.base import contenido_base
-    from core.agents.spec import leer_spec_activo
-    from core.agents.versiones import contenido_inicial
     from core.presets.agentes import _playbooks_de_packs
 
-    leido = await leer_spec_activo(tenant_id)
-    if leido is None:
-        return contenido_inicial("specialist")
-    base = contenido_base(leido[1], playbooks_de_packs=_playbooks_de_packs())
-    del leido
-    return base
+    return contenido_base(await defaults_negocio.leer(tenant_id), playbooks_de_packs=_playbooks_de_packs())
 
 
 async def _agente_por_key(tenant_id: uuid.UUID, key: str) -> uuid.UUID | None:

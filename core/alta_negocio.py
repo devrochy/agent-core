@@ -1,7 +1,8 @@
 """Alta de un negocio: tenant + asistente + cuenta del admin (ADR-0001, ADR-0048, ADR-0110).
 
 Dar de alta un cliente en agent-core es 100% configuración: tenant + AgentSpec +
-AppSettings + conexión de canal + enablement de packs + preset. Cero código por cliente.
+AppSettings (con la persona inicial en `agent_defaults`, ADR-0206 §6) + conexión de canal +
+enablement de packs + preset. Cero código por cliente.
 
 Vive aparte de `core/onboarding.py` (utilidades de los artefactos del tenant, que también
 usan los packs) para que el contrato `alta-fuera-del-llm` de `.importlinter` pueda
@@ -18,6 +19,7 @@ from agentcore_contracts import AgentSpec
 from sqlalchemy import select
 
 from core import onboarding
+from core.agents import defaults_negocio
 from core.agents.flow import seed_tenant_flow
 from core.agents.spec import DEFAULT_SPEC
 from core.db.models import (
@@ -41,13 +43,12 @@ log = get_logger(__name__)
 def _default_spec_for(
     slug: str,
     tenant_id: uuid.UUID,
-    persona: dict | None,
     packs: list[str] | None,
 ) -> dict:
+    """Packs y playbooks del negocio nuevo. La persona ya no va aquí: es un valor por defecto de los agentes
+    (`app_settings.agent_defaults`, ADR-0206 §6) y la escribe `onboard_tenant`."""
     spec = deepcopy(DEFAULT_SPEC)
     spec["tenantId"] = str(tenant_id)
-    if persona:
-        spec["persona"].update(persona)
     if packs:
         spec["packs"] = list(packs)
         existing = {p["name"] for p in spec.get("playbooks", [])}
@@ -221,23 +222,31 @@ async def onboard_tenant(
                 )
             ).scalar_one_or_none()
             if settings_row is None:
-                session.add(
-                    AppSettings(
-                        tenant_id=tenant_id,
-                        assistant_name=name,
-                        business_description=business_description,
-                        language=language,
-                        # `escalation.triggers` del AgentSpec nunca se lee en runtime
-                        # (core/orchestrator/consumer.py lee este campo) -- ver
-                        # `_default_spec_for`, que ya NO escribe ahí.
-                        escalation_config={"keywords": list(escalation_triggers)}
-                        if escalation_triggers
-                        else {},
-                    )
+                settings_row = AppSettings(
+                    tenant_id=tenant_id,
+                    assistant_name=name,
+                    business_description=business_description,
+                    language=language,
+                    # `escalation.triggers` del AgentSpec nunca se lee en runtime
+                    # (core/orchestrator/consumer.py lee este campo) -- ver
+                    # `_default_spec_for`, que ya NO escribe ahí.
+                    escalation_config={"keywords": list(escalation_triggers)}
+                    if escalation_triggers
+                    else {},
                 )
+                session.add(settings_row)
                 steps.append("app_settings creados")
             else:
                 steps.append("app_settings ya existían")
+            # La persona inicial va a los valores por defecto de los agentes (ADR-0206 §6), solo si el negocio
+            # todavía no tiene (alta idempotente: un re-alta no pisa lo que se cambió en Configuración).
+            if persona and not settings_row.agent_defaults:
+                try:
+                    defaults_negocio.escribir(settings_row, {"persona": persona})
+                except ValueError as exc:
+                    campos = sorted({".".join(str(p) for p in e.get("loc", ())) for e in exc.errors()}) if hasattr(exc, "errors") else []
+                    raise ValueError(f"Persona inválida para {slug}: {', '.join(campos) or 'revisa los valores'}") from None
+                steps.append("persona inicial guardada")
 
             spec_row = (
                 await session.execute(
@@ -254,7 +263,7 @@ async def onboard_tenant(
                         tenant_id=tenant_id,
                         version="1.0.0",
                         is_active=True,
-                        spec=_default_spec_for(slug, tenant_id, persona, packs),
+                        spec=_default_spec_for(slug, tenant_id, packs),
                     )
                 )
                 steps.append("agent_spec creado")

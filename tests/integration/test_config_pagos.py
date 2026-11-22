@@ -232,7 +232,6 @@ async def test_barra_de_tabs_completa_en_identidad_y_pagos(app_client) -> None:
 
 
 async def test_guardar_cerebro_y_memoria_persiste_en_spec(app_client) -> None:
-    from core.agents.spec import load_active_spec
     from core.shared.tenant import tenant_scope
 
     tid = await _tenant_id()
@@ -260,8 +259,10 @@ async def test_guardar_cerebro_y_memoria_persiste_en_spec(app_client) -> None:
     )
     assert r.status_code == 303
 
+    from core.agents import defaults_negocio
+
     async with tenant_scope(tid):
-        spec = await load_active_spec()
+        spec = await defaults_negocio.leer(tid)  # ADR-0206 §6: viven en `agent_defaults`
     assert spec.model.temperature == 0.7
     assert spec.model.fallback == "deepseek-reasoner"
     assert spec.model.router == "deepseek-reasoner"

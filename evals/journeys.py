@@ -338,7 +338,7 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
     que hacía el General para la corrida. Devuelve el id del especialista."""
     from sqlalchemy import select
 
-    from core.agents import versiones
+    from core.agents import defaults_negocio, versiones
     from core.agents.base import asegurar_coordinador, contenido_base
     from core.agents.instancias import (
         ConflictoInstancia,
@@ -380,7 +380,14 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
         spec = leido[1]
         habilitados = enabled_packs(spec)
         catalogo = catalogo_de_acciones(modulos)
-        contenido = contenido_base(spec)
+        contenido = contenido_base(await defaults_negocio.leer(tenant_id))
+        # Los playbooks de los packs siguen en el v2 (ADR-0206 §6 solo movió los base): sin ellos el agente de la corrida
+        # cambiaría respecto de las grabaciones.
+        presentes = {p["name"] for p in contenido["playbooks"]}
+        contenido["playbooks"] = [
+            *contenido["playbooks"],
+            *({"name": ref.name, "description": ref.description[:300]} for ref in spec.playbooks if ref.name not in presentes),
+        ][:60]
         contenido["tools"] = [
             {"tool": nombre, "enabled": True, "scopes": list(getattr(info, "scopes", ()))}
             for nombre, info in sorted(catalogo.items())

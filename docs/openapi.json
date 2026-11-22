@@ -33659,7 +33659,7 @@
           "admin · configuración"
         ],
         "summary": "Asistente Aplicar",
-        "description": "Escribe lo que mostró la vista previa. Todo o nada: la configuración del negocio y la persona\ndel agente se guardan en una sola transacción, y si lo que se escribiría ya no es lo que se vio\n(la configuración cambió en medio) responde 409 sin escribir.",
+        "description": "Escribe lo que mostró la vista previa. Todo o nada: la configuración del negocio y la persona\nde los valores por defecto de los agentes (`agent_defaults`) van en la misma fila de `app_settings` y\nen una sola transacción, y si lo que se escribiría ya no es lo que se vio (la configuración cambió en\nmedio) responde 409 sin escribir.",
         "operationId": "asistente_aplicar_api_v1_admin_settings_asistente__seccion__aplicar_post",
         "parameters": [
           {
@@ -34104,6 +34104,7 @@
           "admin · configuración"
         ],
         "summary": "Save Brain",
+        "description": "Modelo y políticas de los valores por defecto de los agentes (`agent_defaults`, ADR-0206 §6): sin versión\ndel spec. Solo cambia lo que vino; un modelo principal vacío no cambia.",
         "operationId": "save_brain_api_v1_admin_settings_brain_put",
         "parameters": [
           {
@@ -34322,7 +34323,7 @@
           "admin · configuración"
         ],
         "summary": "Save Memory Settings",
-        "description": "Memoria del agente: turnos de contexto y recall RAG.",
+        "description": "Memoria de los valores por defecto de los agentes (`agent_defaults`): turnos de contexto y recall RAG.",
         "operationId": "save_memory_settings_api_v1_admin_settings_memory_put",
         "parameters": [
           {

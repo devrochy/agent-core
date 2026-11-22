@@ -46,7 +46,7 @@ Tipo = Literal[
 ]
 EditablePor = Literal["dueno", "master"]
 
-_ALMACENES = frozenset({"columna", "behavior_config", "escalation_config", "spec", "kernelspec", "tenants"})
+_ALMACENES = frozenset({"columna", "behavior_config", "escalation_config", "agent_defaults", "kernelspec", "tenants"})
 _TIPOS_CON_VALORES = frozenset({"elegir_una", "elegir_varias"})
 _TIPOS_CON_RANGO = frozenset({"entero", "decimal"})
 
@@ -96,7 +96,8 @@ class Opcion(BaseModel):
     editable_por: EditablePor = "dueno"
     solo_lectura: bool = False
     # Dónde vive el valor: `columna:<nombre>`, `behavior_config:<clave>`,
-    # `escalation_config:<clave>[.<subclave>]`, `spec:persona.<campo>`, `kernelspec:<ruta.punteada>`
+    # `escalation_config:<clave>[.<subclave>]`, `agent_defaults:<ruta.punteada>` (valores por defecto de los
+    # agentes del negocio, ADR-0206 §6), `kernelspec:<ruta.punteada>`
     # (versión del agente Coordinador de la conexión) o `tenants:<columna>` (banderas del Agent OS).
     almacen: str
 

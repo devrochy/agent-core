@@ -2,9 +2,11 @@
 
 `GET /api/v1/admin/settings` devuelve la configuración del tenant activo;
 `PUT .../identity` y `PUT .../brain` la actualizan, y `PUT .../bot-paused` pausa
-o reactiva el asistente sin tocar el resto de la identidad. Reusa la maquinaria de
-versionado del `AgentSpec` (`core.agents.spec`) para no duplicar lógica con el
-panel SSR. Requiere la sección `settings`.
+o reactiva el asistente sin tocar el resto de la identidad. La persona, el modelo,
+la memoria y las políticas son los valores por defecto de los agentes del negocio
+(`app_settings.agent_defaults`, ADR-0206 §6, `core.agents.defaults_negocio`); las
+habilidades y el modo avanzado siguen en el `AgentSpec` (`core.agents.spec`), con
+la misma maquinaria que el panel SSR. Requiere la sección `settings`.
 
 Nota de alcance: cubre Identidad (incl. persona) y Cerebro. Las pestañas Memoria,
 Habilidades y Avanzado del panel SSR quedan pendientes.
@@ -17,7 +19,6 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
@@ -31,13 +32,13 @@ from core.admin.settings_service import (
     save_skills,
     validate_business_ranges,
 )
+from core.agents import defaults_negocio
+from core.agents.defaults_negocio import DefaultsDelNegocio
 from core.agents.spec import (
     con_tenant_de_la_fila,
     enabled_packs,
-    leer_spec_activo,
     load_active_spec,
     save_spec_if_changed,
-    save_spec_version,
 )
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
@@ -363,10 +364,15 @@ def _modo_efectivo(guardado: object, validos: dict, defecto: str, si_desconocido
     return guardado if isinstance(guardado, str) and guardado in validos else si_desconocido
 
 
-def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) -> IdentitySettings:
+def _defaults_de(app_settings: AppSettings | None) -> DefaultsDelNegocio:
+    """Los valores por defecto de los agentes guardados en la fila (los del código si no hay fila)."""
+    return defaults_negocio.desde_dict(app_settings.agent_defaults if app_settings else None)
+
+
+def _identity_out(app_settings: AppSettings | None, available: list[str]) -> IdentitySettings:
     behavior = dict((app_settings.behavior_config if app_settings else {}) or {})
     escalation = dict((app_settings.escalation_config if app_settings else {}) or {})
-    persona = (spec.model_dump(mode="json").get("persona") or {})
+    persona = _defaults_de(app_settings).persona
     return IdentitySettings(
         assistant_name=(app_settings.assistant_name if app_settings else "") or "",
         business_description=(app_settings.business_description if app_settings else "") or "",
@@ -397,11 +403,11 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
             app_settings.assistant_name if app_settings else None,
         ),
         auto_escalate_after_turns=leer_entero(escalation, "auto_escalate_after_turns", 0),
-        persona_tone=persona.get("tone", "") or "",
-        persona_warmth=rango("persona_warmth").recortar(int(persona.get("warmth", 3) or 0)),
-        persona_emojis=persona.get("emojis", "sparse") or "sparse",
-        persona_max_length=rango("persona_max_length").recortar(int(persona.get("maxLength", 500) or 0)),
-        persona_forbidden=list(persona.get("forbiddenPhrases", []) or []),
+        persona_tone=persona.tone,
+        persona_warmth=rango("persona_warmth").recortar(persona.warmth),
+        persona_emojis=persona.emojis,
+        persona_max_length=rango("persona_max_length").recortar(persona.maxLength),
+        persona_forbidden=list(persona.forbiddenPhrases),
         bot_paused=bool(app_settings.bot_paused) if app_settings else False,
         business_tz=str(((escalation.get("business_hours") or {}).get("tz")) or ""),
         business_ranges=validate_business_ranges(
@@ -411,18 +417,21 @@ def _identity_out(app_settings: AppSettings | None, spec, available: list[str]) 
     )
 
 
-def _brain_out(spec) -> BrainSettings:
-    data = spec.model_dump(mode="json")
-    model = data.get("model") or {}
-    policies = data.get("policies") or {}
+def _brain_out(defaults: DefaultsDelNegocio) -> BrainSettings:
+    model, policies = defaults.model, defaults.policies
     return BrainSettings(
-        model_primary=model.get("primary", "") or "",
-        model_fallback=model.get("fallback"),
-        model_router=model.get("router"),
-        model_temperature=float(model.get("temperature", 0.3) or 0.0),
-        policy_max_tool_calls=int(policies.get("maxToolCallsPerTurn", 10) or 10),
-        policy_budget=float(policies.get("budgetUsdPerConversation", 0.5) or 0.0),
+        model_primary=model.primary,
+        model_fallback=model.fallback,
+        model_router=model.router,
+        model_temperature=float(model.temperature),
+        policy_max_tool_calls=policies.maxToolCallsPerTurn,
+        policy_budget=float(policies.budgetUsdPerConversation or 0.0),
     )
+
+
+def _defaults_invalidos(exc: ValueError) -> ApiError:
+    """Un valor que `DefaultsDelNegocio` rechaza (fuera de rango o de la lista): 422, sin guardar nada."""
+    return ApiError(422, "validation_error", f"Valor inválido: {str(exc)[:240]}")
 
 
 # ------------------------------------------------------------------ endpoints
@@ -432,10 +441,11 @@ async def get_settings_api(
 ) -> SettingsResponse:
     spec = await load_active_spec()
     app_settings = await _load_app_settings(principal.tenant_id)
+    defaults = _defaults_de(app_settings)
     return SettingsResponse(
-        identity=_identity_out(app_settings, spec, _available_guardrails(spec)),
-        brain=_brain_out(spec),
-        memory=MemorySettings(**read_memory(spec)),
+        identity=_identity_out(app_settings, _available_guardrails(spec)),
+        brain=_brain_out(defaults),
+        memory=MemorySettings(**read_memory(defaults)),
         skills=[SkillBinding(**item) for item in read_skills(spec)],
     )
 
@@ -460,6 +470,7 @@ async def save_identity(
     payload: IdentityUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> IdentitySettings:
+    _exigir_negocio(principal)
     spec = await load_active_spec()
     available = _available_guardrails(spec)
 
@@ -523,21 +534,32 @@ async def save_identity(
             app_settings.escalation_config["business_hours_mode"] = payload.business_hours_mode
         if payload.bot_paused is not None:
             app_settings.bot_paused = payload.bot_paused
-
-    persona_data = spec.model_dump(mode="json")
-    persona_data["persona"].update(
-        {
-            "tone": payload.persona_tone or persona_data["persona"].get("tone", ""),
-            "warmth": rango("persona_warmth").recortar(payload.persona_warmth),
-            "emojis": payload.persona_emojis or persona_data["persona"].get("emojis", "sparse"),
-            "maxLength": rango("persona_max_length").recortar(payload.persona_max_length),
-            "forbiddenPhrases": [p.strip() for p in payload.persona_forbidden if p.strip()],
-        }
-    )
-    await save_spec_if_changed(spec, persona_data, principal.tenant_id)
+        # La persona es un valor por defecto de los agentes (ADR-0206 §6): va a `agent_defaults` en la misma
+        # transacción, sin versión del spec. Solo cambia lo que vino (un tono o emojis vacíos no cambian).
+        try:
+            defaults_negocio.escribir(app_settings, {"persona": _persona_del_payload(payload)})
+        except ValueError as exc:
+            raise _defaults_invalidos(exc) from None
 
     refreshed = await _load_app_settings(principal.tenant_id)
-    return _identity_out(refreshed, spec, available)
+    return _identity_out(refreshed, available)
+
+
+def _persona_del_payload(payload: IdentityUpdate) -> dict[str, Any]:
+    """Las claves de la persona que trae el PUT, con los recortes de siempre; las que no vinieron no se tocan."""
+    venidos = payload.model_fields_set
+    persona: dict[str, Any] = {}
+    if "persona_tone" in venidos and payload.persona_tone:
+        persona["tone"] = payload.persona_tone
+    if "persona_emojis" in venidos and payload.persona_emojis:
+        persona["emojis"] = payload.persona_emojis
+    if "persona_warmth" in venidos:
+        persona["warmth"] = rango("persona_warmth").recortar(payload.persona_warmth)
+    if "persona_max_length" in venidos:
+        persona["maxLength"] = rango("persona_max_length").recortar(payload.persona_max_length)
+    if "persona_forbidden" in venidos:
+        persona["forbiddenPhrases"] = [p.strip() for p in payload.persona_forbidden if p.strip()]
+    return persona
 
 
 # ------------------------------------------------------------------ asistente de configuración
@@ -554,20 +576,19 @@ class AsistenteAplicar(AsistenteRespuestas):
 
 def _actuales_del_registro(app_settings: AppSettings | None, spec) -> dict[str, Any]:
     """Los valores de hoy con las claves del registro (las de `IdentitySettings` son las mismas)."""
-    identidad = _identity_out(app_settings, spec, _available_guardrails(spec))
+    identidad = _identity_out(app_settings, _available_guardrails(spec))
     return {k: v for k, v in identidad.model_dump().items() if k in POR_CLAVE}
 
 
-async def _proponer(seccion: str, respuestas: dict[str, Any], tenant_id) -> tuple[Propuesta, Any]:
+async def _proponer(seccion: str, respuestas: dict[str, Any], tenant_id) -> Propuesta:
     spec = await load_active_spec()
     app_settings = await _load_app_settings(tenant_id)
     try:
-        propuesta = resolver(seccion, respuestas, _actuales_del_registro(app_settings, spec))
+        return resolver(seccion, respuestas, _actuales_del_registro(app_settings, spec))
     except RespuestasInvalidas as exc:
         raise ApiError(422, "validation_error", "Revisa las respuestas marcadas.", fields=exc.por_pregunta) from None
     except ValueError as exc:
         raise ApiError(404, "not_found", str(exc)) from None
-    return propuesta, spec
 
 
 def _escribir_opcion(app_settings: AppSettings, persona: dict[str, Any], clave: str, valor: Any) -> None:
@@ -588,7 +609,7 @@ def _escribir_opcion(app_settings: AppSettings, persona: dict[str, Any], clave: 
         else:
             escalation[ruta] = valor
         app_settings.escalation_config = escalation
-    elif tipo == "spec" and ruta.startswith("persona."):
+    elif tipo == "agent_defaults" and ruta.startswith("persona."):
         persona[ruta.removeprefix("persona.")] = [p.strip() for p in valor if p.strip()] if isinstance(valor, list) else valor
     else:
         raise ValueError(f"El asistente no escribe «{clave}».")
@@ -602,8 +623,7 @@ async def asistente_vista_previa(
 ) -> Propuesta:
     """Qué cambiaría el asistente con esas respuestas (valor actual → propuesto), sin escribir nada."""
     _exigir_negocio(principal)
-    propuesta, _ = await _proponer(seccion, payload.respuestas, principal.tenant_id)
-    return propuesta
+    return await _proponer(seccion, payload.respuestas, principal.tenant_id)
 
 
 @router.post("/asistente/{seccion}/aplicar", response_model=Propuesta)
@@ -613,14 +633,11 @@ async def asistente_aplicar(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> Propuesta:
     """Escribe lo que mostró la vista previa. Todo o nada: la configuración del negocio y la persona
-    del agente se guardan en una sola transacción, y si lo que se escribiría ya no es lo que se vio
-    (la configuración cambió en medio) responde 409 sin escribir."""
+    de los valores por defecto de los agentes (`agent_defaults`) van en la misma fila de `app_settings` y
+    en una sola transacción, y si lo que se escribiría ya no es lo que se vio (la configuración cambió en
+    medio) responde 409 sin escribir."""
     _exigir_negocio(principal)
-    # La fila del spec de la que parte la propuesta se lee ANTES de calcularla: si otra edición del
-    # agente (habilidades, cerebro…) confirma una versión en medio, no se pisa en silencio.
-    activo = await leer_spec_activo(principal.tenant_id)
-    base_id = activo[0] if activo else None
-    propuesta, spec = await _proponer(seccion, payload.respuestas, principal.tenant_id)
+    propuesta = await _proponer(seccion, payload.respuestas, principal.tenant_id)
     if propuesta.huella != payload.huella:
         raise ApiError(409, "conflict", "La configuración cambió mientras decidías: revisa los cambios de nuevo.")
     if not propuesta.cambios:
@@ -638,15 +655,14 @@ async def asistente_aplicar(
         if app_settings is None:
             app_settings = AppSettings(tenant_id=principal.tenant_id)
             session.add(app_settings)
-        datos = spec.model_dump(mode="json")
-        persona = dict(datos.get("persona") or {})
+        persona: dict[str, Any] = {}
         for cambio in propuesta.cambios:
             _escribir_opcion(app_settings, persona, cambio.clave, cambio.propuesto)
-        datos["persona"] = persona
-        nuevo = AgentSpec.model_validate({**datos, "tenantId": str(principal.tenant_id)})
-        if nuevo.model_dump(mode="json") != spec.model_dump(mode="json"):
-            if await save_spec_version(nuevo, principal.tenant_id, base_id=base_id, session=session) is None:
-                raise ApiError(409, "conflict", "El agente cambió mientras guardabas: vuelve a intentarlo.")
+        if persona:
+            try:
+                defaults_negocio.escribir(app_settings, {"persona": persona})
+            except ValueError as exc:
+                raise _defaults_invalidos(exc) from None
         session.add(
             AuditLog(
                 tenant_id=principal.tenant_id,
@@ -936,19 +952,33 @@ async def save_brain(
     payload: BrainUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> BrainSettings:
-    spec = await load_active_spec()
-    data: dict[str, Any] = spec.model_dump(mode="json")
-    if payload.model_primary:
-        data["model"]["primary"] = payload.model_primary.strip()
-    data["model"]["fallback"] = (payload.model_fallback or "").strip() or None
-    data["model"]["router"] = (payload.model_router or "").strip() or None
-    data["model"]["temperature"] = max(0.0, min(2.0, payload.model_temperature))
-    data["policies"]["maxToolCallsPerTurn"] = max(1, min(50, payload.policy_max_tool_calls))
-    data["policies"]["budgetUsdPerConversation"] = max(0.0, payload.policy_budget)
-    await save_spec_if_changed(spec, data, principal.tenant_id)
+    """Modelo y políticas de los valores por defecto de los agentes (`agent_defaults`, ADR-0206 §6): sin versión
+    del spec. Solo cambia lo que vino; un modelo principal vacío no cambia."""
+    _exigir_negocio(principal)
+    try:
+        defaults = await defaults_negocio.guardar(principal.tenant_id, _cerebro_del_payload(payload))
+    except ValueError as exc:
+        raise _defaults_invalidos(exc) from None
+    return _brain_out(defaults)
 
-    updated = await load_active_spec()
-    return _brain_out(updated)
+
+def _cerebro_del_payload(payload: BrainUpdate) -> dict[str, Any]:
+    venidos = payload.model_fields_set
+    model: dict[str, Any] = {}
+    policies: dict[str, Any] = {}
+    if payload.model_primary.strip():
+        model["primary"] = payload.model_primary.strip()
+    if "model_fallback" in venidos:
+        model["fallback"] = (payload.model_fallback or "").strip() or None
+    if "model_router" in venidos:
+        model["router"] = (payload.model_router or "").strip() or None
+    if "model_temperature" in venidos:
+        model["temperature"] = max(0.0, min(2.0, payload.model_temperature))
+    if "policy_max_tool_calls" in venidos:
+        policies["maxToolCallsPerTurn"] = max(1, min(50, payload.policy_max_tool_calls))
+    if "policy_budget" in venidos:
+        policies["budgetUsdPerConversation"] = max(0.0, payload.policy_budget)
+    return {"model": model, "policies": policies}
 
 
 @router.get("/web-chat", response_model=WebChatSettings)
@@ -1012,15 +1042,15 @@ async def save_memory_settings(
     payload: MemoryUpdate,
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> MemorySettings:
-    """Memoria del agente: turnos de contexto y recall RAG."""
-    await save_memory(
+    """Memoria de los valores por defecto de los agentes (`agent_defaults`): turnos de contexto y recall RAG."""
+    _exigir_negocio(principal)
+    defaults = await save_memory(
         principal.tenant_id,
         short_term_turns=payload.short_term_turns,
         rag_top_k=payload.rag_top_k,
         rag_min_score=payload.rag_min_score,
     )
-    spec = await load_active_spec()
-    return MemorySettings(**read_memory(spec))
+    return MemorySettings(**read_memory(defaults or defaults_negocio.POR_DEFECTO))
 
 
 @router.put("/skills", response_model=list[SkillBinding])

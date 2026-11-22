@@ -4,9 +4,10 @@
   contenido es el `KernelSpec` por defecto del contrato con la voz y el presupuesto de la
   configuración del negocio (ADR-0191 §4: Configuración siembra, no edita): sin texto de prompt en
   el código (invariante 3) y sin `routing.defaultAgent` (manda el `is_default` de la instancia).
-- `contenido_base(spec)`: la base `agentspec/3` de un especialista nuevo, sacada de la configuración
-  del negocio (persona, modelo, playbooks que no son de un pack, memoria y políticas). Sin tools ni
-  procedimientos: los pone la plantilla del agente (`core.presets.agentes.derivar_contenido`).
+- `contenido_base(defaults)`: la base `agentspec/3` de un especialista nuevo, sacada de los valores
+  por defecto del negocio (`app_settings.agent_defaults`, ADR-0206 §6: persona, modelo, playbooks que
+  no son de un pack, memoria y políticas). Sin tools ni procedimientos: los pone la plantilla del
+  agente (`core.presets.agentes.derivar_contenido`).
 - `sembrar_voz_del_negocio(tenant_id)`: publica una versión nueva del Coordinador cuando la voz de
   Configuración cambió desde la última siembra. Así el próximo build de release congela el tono, la
   calidez y los emojis elegidos (adenda 2026-11-14 de ADR-0191).
@@ -20,10 +21,11 @@ import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from agentcore_contracts import AgentSpec, AgentSpecV3, KernelSpec
+from agentcore_contracts import AgentSpecV3, KernelSpec
 from sqlalchemy import select, text
 
 from core.agents.claves import KEY_COORDINADOR
+from core.agents.defaults_negocio import DefaultsDelNegocio
 from core.db.models import AgentRecord, AgentVersionRecord
 from core.db.session import get_session
 from core.shared.logger import get_logger
@@ -41,8 +43,9 @@ def _acotar(valor: Any, lo: float, hi: float) -> Any:
     return max(lo, min(hi, valor))
 
 
-def kernel_del_negocio(spec: AgentSpec) -> dict[str, Any]:
-    """`kernelspec/1` del Coordinador: defaults del contrato + voz y presupuesto del negocio."""
+def kernel_del_negocio(spec: DefaultsDelNegocio) -> dict[str, Any]:
+    """`kernelspec/1` del Coordinador: defaults del contrato + voz y presupuesto de los valores por defecto del
+    negocio (`app_settings.agent_defaults`)."""
     persona = spec.persona
     voz: dict[str, Any] = {"tone": persona.tone, "warmth": persona.warmth, "emojis": persona.emojis}
     rol = persona.role.strip()[:200]
@@ -60,8 +63,8 @@ def kernel_del_negocio(spec: AgentSpec) -> dict[str, Any]:
     return kernel.model_dump(mode="json", by_alias=True)
 
 
-def contenido_base(spec: AgentSpec, *, playbooks_de_packs: Iterable[str] = ()) -> dict[str, Any]:
-    """Base `agentspec/3` de un especialista nuevo desde la configuración del negocio (sin tools ni
+def contenido_base(spec: DefaultsDelNegocio, *, playbooks_de_packs: Iterable[str] = ()) -> dict[str, Any]:
+    """Base `agentspec/3` de un especialista nuevo desde los valores por defecto del negocio (sin tools ni
     procedimientos: la completa la plantilla)."""
     from core.agents.spec import DEFAULT_SPEC
 
@@ -106,8 +109,7 @@ def contenido_base(spec: AgentSpec, *, playbooks_de_packs: Iterable[str] = ()) -
 async def asegurar_coordinador(tenant_id: uuid.UUID, *, modules: Iterable[Any] | None = None) -> uuid.UUID:
     """El Coordinador del negocio con al menos una versión publicada. Idempotente; corre dentro del
     `tenant_scope` del negocio. Sin `versiones.crear_agente`: esa rechaza las keys reservadas."""
-    from core.agents import versiones
-    from core.agents.spec import leer_spec_activo
+    from core.agents import defaults_negocio, versiones
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
 
@@ -156,9 +158,7 @@ async def asegurar_coordinador(tenant_id: uuid.UUID, *, modules: Iterable[Any] |
             )
         ).scalar_one_or_none()
     if con_version is None:
-        leido = await leer_spec_activo(tenant_id)
-        contenido = kernel_del_negocio(leido[1]) if leido else KernelSpec().model_dump(mode="json", by_alias=True)
-        del leido
+        contenido = kernel_del_negocio(await defaults_negocio.leer(tenant_id))
         modulos = list(modules) if modules is not None else plugin_manager.list_modules()
         await versiones.publicar(
             tenant_id,
@@ -186,8 +186,7 @@ async def sembrar_voz_del_negocio(
     from agentcore_contracts.kernelspec import Voice
     from pydantic import ValidationError
 
-    from core.agents import versiones
-    from core.agents.spec import leer_spec_activo
+    from core.agents import defaults_negocio, versiones
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
 
@@ -207,10 +206,7 @@ async def sembrar_voz_del_negocio(
         ).scalar_one_or_none()
     if agent_id is None:
         return False
-    leido = await leer_spec_activo(tenant_id)
-    if leido is None:
-        return False
-    persona = leido[1].persona
+    persona = (await defaults_negocio.leer(tenant_id)).persona
     publicadas = await versiones.listar_versiones(tenant_id, agent_id)
     if not publicadas:
         return False
