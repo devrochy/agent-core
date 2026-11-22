@@ -326,10 +326,10 @@ async def _link_de_cargo(cargo: SubscriptionCharge, sub: Subscription, descripci
     pasarela no acepta el monto: el cargo queda pendiente para cobrarlo por transferencia."""
     if cargo.link_url and cargo.referencia:
         return {"url": cargo.link_url, "referencia": cargo.referencia}
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.payments import PaymentCapabilityError, payment_registry
 
-    cap = payment_registry.capability_for(enabled_packs(await load_active_spec()))
+    cap = payment_registry.capability_for(await packs_del_negocio())
     if cap is None:
         return {}
     try:
@@ -928,11 +928,10 @@ class SubscriptionCapabilityImpl:
                 "monto": float(cargo.monto or 0),
             }
 
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
         from core.payments import PaymentCapabilityError, payment_registry
 
-        spec = await load_active_spec()
-        cap = payment_registry.capability_for(enabled_packs(spec))
+        cap = payment_registry.capability_for(await packs_del_negocio())
         if cap is None:
             raise SubscriptionError(
                 "El pago en línea no está configurado para este negocio; coordinemos "

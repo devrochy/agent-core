@@ -110,6 +110,54 @@ async def instaladas_en_agente(tenant_id: uuid.UUID, agent_id: uuid.UUID, *, sol
     return [f[0] for f in filas]
 
 
+# Estados de una instalación que cuentan como «la tiene» (ADR-0206 §5): `pending_config` (Pagos sin cuenta) sí; una
+# instalación `disabled` o con `error`, no.
+_ESTADOS_INSTALADA = ("active", "pending_config")
+CORE_PACK_ID = "core"
+
+
+async def packs_del_negocio(tenant_id: uuid.UUID | None = None, *, con_core: bool = True) -> set[str]:
+    """Las habilidades del negocio: la ÚNICA lectura fuera del turno (ADR-0206 §5). Con `con_core` (por defecto)
+    incluye `core`, como `enabled_packs`; sin él es la cuenta del plan. `tenant_id` por defecto es el del
+    `tenant_scope`.
+
+    TRANSITORIO (HU-AOS-91, parte B): todavía lee `agent_specs.packs`, porque el alta, los presets y «activar» siguen
+    escribiendo ahí. La parte C mueve esos escritores y cambia esta función a `packs_instalados` (decisión del dueño
+    del 2026-11-22: una habilidad es del negocio solo si algún agente activo la tiene instalada), con
+    `agent-core db packs-sin-instalacion` en cero en cada entorno antes del despliegue."""
+    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    from core.shared.tenant import get_current_tenant_id
+
+    tid = tenant_id or get_current_tenant_id()
+    if tid is None:
+        raise PermissionError("packs_del_negocio fuera de un tenant_scope")
+    _exigir_scope(tid)
+    leido = await leer_spec_activo(tid)
+    packs = set(enabled_business_packs(leido[1])) if leido is not None else set()
+    return packs | {CORE_PACK_ID} if con_core else packs
+
+
+async def packs_instalados(tenant_id: uuid.UUID, *, con_core: bool = True) -> set[str]:
+    """Las habilidades que tiene instaladas algún agente activo (no archivado ni borrado) del negocio: la fuente de
+    `packs_del_negocio` desde la parte C de HU-AOS-91 (ADR-0206 §5)."""
+    tid = tenant_id
+    _exigir_scope(tid)
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                text(
+                    "SELECT DISTINCT i.pack_id FROM pack_installations i "
+                    "JOIN agents a ON a.tenant_id = i.tenant_id AND a.id = i.agent_id "
+                    "WHERE i.tenant_id = :t AND i.scope = 'agent' AND i.deleted_at IS NULL "
+                    "AND i.status = ANY(:estados) AND a.deleted_at IS NULL AND a.status = 'active'"
+                ),
+                {"t": tid, "estados": list(_ESTADOS_INSTALADA)},
+            )
+        ).scalars().all()
+    packs = {str(p) for p in filas} - {CORE_INSTALLATION_PACK}
+    return packs | {CORE_PACK_ID} if con_core else packs
+
+
 async def instalar_en_agente(
     tenant_id: uuid.UUID,
     agent_id: uuid.UUID,
@@ -311,4 +359,85 @@ async def backfill_habilidades_por_agente(
                         await instalar_en_agente(tid, agente.id, pack, requiere_config=pack == "pack_payments")
                 filas.append({"negocio": slug, "agente": agente.key, "instaladas": sorted(quiere), "ya": sorted(propias)})
     log.info("habilidades_por_agente_backfill", aplicar=aplicar, agentes=len(filas))
+    return filas
+
+
+async def precheck_packs_del_negocio(
+    tenant_ids: list[uuid.UUID] | None = None, *, aplicar: bool = False, quitar_sobrantes: bool = False
+) -> list[dict[str, object]]:
+    """`agent-core db packs-sin-instalacion` (ADR-0206 §5, HU-AOS-91): compara, por negocio, las habilidades de
+    `agent_specs.packs` con las que tienen instaladas sus agentes activos (la fuente nueva).
+
+    - `faltan`: en `agent_specs` y en ningún agente. Al cambiar de fuente se perderían. Con `aplicar`, una habilidad
+      transversal (voz, conocimiento, pagos) se instala en todos los especialistas activos del negocio; una de
+      especialidad no se instala sola (necesita su agente) y queda reportada.
+    - `sobran`: instaladas en algún agente activo y no en `agent_specs`. Al cambiar de fuente aparecerían. Solo con
+      `quitar_sobrantes` se desinstalan (borrado lógico) de esos agentes.
+
+    Dry-run por defecto. Idempotente. Se despliega HU-AOS-91 parte B con cero diferencias o con cada una resuelta."""
+    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    from core.plugin_manager import plugin_manager
+    from core.shared.tenant import tenant_scope
+
+    async with get_session() as session:
+        negocios = (
+            await session.execute(
+                text(
+                    "SELECT id, slug FROM tenants WHERE deleted_at IS NULL "
+                    "AND (cast(:ids AS uuid[]) IS NULL OR id = ANY(cast(:ids AS uuid[]))) ORDER BY slug"
+                ),
+                {"ids": [str(t) for t in tenant_ids] if tenant_ids else None},
+            )
+        ).all()
+    filas: list[dict[str, object]] = []
+    for tid, slug in negocios:
+        async with tenant_scope(tid):
+            activo = await leer_spec_activo(tid)
+            del_spec = set(enabled_business_packs(activo[1])) if activo else set()
+            instaladas = await packs_instalados(tid, con_core=False)
+            faltan, sobran = sorted(del_spec - instaladas), sorted(instaladas - del_spec)
+            if not faltan and not sobran:
+                continue
+            instalo: list[str] = []
+            quito: list[str] = []
+            async with get_session() as session:
+                especialistas = (
+                    await session.execute(
+                        select(AgentRecord.id).where(
+                            AgentRecord.tenant_id == tid,
+                            AgentRecord.kind == "specialist",
+                            AgentRecord.status == "active",
+                            AgentRecord.deleted_at.is_(None),
+                        )
+                    )
+                ).scalars().all()
+            for pack in faltan:
+                modulo = plugin_manager.get(pack)
+                if getattr(modulo, "tipo", "") != "transversal" or not especialistas:
+                    continue
+                if aplicar:
+                    for agent_id in especialistas:
+                        await instalar_en_agente(tid, agent_id, pack, requiere_config=pack == "pack_payments")
+                instalo.append(pack)
+            if quitar_sobrantes:
+                for pack in sobran:
+                    async with get_session() as session:
+                        con_pack = (
+                            await session.execute(
+                                text(
+                                    "SELECT i.agent_id FROM pack_installations i JOIN agents a ON a.tenant_id = "
+                                    "i.tenant_id AND a.id = i.agent_id WHERE i.tenant_id = :t AND i.scope = 'agent' "
+                                    "AND i.pack_id = :p AND i.deleted_at IS NULL AND a.deleted_at IS NULL "
+                                    "AND a.status = 'active'"
+                                ),
+                                {"t": tid, "p": pack},
+                            )
+                        ).scalars().all()
+                    if aplicar:
+                        for agent_id in con_pack:
+                            await desinstalar_de_agente(tid, agent_id, pack)
+                    quito.append(pack)
+            filas.append(
+                {"negocio": slug, "faltan": faltan, "sobran": sobran, "instala": instalo, "quita": quito}
+            )
     return filas

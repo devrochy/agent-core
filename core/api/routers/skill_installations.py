@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.agents import instalaciones as svc
-from core.agents.spec import enabled_business_packs, load_active_spec
+from core.agents.instalaciones_agente import packs_del_negocio
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 
@@ -108,7 +108,7 @@ async def create_installation(
 ) -> SkillInstallation:
     tid = await _puede_escribir(principal)
     # Un pack inexistente responde igual que uno no habilitado (no revela el catálogo).
-    habilitados = set(enabled_business_packs(await load_active_spec(tid)))
+    habilitados = await packs_del_negocio(tid, con_core=False)
     try:
         vista, creada = await svc.instalar_en_conexion(
             tid,

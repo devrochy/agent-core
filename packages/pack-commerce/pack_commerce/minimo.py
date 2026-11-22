@@ -12,17 +12,14 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from core.shared.tenant import get_current_tenant_id
-
 FuenteMinimo = Literal["negocio", "pasarela", "ninguna"]
 
 
 async def _capacidad_de_pago() -> Any:
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.payments import payment_registry
 
-    spec = await load_active_spec(get_current_tenant_id())
-    return payment_registry.capability_for(enabled_packs(spec))
+    return payment_registry.capability_for(await packs_del_negocio())
 
 
 async def minimo_efectivo(config: Any) -> tuple[float | None, FuenteMinimo]:
@@ -41,11 +38,10 @@ async def minimo_efectivo(config: Any) -> tuple[float | None, FuenteMinimo]:
 
 async def cuentas_de_transferencia_configuradas() -> int:
     """Cuántas cuentas de transferencia tiene el negocio (0 si no hay proveedor ni cuentas)."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.payments.transferencia import transfer_registry
 
-    spec = await load_active_spec(get_current_tenant_id())
-    proveedor = transfer_registry.provider_for(enabled_packs(spec))
+    proveedor = transfer_registry.provider_for(await packs_del_negocio())
     if proveedor is None:
         return 0
     try:

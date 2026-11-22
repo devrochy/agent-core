@@ -147,11 +147,10 @@ def resolver(nombre: str, permitidos: Iterable[str]) -> Resolver | None:
 
 async def packs_permitidos(tenant_id: uuid.UUID) -> set[str]:
     """Packs habilitados y sanos del negocio (fuera del loop: consumer y worker)."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.plugin_manager import plugin_manager
 
-    spec = await load_active_spec(tenant_id)
-    return set(enabled_packs(spec)) - set(await plugin_manager.disabled_plugins_for_tenant(tenant_id))
+    return await packs_del_negocio(tenant_id) - set(await plugin_manager.disabled_plugins_for_tenant(tenant_id))
 
 
 def con_evento(topic: str) -> Mapping[str, Procedure]:

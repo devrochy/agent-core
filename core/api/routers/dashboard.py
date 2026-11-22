@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from core.admin.plan_view import dashboard_billing_summary
-from core.agents.spec import count_tenant_packs, load_active_spec
+from core.agents.instalaciones_agente import packs_del_negocio
 from core.api.deps import Principal, require
 from core.api.schemas import UsageMetric
 from core.billing.tipos_de_uso import EVAL
@@ -156,7 +156,7 @@ async def get_dashboard(
             messages_7d=int(messages_7d),
             pending_escalations=int(pending),
             cost_30d=float(cost_30d),
-            active_plugins=count_tenant_packs(await load_active_spec()),
+            active_plugins=len(await packs_del_negocio(con_core=False)),
         ),
         bot_paused=app_settings.bot_paused if app_settings else False,
         llm_label=f"{llm_provider} · {llm_model}",

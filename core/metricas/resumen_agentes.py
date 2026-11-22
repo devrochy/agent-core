@@ -43,8 +43,8 @@ from core.admin.resumen_registry import (
     ResumenProvider,
     resumen_registry,
 )
+from core.agents.instalaciones_agente import packs_del_negocio
 from core.agents.instancias import especialista_por_defecto
-from core.agents.spec import enabled_packs, load_active_spec
 from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD
 from core.db.models import (
     AgentInstanceRecord,
@@ -554,7 +554,7 @@ async def _modulo(
 
 async def _habilitados() -> set[str]:
     try:
-        return enabled_packs(await load_active_spec())
+        return await packs_del_negocio()
     except Exception:
         return set()
 

@@ -57,8 +57,8 @@ CRON_AVISOS = f"{PACK_ID}.avisos_de_cobro"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
-    """Tenants cuyo AgentSpec incluye este pack (ADR-0019)."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    """Tenants con este pack entre los packs del negocio (`packs_del_negocio`, ADR-0206 §5)."""
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     async with get_session() as session:
         rows = (
@@ -70,9 +70,8 @@ async def _tenant_ids() -> list[uuid.UUID]:
         tid = uuid.UUID(str(raw))
         try:
             async with tenant_scope(tid):
-                spec = await load_active_spec()
-            if PACK_ID in enabled_packs(spec):
-                result.append(tid)
+                if PACK_ID in await packs_del_negocio(tid):
+                    result.append(tid)
         except Exception:
             continue
     return result
@@ -92,10 +91,10 @@ async def _config_del_negocio():  # type: ignore[no-untyped-def]
 async def _datos_de_transferencia() -> str:
     """Bloque de transferencia del negocio activo (HU-SUB-24), o `""` si no tiene cuentas. Lo ofrece
     otro pack por el core (`core.payments.transferencia`); este pack no lo importa."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.payments.transferencia import datos_de_transferencia
 
-    return await datos_de_transferencia(enabled_packs(await load_active_spec()))
+    return await datos_de_transferencia(await packs_del_negocio())
 
 
 async def _avisar_sin_forma_de_pago(tenant_id: uuid.UUID, sub: Subscription, cargo: SubscriptionCharge) -> None:
@@ -302,12 +301,11 @@ async def _generar_cargos(now: datetime) -> int:
 
 
 async def _generar_cargos_del_negocio(tenant_id: uuid.UUID, now: datetime) -> int:
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.payments import payment_registry
 
     async with tenant_scope(tenant_id):
-        spec = await load_active_spec()
-        cap = payment_registry.capability_for(enabled_packs(spec))
+        cap = payment_registry.capability_for(await packs_del_negocio(tenant_id))
         config = await _config_del_negocio()
         # HU-SUB-05: el cargo se genera `dias_anticipacion` antes del vencimiento
         # para que el link llegue antes (su vencimiento sigue siendo el inicio del

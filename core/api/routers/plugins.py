@@ -20,7 +20,8 @@ from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
+from core.agents.instalaciones_agente import packs_del_negocio
+from core.agents.spec import CORE_PACK_ID
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.forms import coerce_schema_values, hide_fields, redact_secrets
@@ -139,7 +140,7 @@ async def list_plugins(
             .all()
         )
     health = {h.plugin_id: h for h in health_rows}
-    enabled = enabled_packs(await load_active_spec())
+    enabled = await packs_del_negocio()
 
     result: list[PluginSummary] = []
     for module in plugin_manager.list_modules():

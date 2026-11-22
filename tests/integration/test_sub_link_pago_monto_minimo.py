@@ -39,7 +39,7 @@ async def test_sub_link_pago_monto_bajo_minimo(monkeypatch):
     from pack_subscriptions.capability import SubscriptionCapabilityImpl
     from pack_subscriptions.models import SubscriptionCharge
 
-    import core.agents.spec as spec_mod
+    import core.agents.instalaciones_agente as inst_mod
     import core.payments as payments_mod
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -47,11 +47,10 @@ async def test_sub_link_pago_monto_bajo_minimo(monkeypatch):
 
     customer_id = uuid.uuid4()
 
-    async def _noop_spec(*_a, **_k):
-        return None
+    async def _packs(*_a, **_k):
+        return {"pack_payments_fake"}
 
-    monkeypatch.setattr(spec_mod, "load_active_spec", _noop_spec)
-    monkeypatch.setattr(spec_mod, "enabled_packs", lambda spec: {"pack_payments_fake"})
+    monkeypatch.setattr(inst_mod, "packs_del_negocio", _packs)
     monkeypatch.setattr(payments_mod.payment_registry, "_caps", {"pack_payments_fake": _CapRechaza()})
 
     async with tenant_scope(TENANT):

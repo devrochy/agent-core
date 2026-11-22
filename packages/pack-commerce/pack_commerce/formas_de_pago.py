@@ -151,12 +151,10 @@ def metodos_activos(
 # ------------------------------------------------------------------ lectura (con I/O)
 async def pago_en_linea_disponible() -> bool:
     """El negocio cobra en línea si algún pack habilitado ofrece la capacidad de pagos."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.payments import payment_registry
-    from core.shared.tenant import get_current_tenant_id
 
-    spec = await load_active_spec(get_current_tenant_id())
-    return payment_registry.capability_for(enabled_packs(spec)) is not None
+    return payment_registry.capability_for(await packs_del_negocio()) is not None
 
 
 async def config_del_agente(agent_id: Any) -> Any:

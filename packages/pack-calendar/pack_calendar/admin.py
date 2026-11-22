@@ -65,10 +65,10 @@ def _request_section(request: Request) -> str:
 
 
 async def _pack_enabled() -> bool:
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     try:
-        return PLUGIN_ID in enabled_packs(await load_active_spec())
+        return PLUGIN_ID in await packs_del_negocio()
     except Exception:
         return False
 

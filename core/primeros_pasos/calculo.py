@@ -6,9 +6,8 @@ tablas de sistema sin RLS (`tenants`, `tenant_user`, `tenant_invitations`) se fi
 `tenant_id`. Del contenido de las habilidades se encarga cada pack con
 `BaseModule.contenido_cargado` (el core no lee sus tablas).
 
-No escribe nada propio (los hitos los registra `hitos.py`). La única escritura posible es la de
-`load_active_spec`, que crea el AgentSpec por defecto de un negocio que no lo tenga, como en
-cualquier otra pantalla del panel.
+No escribe nada (los hitos los registra `hitos.py`). Las habilidades habilitadas salen de
+`packs_del_negocio` (ADR-0206 §5).
 """
 
 from __future__ import annotations
@@ -246,15 +245,10 @@ async def _primer_mensaje(session, tenant_id: uuid.UUID) -> datetime | None:  # 
 
 # ------------------------------------------------------------------ habilidades
 async def _habilidades_habilitadas(tenant_id: uuid.UUID) -> list[str]:
-    """Packs de negocio habilitados en el AgentSpec, en su orden (sin el core)."""
-    from core.agents.spec import CORE_PACK_ID, load_active_spec
+    """Packs de negocio de `packs_del_negocio` (ADR-0206 §5), por id (sin el core)."""
+    from core.agents.instalaciones_agente import packs_del_negocio
 
-    spec = await load_active_spec(tenant_id)
-    vistas: list[str] = []
-    for pack in spec.packs:
-        if pack != CORE_PACK_ID and pack not in vistas:
-            vistas.append(pack)
-    return vistas
+    return sorted(await packs_del_negocio(tenant_id, con_core=False))
 
 
 async def contenidos_de_habilidades(tenant_id: uuid.UUID, habilitadas: list[str]) -> list[tuple[str, ContenidoCargado]]:

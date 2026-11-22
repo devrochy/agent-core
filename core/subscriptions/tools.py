@@ -69,14 +69,13 @@ def _proveedor_habilitado() -> Callable[[set[str]], Awaitable[bool]]:
     """
 
     async def _predicate(_connection_types: set[str]) -> bool:
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
 
         try:
             provider_ids = set(subscription_registry.registered_provider_ids())
             if not provider_ids:
                 return False
-            spec = await load_active_spec()
-            return bool(enabled_packs(spec) & provider_ids)
+            return bool(await packs_del_negocio() & provider_ids)
         except Exception:
             return False
 

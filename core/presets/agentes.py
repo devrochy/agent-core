@@ -8,7 +8,7 @@ fin» de un preset v2 (`PresetManifest.agentes`, plantillas en `core/presets/pla
    General del backfill de HU-AOS-13 con versión publicada y al menos una conexión conversacional
    con Coordinador vivo. Sin eso no crea ningún agente.
 3. **Agente por plantilla** (si sus `habilidades` están habilitadas en el negocio, única lectura
-   de la habilitación: `enabled_business_packs` del v2 activo, ADR-0118 adenda HU-AOS-16):
+   de la habilitación: `packs_del_negocio`, ADR-0206 §5):
    - si NO existe un agente con esa `key`, lo crea (`specialist`) y publica su versión 1 con un
      contenido `agentspec/3` DERIVADO de la última versión del General (`derivar_contenido`);
    - si existe y lo creó el preset (registro en `tenants.settings["preset"]["agentes"]`), no
@@ -714,8 +714,9 @@ async def _aplicar(
 ) -> ReportePresetV2:
     from core.agents.base import contenido_base
     from core.agents.claves import KEY_COORDINADOR
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.agents.instancias import agentes_base
-    from core.agents.spec import enabled_business_packs, leer_spec_activo
+    from core.agents.spec import leer_spec_activo
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
 
@@ -723,7 +724,7 @@ async def _aplicar(
     if leido is None:
         reporte.omitido = "sin_spec"
         return reporte
-    habilitados = enabled_business_packs(leido[1])
+    habilitados = await packs_del_negocio(tenant_id, con_core=False)
     # Sin General (ADR-0192 §4): la base de cada especialista sale de la configuración del negocio.
     base_del_negocio = contenido_base(leido[1], playbooks_de_packs=_playbooks_de_packs())
     del leido  # el v2 puede llevar literales de las declarativas

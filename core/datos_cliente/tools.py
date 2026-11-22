@@ -18,7 +18,6 @@ from core.datos_cliente.servicio import ajustes_de, base_de
 from core.mcp.types import BaseSkill, MCPTool, ToolContext
 from core.memory import entity as entity_memory
 from core.shared.logger import get_logger
-from core.shared.tenant import get_current_tenant_id
 
 log = get_logger(__name__)
 
@@ -40,10 +39,9 @@ async def _packs_del_agente() -> set[str]:
     if agente is not None and agente.packs is not None:
         return set(agente.packs)
     try:
-        from core.agents.spec import enabled_business_packs, leer_spec_activo
+        from core.agents.instalaciones_agente import packs_del_negocio
 
-        leido = await leer_spec_activo(get_current_tenant_id())
-        return set(enabled_business_packs(leido[1])) if leido is not None else set()
+        return await packs_del_negocio(con_core=False)
     except Exception:
         return set()
 

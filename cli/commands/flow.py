@@ -28,7 +28,9 @@ log = get_logger(__name__)
 
 
 async def _load_spec_and_slug(slug: str):  # type: ignore[no-untyped-def]
-    """Devuelve (spec, slug) del tenant o lanza typer.BadParameter si no existe."""
+    """Devuelve (spec, slug, packs) del tenant o lanza typer.BadParameter si no existe. `packs` son las
+    habilidades del negocio, con core: `packs_del_negocio` (ADR-0206 §5)."""
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.agents.spec import load_active_spec
     from core.db.models import Tenant
     from core.db.session import get_session
@@ -42,21 +44,20 @@ async def _load_spec_and_slug(slug: str):  # type: ignore[no-untyped-def]
         raise typer.BadParameter(f"Tenant no existe: {slug}")
     async with tenant_scope(tenant.id):
         spec = await load_active_spec(tenant.id)
-    return spec, slug
+        packs = await packs_del_negocio(tenant.id)
+    return spec, slug, packs
 
 
-def _available_tool_names(spec, provider_ids: frozenset[str] = frozenset()) -> set[str]:  # type: ignore[no-untyped-def]
-    """Tools disponibles PARA ESTE TENANT: packs habilitados + core + declarativas.
+def _available_tool_names(spec, enabled: set[str], provider_ids: frozenset[str] = frozenset()) -> set[str]:  # type: ignore[no-untyped-def]
+    """Tools disponibles PARA ESTE TENANT: packs habilitados (`enabled`, los del negocio) + core + declarativas.
 
-    Mismo criterio que el runtime (`loop.py`): solo los packs de `spec.packs`; así
+    Mismo criterio que el runtime (`loop.py`): solo los packs habilitados; así
     `flow validate` no da ✓ a una tool que en producción `_tool_denial` denegaría.
     Las `sub_*` del core (HU-SUB-01) cuentan si el negocio tiene habilitado un pack
     proveedor de suscripciones (`provider_ids`), igual que su predicado en runtime.
     """
-    from core.agents.spec import enabled_packs
     from core.plugin_manager import plugin_manager
 
-    enabled = enabled_packs(spec)
     names: set[str] = set()
     for module in plugin_manager.scan():
         if module.id not in enabled:
@@ -92,7 +93,7 @@ def show(slug: str = typer.Argument(..., help="Slug del tenant")) -> None:
     from core.agents.flow import resolve_flow
 
     async def _run() -> None:
-        spec, _ = await _load_spec_and_slug(slug)
+        spec, _, _ = await _load_spec_and_slug(slug)
         flow = await resolve_flow(spec, slug=slug)
         if flow is None:
             console.print(
@@ -120,11 +121,11 @@ def validate(slug: str = typer.Argument(..., help="Slug del tenant")) -> None:
         from core.plugin_manager import plugin_manager
         from core.subscriptions import subscription_registry
 
-        spec, _ = await _load_spec_and_slug(slug)
+        spec, _, habilitados = await _load_spec_and_slug(slug)
         # Registra los proveedores (p. ej. de suscripciones) como en el runtime.
         await plugin_manager.ensure_process_activation()
         providers = frozenset(subscription_registry.registered_provider_ids())
-        available = _available_tool_names(spec, providers)
+        available = _available_tool_names(spec, habilitados, providers)
         flow = await resolve_flow(spec, slug=slug, available=available)
         if flow is None:
             console.print(f"[yellow]Sin flujo para {slug}[/yellow]")
@@ -146,14 +147,16 @@ def validate(slug: str = typer.Argument(..., help="Slug del tenant")) -> None:
 @app.command()
 def sync(
     slug: str = typer.Argument(..., help="Slug del tenant"),
-    packs: str = typer.Option("", "--packs", help="Coma-separado (default: packs del spec)"),
+    packs: str = typer.Option("", "--packs", help="Coma-separado (default: packs de sus agentes)"),
 ) -> None:
     """Normaliza TENANTS_ROOT/<slug>/flow.json: quita copias de packs (ADR-0109)."""
     from core.agents.flow import pack_flow_path, seed_tenant_flow
 
     async def _run() -> None:
-        spec, _ = await _load_spec_and_slug(slug)
-        pack_ids = [p.strip() for p in packs.split(",") if p.strip()] or sorted(spec.packs)
+        from core.agents.spec import CORE_PACK_ID
+
+        _, _, habilitados = await _load_spec_and_slug(slug)
+        pack_ids = [p.strip() for p in packs.split(",") if p.strip()] or sorted(habilitados - {CORE_PACK_ID})
         if not pack_ids:
             console.print(f"[yellow]{slug} no tiene packs habilitados[/yellow]")
             return

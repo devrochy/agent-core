@@ -29,7 +29,7 @@ from sqlalchemy import Select, exists, func, or_, select
 
 from core.admin.lead_registry import LeadProvider, lead_registry
 from core.admin.roles import actua_como_master
-from core.agents.spec import enabled_packs, load_active_spec
+from core.agents.instalaciones_agente import packs_del_negocio
 from core.almacenamiento import (
     StorageInvalido,
     borrar,
@@ -308,7 +308,7 @@ class BotState(BaseModel):
 
 async def _providers() -> tuple[set[str], list[LeadProvider]]:
     try:
-        enabled = enabled_packs(await load_active_spec())
+        enabled = await packs_del_negocio()
     except Exception:
         enabled = set()
     return enabled, lead_registry.providers_for(enabled)

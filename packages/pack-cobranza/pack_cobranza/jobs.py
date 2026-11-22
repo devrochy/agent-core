@@ -48,8 +48,8 @@ CRON_CARGOS = f"{PACK_ID}.generar_cargos_suscripcion"
 
 
 async def _tenant_ids() -> list[uuid.UUID]:
-    """Tenants cuyo AgentSpec incluye este pack (ADR-0019)."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    """Tenants con este pack entre los packs del negocio (`packs_del_negocio`, ADR-0206 §5)."""
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     async with get_session() as session:
         rows = (
@@ -61,9 +61,8 @@ async def _tenant_ids() -> list[uuid.UUID]:
         tid = uuid.UUID(str(raw))
         try:
             async with tenant_scope(tid):
-                spec = await load_active_spec()
-            if PACK_ID in enabled_packs(spec):
-                result.append(tid)
+                if PACK_ID in await packs_del_negocio(tid):
+                    result.append(tid)
         except Exception as exc:
             log.warning(
                 "cobranza_tenant_scope_failed", tenant_id=str(tid), error=type(exc).__name__

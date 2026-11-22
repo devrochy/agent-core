@@ -75,19 +75,18 @@ class FuentesDeAltasRegistry:
         return sorted(self._fuentes)
 
     async def del_negocio(self, tenant_id: uuid.UUID) -> list[FuenteDeAltas]:
-        """Fuentes de los packs habilitados en el AgentSpec del negocio, por id. Puede haber más de una
+        """Fuentes de los packs en `packs_del_negocio` (ADR-0206 §5), por id. Puede haber más de una
         (un segundo proveedor de suscripciones): quien consulta pregunta a cada una hasta que una conozca
         la referencia."""
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
         from core.shared.tenant import tenant_scope
 
         async with tenant_scope(tenant_id):
-            spec = await load_active_spec(tenant_id)
-        packs = enabled_packs(spec)
+            packs = await packs_del_negocio(tenant_id)
         return [self._fuentes[pid] for pid in sorted(self._fuentes) if pid in packs]
 
     async def para_negocio(self, tenant_id: uuid.UUID) -> FuenteDeAltas | None:
-        """Fuente de un pack habilitado en el AgentSpec del negocio (la primera por id)."""
+        """Fuente de un pack instalado en algún agente del negocio (la primera por id)."""
         fuentes = await self.del_negocio(tenant_id)
         return fuentes[0] if fuentes else None
 

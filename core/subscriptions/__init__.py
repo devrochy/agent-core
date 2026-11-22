@@ -184,18 +184,17 @@ class SubscriptionRegistry:
         return None
 
     async def enabled_for_tenant(self, tenant_id: uuid.UUID) -> list[str]:
-        """Proveedores registrados que el negocio tiene habilitados en su AgentSpec.
+        """Proveedores registrados que el negocio tiene entre los packs del negocio (`packs_del_negocio`, ADR-0206 §5).
 
         Antes se miraba `plugin_manager.is_active`, que es por PROCESO: con todos los
         packs activos en el worker, cualquier proveedor contaba para cualquier negocio
         (HU-SUB-09).
         """
-        from core.agents.spec import enabled_packs, load_active_spec
+        from core.agents.instalaciones_agente import packs_del_negocio
         from core.shared.tenant import tenant_scope
 
         async with tenant_scope(tenant_id):
-            spec = await load_active_spec(tenant_id)
-        packs = enabled_packs(spec)
+            packs = await packs_del_negocio(tenant_id)
         return sorted(pid for pid in self._caps if pid in packs)
 
     async def capability_for_tenant(

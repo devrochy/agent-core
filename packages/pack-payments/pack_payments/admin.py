@@ -77,13 +77,12 @@ async def _wompi_webhook_url() -> str:
 async def _pack_enabled() -> bool:
     """El pack debe estar habilitado para el tenant activo (ADR-0049): la tab se
     oculta sin él, pero el acceso directo a la URL también debe rechazarse."""
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
 
     try:
-        spec = await load_active_spec()
+        return PLUGIN_ID in await packs_del_negocio()
     except Exception:
         return False
-    return PLUGIN_ID in enabled_packs(spec)
 
 
 @router.get("", response_class=HTMLResponse)

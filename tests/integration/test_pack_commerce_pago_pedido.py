@@ -113,13 +113,12 @@ async def _make_order(session, *, customer_id, total: float = 185_000.0, status:
 @pytest.fixture
 def commerce_enabled(monkeypatch):
     """`_update_order_payment_status` filtra por pack habilitado: lo forzamos."""
-    import core.agents.spec as spec_mod
+    import core.agents.instalaciones_agente as inst_mod
 
-    async def _load(tid):
-        return {"packs": ["pack_commerce"]}
+    async def _packs(_tid=None, *, con_core=True):
+        return {"core", "pack_commerce"}
 
-    monkeypatch.setattr(spec_mod, "load_active_spec", _load)
-    monkeypatch.setattr(spec_mod, "enabled_packs", lambda spec: {"core", "pack_commerce"})
+    monkeypatch.setattr(inst_mod, "packs_del_negocio", _packs)
 
 
 async def test_monto_del_servidor(fake_context, fake_capability):

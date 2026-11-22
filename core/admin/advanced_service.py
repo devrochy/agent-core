@@ -221,10 +221,11 @@ async def save_custom_guardrails(
 # ------------------------------------------------------------------ flow y evals (lectura)
 async def read_flow(spec) -> dict[str, Any]:  # type: ignore[no-untyped-def]
     from core.agents.flow import resolve_flow
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.mcp.declarative import tools_for_spec
     from core.mcp.host import mcp_host
 
-    enabled = set(spec.packs or []) | {"core"}
+    enabled = await packs_del_negocio()
     available = {
         t.name for t in mcp_host.get_tools() if t.plugin_id in enabled
     } | {t.name for t in tools_for_spec(spec)}
