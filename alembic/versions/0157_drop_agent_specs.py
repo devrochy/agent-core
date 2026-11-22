@@ -5,8 +5,8 @@ habilidades del negocio son las instaladas en sus agentes (`pack_installations`)
 `app_settings.agent_defaults` (0152). Retirar por ADR un esquema que ningún código lee no es el borrado físico de filas de
 negocio que prohíbe la invariante 8; ADR-0206 §9 lo registra explícitamente.
 
-Guarda (decisión del dueño del 2026-11-22): antes del DROP se compara, por negocio, `agent_specs.packs` del spec activo con
-las habilidades instaladas en sus agentes activos. Si algún negocio perdería una habilidad, la migración **aborta** y la
+Guarda (decisión del dueño del 2026-11-22): antes del DROP se compara, por negocio con Coordinador, `agent_specs.packs` del
+spec activo con las habilidades instaladas en sus agentes activos. Si algún negocio perdería una habilidad, la migración **aborta** y la
 lista, salvo que el entorno traiga `AGENT_SPECS_DROP_ACEPTADO=1` (quien despliega revisó y acepta esas pérdidas). Así, una
 release que llega con C2 y esta migración juntas no borra nada sin que alguien lo mire. Respaldo de la base antes de correrla.
 
@@ -36,13 +36,19 @@ RLS = "nullif(current_setting('app.tenant_id', true), '')::uuid"
 _PUEDE_SALTAR_RLS = "select rolsuper or rolbypassrls from pg_roles where rolname = current_user"
 _ACEPTADO = "AGENT_SPECS_DROP_ACEPTADO"
 
-# Por negocio vivo: los packs del spec v2 activo (sin `core`) que ningún agente activo tiene instalados.
+# Por negocio vivo del Agent OS (con Coordinador): los packs del spec v2 activo (sin `core`) que ningún agente activo tiene
+# instalados. Un negocio sin Coordinador no tiene agentes, así que desde C2 ya no tenía habilidades: no hay nada que
+# proteger (es el `tenant-1` que siembran las migraciones viejas en una base nueva, la del CI).
 _FALTANTES = """
 select t.slug, array_agg(distinct p order by p)
   from agent_specs s
   join tenants t on t.id = s.tenant_id and t.deleted_at is null
   cross join lateral jsonb_array_elements_text(coalesce(s.spec -> 'packs', '[]'::jsonb)) as p
  where s.is_active and s.deleted_at is null and p <> 'core'
+   and exists (
+       select 1 from agents c
+        where c.tenant_id = s.tenant_id and c.kind = 'core' and c.deleted_at is null
+   )
    and not exists (
        select 1 from pack_installations i
          join agents a on a.tenant_id = i.tenant_id and a.id = i.agent_id
