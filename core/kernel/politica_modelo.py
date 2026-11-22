@@ -157,8 +157,20 @@ class ProveedorDeLaPolitica(BaseLLMProvider):
         self.provider_name = base.provider_name
         self.model = base.model
 
-    def estimate_cost_usd(self, input_tokens: int, output_tokens: int) -> float:
-        return self._ultimo.estimate_cost_usd(input_tokens, output_tokens)
+    def estimate_cost_usd(
+        self, input_tokens: int, output_tokens: int, cached_tokens: int = 0, cache_write_tokens: int = 0
+    ) -> float:
+        from core.llm.base import costo_de_respuesta
+        from core.llm.types import LLMUsageInfo
+
+        # Delega con la caché (ADR-0208 §13) sin exigir al proveedor de abajo los argumentos nuevos.
+        uso = LLMUsageInfo(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cached_tokens,
+            cache_write_tokens=cache_write_tokens,
+        )
+        return costo_de_respuesta(self._ultimo, uso)
 
     async def generate(
         self,

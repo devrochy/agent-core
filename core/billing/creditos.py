@@ -3,13 +3,14 @@
 El consumo en créditos de un negocio en una ventana se **deriva** de sus tablas fuente (ADR-0045,
 sin contador paralelo):
 
-- **IA** (`usage_ledger`): la suma de `credits`, que el loop congela al escribir cada turno con el
-  tarifario y la TRM vigentes. Las filas anteriores a la migración 0096 (`credits` NULL) se
-  calculan al leer con la misma fórmula y la TRM actual, como plataforma (interino: ADR-0144).
-  Cuentan todas las filas salvo `kind = 'eval'` (a cargo de la plataforma, ADR-0117).
-- **Notas de voz, imágenes y plantillas** (`messages`): por ahora solo el fee de plataforma del
-  tarifario (0,5 · 1,0 · 0,3). La ingesta de WhatsApp registra STT y visión en el ledger en sombra
-  (`credits = 0`, ADR-0144), así que no cobra dos veces.
+- **IA y medios** (`usage_ledger`): la suma de `credits`, congelados al escribir cada fila con el
+  tarifario y la TRM vigentes (ADR-0208 §11). Las filas anteriores a la migración 0096 (`credits`
+  NULL, sin `tarifario_version`) se calculan al leer con el tarifario `v1` y la TRM actual, como
+  plataforma (ADR-0208 §14). Cuentan todas las filas salvo `kind = 'eval'` (ADR-0117).
+- **Notas de voz e imágenes** (`messages`): el fee de `v1` (0,5 · 1,0) solo para los mensajes
+  anteriores a `vigente_desde` de `v2`, cuando la ingesta escribía en sombra (`credits = 0`). Desde
+  esa fecha cobra su fila `stt`/`vision` del ledger (ADR-0208 §12). Las **plantillas** siguen con su
+  fee desde `messages`. Ver `medir_creditos` (playground, sin cobro doble).
 - **Desglose por `kind`** (HU-BILL-16): las filas `vision` y `stt` del ledger suman a su concepto
   y el resto (`turn`, `agent_run`, `embedding`, `generacion`) a `llm_turn`. Las fotos de catálogo
   (`kind = 'vision'` con créditos reales, ADR-0194) aparecen así como «Imágenes» y no como «IA».
@@ -19,8 +20,9 @@ Acciones de IA cotizadas (HU-BILL-16, ADR-0194): `cotizar` dice cuánto cuesta a
 `decidir_turno` es la lectura del turno (HU-BILL-18/20): el mismo cálculo, sin lock ni excepción, más el
 colchón de las conversaciones abiertas (ADR-0208 §4-5).
 
-Se excluye el playground del panel (conversaciones del canal `test`): una prueba del panel no
-consume el crédito del negocio.
+El playground del panel (conversaciones del canal `test`) es gratis hasta
+`PLAYGROUND_GRATIS_POR_CICLO` créditos por ciclo (D-79, ADR-0208 §15); lo que pasa de ahí suma
+al consumo del negocio.
 Todo corre dentro de `tenant_scope` (RLS) y además filtra `tenant_id` explícito.
 """
 
@@ -35,7 +37,8 @@ from typing import Literal
 from sqlalchemy import and_, case, func, literal, or_, select, text
 
 from core.billing.tarifario import (
-    TARIFARIO_VIGENTE,
+    TARIFARIO_V1,
+    TARIFARIO_V2,
     Concepto,
     KeyMode,
     Tarifario,
@@ -51,7 +54,11 @@ log = get_logger(__name__)
 # Estados de una plantilla que de verdad salió (Meta la aceptó). `queued` y `failed` no cobran.
 ESTADOS_PLANTILLA_ENVIADA = ("sent", "delivered", "read")
 # Filas del ledger que tienen concepto propio en el desglose; el resto es «IA» (`llm_turn`).
-_KINDS_CON_CONCEPTO = ("vision", "stt")
+_KINDS_CON_CONCEPTO = ("vision", "stt", "tts")
+# Playground del panel (canal `test`): gratis hasta 300 créditos por ciclo (D-79, ADR-0208 §15). Lo
+# que pasa de ahí suma al consumo del negocio: `max(0, consumo del playground − 300)`, en la misma
+# ventana y sin contador.
+PLAYGROUND_GRATIS_POR_CICLO = Decimal(300)
 
 
 @dataclass(frozen=True)
@@ -66,15 +73,26 @@ class ConsumoDeCreditos:
     total: Decimal
     por_concepto: dict[str, Decimal]
     por_agente: list[CreditoPorAgente] = field(default_factory=list)
+    # Playground (ADR-0208 §15): consumo bruto en la ventana y lo que queda del gratuito del ciclo.
+    # Lo cobrado (lo que pasa de 300) ya está en `total` y en `por_concepto["playground"]`.
+    playground_usado: Decimal = Decimal(0)
+    playground_gratis_restante: Decimal = PLAYGROUND_GRATIS_POR_CICLO
+
+
+def _de_playground(tenant_id: uuid.UUID, columna):  # type: ignore[no-untyped-def]
+    """Filas del playground del panel (conversaciones del canal `test`). Una fila sin conversación
+    no es del playground (`IN` con NULL da NULL, que un `case` trata como falso)."""
+    de_prueba = select(Conversation.id).where(
+        Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
+    )
+    return columna.in_(de_prueba)
 
 
 def _sin_playground(tenant_id: uuid.UUID, columna):  # type: ignore[no-untyped-def]
     """Excluye las filas del playground; las que no tienen conversación se conservan
-    (`NOT IN` con NULL descartaría filas legítimas)."""
-    de_prueba = select(Conversation.id).where(
-        Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
-    )
-    return or_(columna.is_(None), ~columna.in_(de_prueba))
+    (`NOT IN` con NULL descartaría filas legítimas). El playground no desaparece del crédito: se
+    mide aparte y cobra lo que pasa de `PLAYGROUND_GRATIS_POR_CICLO` (`medir_creditos`)."""
+    return or_(columna.is_(None), ~_de_playground(tenant_id, columna))
 
 
 def _creditos_de_la_fila(trm: Decimal, tarifario: Tarifario):  # type: ignore[no-untyped-def]
@@ -101,37 +119,58 @@ async def medir_creditos(
 ) -> ConsumoDeCreditos:
     """Créditos consumidos por el negocio en `[desde, hasta)`. La sesión debe estar dentro del
     `tenant_scope(tenant_id)` del llamador: con otro scope la RLS devolvería 0 en silencio, así que
-    se rechaza."""
+    se rechaza.
+
+    - **Ledger:** `credits` de cada fila; las filas con `credits` NULL (previas a 0096, sin
+      `tarifario_version`) se calculan con `v1`, nunca con el vigente (ADR-0208 §14).
+    - **Sin cobro doble** (ADR-0208 §12): el fee de nota de voz e imagen se cuenta desde `messages`
+      solo para los mensajes anteriores a `vigente_desde` de `v2`; desde ahí cobra su fila del
+      ledger. Las plantillas cobran desde `messages` con el fee del tarifario de su fecha.
+    - **Playground** (ADR-0208 §15): sus filas (ledger y medios del canal `test`) desde
+      `vigente_desde` de `v2` suman aparte; al negocio solo se le cobra lo que pasa de 300 en la
+      ventana, en `por_concepto["playground"]` y en el renglón sin agente. Lo anterior a `v2`
+      queda fuera, como antes: los ciclos cerrados no cambian.
+    - `eval` nunca cuenta (ADR-0117)."""
     from core.shared.tenant import get_current_tenant_id
 
     if get_current_tenant_id() != tenant_id:
         raise RuntimeError("medir_creditos fuera del tenant_scope del negocio medido")
-    tarifario = TARIFARIO_VIGENTE
     trm = trm_vigente()
-    creditos = _creditos_de_la_fila(trm, tarifario)
+    v2_desde = TARIFARIO_V2.vigente_desde
+    creditos = _creditos_de_la_fila(trm, TARIFARIO_V1)
 
-    filtros_ledger = [
-        UsageLedger.tenant_id == tenant_id,
-        UsageLedger.kind != "eval",
-        _sin_playground(tenant_id, UsageLedger.conversation_id),
-    ]
+    filtros_ledger = [UsageLedger.tenant_id == tenant_id, UsageLedger.kind != "eval"]
     if desde is not None:
         filtros_ledger.append(UsageLedger.created_at >= desde)
     if hasta is not None:
         filtros_ledger.append(UsageLedger.created_at < hasta)
+    filtros_ledger_negocio = [*filtros_ledger, _sin_playground(tenant_id, UsageLedger.conversation_id)]
 
+    # Una sola lectura del ledger: concepto × «es del playground». El playground anterior a `v2`
+    # sale como «excluido» y no suma a nada (antes de `v2` el playground no consumía).
     concepto_de_la_fila = case(
         (UsageLedger.kind.in_(_KINDS_CON_CONCEPTO), UsageLedger.kind), else_=literal("llm_turn")
     )
-    del_ledger: dict[str, Decimal] = {"llm_turn": Decimal(0), "stt": Decimal(0), "vision": Decimal(0)}
-    for concepto, usado in (
+    lugar = case(
+        (
+            _de_playground(tenant_id, UsageLedger.conversation_id),
+            case((UsageLedger.created_at >= v2_desde, literal("playground")), else_=literal("excluido")),
+        ),
+        else_=literal("negocio"),
+    )
+    del_ledger: dict[str, Decimal] = {c: Decimal(0) for c in ("llm_turn", *_KINDS_CON_CONCEPTO)}
+    playground = Decimal(0)
+    for donde, concepto, usado in (
         await session.execute(
-            select(concepto_de_la_fila, func.coalesce(func.sum(creditos), 0))
+            select(lugar, concepto_de_la_fila, func.coalesce(func.sum(creditos), 0))
             .where(*filtros_ledger)
-            .group_by(concepto_de_la_fila)
+            .group_by(lugar, concepto_de_la_fila)
         )
     ).all():
-        del_ledger[concepto] = Decimal(usado)
+        if donde == "negocio":
+            del_ledger[concepto] = Decimal(usado)
+        elif donde == "playground":
+            playground += Decimal(usado)
 
     agentes: list[CreditoPorAgente] = []
     if por_agente:
@@ -154,7 +193,7 @@ async def medir_creditos(
                         AgentRecord.id == AgentInstanceRecord.agent_id,
                     ),
                 )
-                .where(*filtros_ledger)
+                .where(*filtros_ledger_negocio)
                 .group_by(AgentRecord.id, AgentRecord.name)
             )
         ).all()
@@ -162,39 +201,57 @@ async def medir_creditos(
 
     # Fees de medios y plantillas. Sin filtrar `deleted_at`: borrar un mensaje (retención) no
     # devuelve un consumo que ya ocurrió.
-    filtros_msg = [Message.tenant_id == tenant_id, _sin_playground(tenant_id, Message.conversation_id)]
+    filtros_msg = [Message.tenant_id == tenant_id]
     if desde is not None:
         filtros_msg.append(Message.created_at >= desde)
     if hasta is not None:
         filtros_msg.append(Message.created_at < hasta)
+    negocio = _sin_playground(tenant_id, Message.conversation_id)
+    del_playground = _de_playground(tenant_id, Message.conversation_id)
     entrante = Message.direction == "inbound"
-    audios, imagenes, plantillas = (
+    audio = and_(entrante, Message.media_type.like("audio/%"), Message.created_at < v2_desde)
+    imagen = and_(entrante, Message.media_type.like("image/%"), Message.created_at < v2_desde)
+    plantilla = and_(
+        Message.direction == "outbound",
+        Message.template_name.is_not(None),
+        Message.status.in_(ESTADOS_PLANTILLA_ENVIADA),
+    )
+    v1, v2 = Message.created_at < v2_desde, Message.created_at >= v2_desde
+    audios, imagenes, plantillas_v1, plantillas_v2, plantillas_playground = (
         await session.execute(
             select(
-                func.count(Message.id).filter(entrante, Message.media_type.like("audio/%")),
-                func.count(Message.id).filter(entrante, Message.media_type.like("image/%")),
-                func.count(Message.id).filter(
-                    Message.direction == "outbound",
-                    Message.template_name.is_not(None),
-                    Message.status.in_(ESTADOS_PLANTILLA_ENVIADA),
-                ),
+                func.count(Message.id).filter(negocio, audio),
+                func.count(Message.id).filter(negocio, imagen),
+                func.count(Message.id).filter(negocio, plantilla, v1),
+                func.count(Message.id).filter(negocio, plantilla, v2),
+                # Medios del playground: antes de `v2` no consumía, y desde `v2` voz e imagen van
+                # en el ledger. Solo quedan sus plantillas desde `v2`.
+                func.count(Message.id).filter(del_playground, plantilla, v2),
             ).where(*filtros_msg)
         )
     ).one()
 
-    fees_stt = tarifario.fees["stt"] * int(audios or 0)
-    fees_vision = tarifario.fees["vision"] * int(imagenes or 0)
-    fees_plantillas = tarifario.fees["template_sent"] * int(plantillas or 0)
+    fees_stt = TARIFARIO_V1.fees["stt"] * int(audios or 0)
+    fees_vision = TARIFARIO_V1.fees["vision"] * int(imagenes or 0)
+    fees_plantillas = (
+        TARIFARIO_V1.fees["template_sent"] * int(plantillas_v1 or 0)
+        + TARIFARIO_V2.fees["template_sent"] * int(plantillas_v2 or 0)
+    )
+    playground += TARIFARIO_V2.fees["template_sent"] * int(plantillas_playground or 0)
+    playground_cobrado = max(Decimal(0), playground - PLAYGROUND_GRATIS_POR_CICLO)
     por_concepto = {
         "llm_turn": del_ledger["llm_turn"],
         "stt": del_ledger["stt"] + fees_stt,
         "vision": del_ledger["vision"] + fees_vision,
+        "tts": del_ledger["tts"],
         "template_sent": fees_plantillas,
+        "playground": playground_cobrado,
     }
     total = sum(por_concepto.values(), Decimal(0))
     if por_agente:
-        # Lo del ledger ya está en `agentes`: solo se agregan los fees que salen de `messages`.
-        medios = fees_stt + fees_vision + fees_plantillas
+        # Lo del ledger ya está en `agentes`: solo se agregan los fees que salen de `messages` y lo
+        # cobrado del playground, en el renglón sin agente.
+        medios = fees_stt + fees_vision + fees_plantillas + playground_cobrado
         if medios:
             sin_agente = next((a for a in agentes if a.agent_id is None), None)
             agentes = [a for a in agentes if a.agent_id is not None]
@@ -202,7 +259,13 @@ async def medir_creditos(
                 CreditoPorAgente(None, None, (sin_agente.used if sin_agente else Decimal(0)) + medios)
             )
         agentes.sort(key=lambda a: (a.agent_id is None, -a.used))
-    return ConsumoDeCreditos(total=total, por_concepto=por_concepto, por_agente=agentes)
+    return ConsumoDeCreditos(
+        total=total,
+        por_concepto=por_concepto,
+        por_agente=agentes,
+        playground_usado=playground,
+        playground_gratis_restante=max(Decimal(0), PLAYGROUND_GRATIS_POR_CICLO - playground),
+    )
 
 
 def creditos_enteros(valor: Decimal) -> int:

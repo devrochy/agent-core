@@ -54,6 +54,20 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
 }
 
+# USD por millón de tokens (lectura, escritura) de la caché (ADR-0208 §13). En OpenAI-compatible
+# `input_tokens` ya incluye lo cacheado y la escritura no se cobra aparte (= precio de entrada).
+# Fuentes (2026-11-22): DeepSeek https://api-docs.deepseek.com/quick_start/pricing (cache hit en
+# horario valle; los mismos de `solvershub-docs/02-vision-y-decisiones/anexos/calc_precios.py`);
+# OpenAI https://developers.openai.com/api/docs/pricing (cached input, tarifa Standard). Los alias
+# retirados de DeepSeek no tienen precio de caché publicado: cobran lo cacheado a precio de entrada.
+PRECIOS_CACHE: dict[str, tuple[float, float]] = {
+    "deepseek-flash": (0.003, 0.14),
+    "deepseek-v4-flash": (0.003, 0.14),
+    "deepseek-v4-pro": (0.022, 0.435),
+    "gpt-4o": (1.25, 2.50),
+    "gpt-4o-mini": (0.075, 0.15),
+}
+
 # IDs que DeepSeek retiró el 2026-07-24. Cualquier config que los use se avisa
 # (y, si son el default, se sustituye por el vigente).
 RETIRED_DEEPSEEK_MODELS = frozenset({"deepseek-chat", "deepseek-reasoner"})
@@ -105,6 +119,8 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self.base_url = base_url.rstrip("/")
         self.provider_name = provider_name
         self.pricing_per_mtok = PRICING.get(model, (0.0, 0.0))
+        self.cache_pricing_per_mtok = PRECIOS_CACHE.get(model)
+        self.input_includes_cache = True
         # `None` = no enviar el campo (proveedores que no lo conocen, como OpenAI).
         self.thinking = thinking
         # Con False, un 4xx distinto de 429 falla sin reintentos (HU-AOS-09). Por defecto, como

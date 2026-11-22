@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Annotated, Any, Literal
 
@@ -38,6 +39,7 @@ from core.admin.permissions import effective_access
 from core.agents import data_por_agente as svc
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.api.historial import historial_del_panel
 from core.api.pagination import Page, PageParams, build_page, page_params
 from core.plugin_manager import plugin_manager
 from core.shared.logger import get_logger
@@ -224,6 +226,15 @@ def _filtros(
         raise ApiError.bad_request(str(exc), code="invalid_period") from None
 
 
+def _recortar_al_historial(filtros: svc.Filtros, desde: datetime | None) -> svc.Filtros:
+    """El período no empieza antes del historial del plan (HU-BILL-25). Si termina antes del corte, queda
+    vacío (`desde = hasta`)."""
+    if desde is None or filtros.periodo.desde >= desde:
+        return filtros
+    inicio = min(desde, filtros.periodo.hasta)
+    return replace(filtros, periodo=svc.Periodo(desde=inicio, hasta=filtros.periodo.hasta))
+
+
 async def _puede(principal: Principal, seccion: str) -> bool:
     return await effective_access(principal.admin, seccion, principal.tenant_id) is not None
 
@@ -279,6 +290,8 @@ async def agent_conversations(
 ) -> Page[AgentConversation]:
     alcance = await _alcance(principal, _ref(ref))
     await _exigir_conversaciones(principal)
+    historial = await historial_del_panel(_tenant(principal))
+    filtros = _recortar_al_historial(filtros, historial.desde)
     pagina = await svc.conversaciones(alcance, filtros, offset=params.offset, limit=params.page_size)
     ver_costos = await _puede(principal, "costs")
     return build_page(

@@ -56,6 +56,17 @@ class CreditByAgent(BaseModel):
     used: float
 
 
+class PlaygroundCredit(BaseModel):
+    """Consumo del playground del panel en el mes del ciclo (D-79, ADR-0208 §15). Es gratis hasta
+    `free_limit` créditos; lo que pasa (`charged`) ya está sumado en `used` del crédito y en
+    `by_concept.playground`. El playground lo lee para avisar antes de empezar a descontar."""
+
+    used: float
+    free_limit: float
+    free_remaining: float
+    charged: float
+
+
 class CreditUsage(BaseModel):
     """Crédito mensual del plan (D-35, ADR-0142; medición ADR-0144). `used` en créditos con
     décimas (1 crédito = COP 10), `percent` sin tope de 100 (puede pasarse: hoy solo se avisa).
@@ -67,12 +78,15 @@ class CreditUsage(BaseModel):
     percent: float | None = None
     period_start: datetime | None = None
     period_end: datetime | None = None
-    # Desglose por concepto: llm_turn | stt | vision | template_sent.
+    # Desglose por concepto: llm_turn | stt | vision | tts | template_sent | playground (lo cobrado
+    # del playground por encima del gratuito, ADR-0208 §15). Suma `used`.
     by_concept: dict[str, float] | None = None
     # Por agente (no por instancia), mayor consumo primero y el renglón sin agente al final.
     # Como mucho `MAX_AGENTES_EN_CREDITO` agentes con nombre; `by_agent_truncated` avisa si hay más.
     by_agent: list[CreditByAgent] | None = None
     by_agent_truncated: bool = False
+    # Playground del panel: consumo, gratuito restante y cobrado (null si no se pudo medir).
+    playground: PlaygroundCredit | None = None
 
 
 MAX_AGENTES_EN_CREDITO = 50
@@ -159,6 +173,7 @@ async def get_plan(
                 by_concept={k: round(v, 1) for k, v in medido["by_concept"].items()},
                 by_agent=[CreditByAgent(**a) for a in agentes],
                 by_agent_truncated=len(con_nombre) > MAX_AGENTES_EN_CREDITO,
+                playground=PlaygroundCredit(**medido["playground"]) if medido.get("playground") else None,
             )
     return PlanResponse(
         overview=(

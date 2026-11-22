@@ -11,12 +11,15 @@ notas de personas operan sobre la conversación.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select, text, true
 
@@ -24,7 +27,13 @@ from core.almacenamiento import key_limpia
 from core.almacenamiento import url as url_firmada
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
+from core.api.historial import (
+    conversacion_activa_desde,
+    exigir_conversacion_visible,
+    historial_del_panel,
+)
 from core.api.pagination import Page, PageParams, build_page, page_params
+from core.api.plan_limits import plan_feature_responses, plan_limit_error
 from core.billing.tipos_de_uso import EVAL
 from core.db.models import (
     Admin,
@@ -41,10 +50,14 @@ from core.notifications import catalog
 from core.notifications.service import notify_by_actor
 from core.orchestrator import motivos_escalacion as motivos
 from core.orchestrator.motivos_escalacion import MotivoCodigo
+from core.shared.csv_seguro import celda
 from core.shared.exceptions import OutboundWindowExpiredError
+from core.shared.logger import get_logger
+from core.shared.tenant import tenant_scope
 from core.shared.test_mode import TEST_CHANNEL
 
 router = APIRouter(prefix="/admin/conversations", tags=["admin · conversaciones"])
+log = get_logger(__name__)
 
 
 # Largo del último mensaje en la lista (agent-sale corta en 64; aquí el panel trunca con CSS).
@@ -407,6 +420,11 @@ async def list_conversations(
     if connection_id is not None:
         base = base.where(Conversation.connection_id == connection_id)
 
+    # Historial del plan (HU-BILL-25): solo las conversaciones con actividad en la ventana.
+    historial = await historial_del_panel(tenant_id)
+    if historial.desde is not None:
+        base = base.where(conversacion_activa_desde(historial.desde))
+
     # Último mensaje por conversación: un LATERAL con LIMIT 1 que usa el índice
     # `ix_messages_tenant_conv_created (tenant_id, conversation_id, created_at)`.
     ultimo = (
@@ -491,6 +509,138 @@ async def list_conversations(
     return build_page(items, int(total), params)
 
 
+# Exportación CSV (HU-BILL-25): una fila por mensaje, solo planes con `features.exportar`.
+EXPORTAR_MAX_MENSAJES = 100_000
+_EXPORTAR_LOTE = 500
+_EXPORTAR_COLUMNAS = (
+    "Conversación",
+    "Cliente",
+    "Identificador",
+    "Canal",
+    "Conexión",
+    "Estado de la conversación",
+    "Inicio",
+    "Cierre",
+    "Mensaje",
+    "Fecha del mensaje",
+    "Dirección",
+    "Remitente",
+    "Estado del mensaje",
+    "Contenido",
+    "Tipo de archivo",
+    "Transcripción",
+)
+
+
+def _fecha_csv(valor: datetime | None) -> str:
+    return valor.astimezone(UTC).isoformat(timespec="seconds") if valor else ""
+
+
+def _consulta_exportar(tenant_id: uuid.UUID, desde: datetime | None):  # type: ignore[no-untyped-def]
+    """Mensajes del negocio con su conversación, sin el Centro de pruebas y dentro del historial."""
+    condiciones = [
+        Conversation.tenant_id == tenant_id,
+        Conversation.channel != TEST_CHANNEL,
+        Conversation.deleted_at.is_(None),
+        Message.tenant_id == tenant_id,
+        Message.deleted_at.is_(None),
+    ]
+    if desde is not None:
+        condiciones.append(Message.created_at >= desde)
+    return (
+        select(Conversation, Customer, ChannelConnection.label, Message)
+        .join(Message, and_(Message.conversation_id == Conversation.id, Message.tenant_id == Conversation.tenant_id))
+        .join(Customer, and_(Customer.id == Conversation.customer_id, Customer.tenant_id == Conversation.tenant_id))
+        .outerjoin(ChannelConnection, _join_conexion())
+        .where(*condiciones)
+    )
+
+
+@router.get(
+    "/export.csv",
+    response_class=StreamingResponse,
+    responses={
+        200: {"content": {"text/csv": {}}, "description": "CSV con una fila por mensaje (UTF-8 con BOM)."},
+        **plan_feature_responses("exportar"),
+    },
+)
+async def export_conversations_csv(
+    principal: Annotated[Principal, Depends(require("conversations"))],
+) -> StreamingResponse:
+    """Conversaciones del negocio y sus mensajes en CSV (HU-BILL-25), una fila por mensaje, de las más
+    antiguas a las más nuevas. Solo planes con `features.exportar` (Premium y Empresarial); en los demás,
+    409 `plan_feature_not_included` con `details = {feature: "exportar", plan}`.
+
+    Respeta el historial del plan, excluye el Centro de pruebas y no trae URLs de archivos. Tope de
+    `EXPORTAR_MAX_MENSAJES` mensajes; si se recorta, la respuesta lo dice en `X-Export-Truncated: true`.
+    Se transmite por lotes con un cursor del servidor."""
+    from core.billing.features_del_plan import FeatureNoIncluida, exigir_exportar
+
+    tenant_id = principal.tenant_id
+    if tenant_id is None:
+        raise ApiError(400, "sin_negocio", "Selecciona un negocio (X-Tenant-Id).")
+    try:
+        await exigir_exportar(tenant_id)
+    except FeatureNoIncluida as exc:
+        raise plan_limit_error(exc) from None
+    historial = await historial_del_panel(tenant_id)
+    consulta = _consulta_exportar(tenant_id, historial.desde)
+    async with get_session() as session:
+        total = int(
+            (await session.execute(select(func.count()).select_from(consulta.subquery()))).scalar() or 0
+        )
+
+    async def filas():  # type: ignore[no-untyped-def]
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(_EXPORTAR_COLUMNAS)
+        yield "\ufeff" + buf.getvalue()
+        # El cuerpo se consume después de que la ruta devolvió: el `tenant_scope` del request ya no
+        # está garantizado, así que se abre de nuevo (RLS) y además se filtra por `tenant_id`.
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                resultado = await session.stream(
+                    consulta.order_by(Conversation.started_at, Conversation.id, Message.created_at, Message.id)
+                    .limit(EXPORTAR_MAX_MENSAJES)
+                    .execution_options(yield_per=_EXPORTAR_LOTE)
+                )
+                async for lote in resultado.partitions(_EXPORTAR_LOTE):
+                    buf.seek(0)
+                    buf.truncate()
+                    for conv, cust, conexion, m in lote:
+                        writer.writerow(
+                            [
+                                str(conv.id),
+                                celda(cust.name or ""),
+                                celda(cust.external_id or ""),
+                                conv.channel,
+                                celda(conexion or ""),
+                                conv.status,
+                                _fecha_csv(conv.started_at),
+                                _fecha_csv(conv.closed_at),
+                                str(m.id),
+                                _fecha_csv(m.created_at),
+                                m.direction,
+                                m.sender_type,
+                                m.status,
+                                celda(m.content or ""),
+                                celda(m.media_type or ""),
+                                celda(m.media_transcription or ""),
+                            ]
+                        )
+                    yield buf.getvalue()
+
+    log.info("conversaciones_exportadas", tenant_id=str(tenant_id), mensajes=min(total, EXPORTAR_MAX_MENSAJES))
+    return StreamingResponse(
+        filas(),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="conversaciones.csv"',
+            "X-Export-Truncated": "true" if total > EXPORTAR_MAX_MENSAJES else "false",
+        },
+    )
+
+
 @router.get("/connections", response_model=list[ConversationConnection])
 async def list_conversation_connections(
     principal: Annotated[Principal, Depends(require("conversations"))],
@@ -546,28 +696,28 @@ async def _conversacion_visible(session: Any, conversation_id: uuid.UUID, tenant
     return row[0], row[1], row[2]
 
 
-@router.get("/{conversation_id}", response_model=ConversationDetail)
+@router.get("/{conversation_id}", response_model=ConversationDetail, responses=plan_feature_responses("historial"))
 async def get_conversation(
     conversation_id: uuid.UUID,
     principal: Annotated[Principal, Depends(require("conversations"))],
 ) -> ConversationDetail:
+    """Detalle con los mensajes. Con el historial del plan (HU-BILL-25), una conversación sin actividad
+    en la ventana responde 409 `plan_feature_not_included` (`feature = historial`) y de una visible solo
+    salen los mensajes desde el corte."""
     tenant_id = principal.tenant_id
     async with get_session() as session:
         conv, cust, conexion = await _conversacion_visible(session, conversation_id, tenant_id)
+        historial = await historial_del_panel(tenant_id, session=session)
+        await exigir_conversacion_visible(session, tenant_id, conversation_id, historial)
+        consulta = select(Message).where(
+            Message.conversation_id == conversation_id,
+            Message.tenant_id == tenant_id,
+            Message.deleted_at.is_(None),
+        )
+        if historial.desde is not None:
+            consulta = consulta.where(Message.created_at >= historial.desde)
         messages = list(
-            (
-                await session.execute(
-                    select(Message)
-                    .where(
-                        Message.conversation_id == conversation_id,
-                        Message.tenant_id == tenant_id,
-                        Message.deleted_at.is_(None),
-                    )
-                    .order_by(Message.created_at, Message.id)
-                )
-            )
-            .scalars()
-            .all()
+            (await session.execute(consulta.order_by(Message.created_at, Message.id))).scalars().all()
         )
         items = await _message_items(session, tenant_id, conversation_id, messages)
         escalacion = await _escalacion_activa(session, tenant_id, conversation_id)
@@ -609,7 +759,7 @@ async def get_conversation(
     )
 
 
-@router.get("/{conversation_id}/messages", response_model=MessagesSince)
+@router.get("/{conversation_id}/messages", response_model=MessagesSince, responses=plan_feature_responses("historial"))
 async def list_messages_since(
     conversation_id: uuid.UUID,
     principal: Annotated[Principal, Depends(require("conversations"))],
@@ -628,11 +778,15 @@ async def list_messages_since(
     tenant_id = principal.tenant_id
     async with get_session() as session:
         await _conversacion_visible(session, conversation_id, tenant_id)
+        historial = await historial_del_panel(tenant_id, session=session)
+        await exigir_conversacion_visible(session, tenant_id, conversation_id, historial)
         query = select(Message).where(
             Message.conversation_id == conversation_id,
             Message.tenant_id == tenant_id,
             Message.deleted_at.is_(None),
         )
+        if historial.desde is not None:
+            query = query.where(Message.created_at >= historial.desde)
         if after is not None:
             desde = after if after.tzinfo else after.replace(tzinfo=UTC)
             query = query.where(Message.created_at >= desde - SOLAPE_CURSOR)

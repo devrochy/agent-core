@@ -16,18 +16,15 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any
 
 from core.almacenamiento import StorageInvalido, guardar
-from core.billing.tarifario import TARIFARIO_VIGENTE, trm_vigente
-from core.db.models import UsageLedger
-from core.db.session import get_session
 from core.media.config import (
     MediaConfigError,
     resolve_audio_config,
     resolve_vision_config,
 )
+from core.media.consumo import registrar_consumo
 from core.media.errors import MediaProviderError
 from core.media.meta_media import descargar_media
 from core.media.prompts import prompt_de_media, respuesta_de_media
@@ -190,31 +187,21 @@ async def _registrar_consumo(
     latency_ms: int,
     resultado: dict[str, Any],
 ) -> None:
-    """Fila de costo en modo sombra (`credits=0`): mide sin cobrar dos veces."""
-    tenant_id = get_current_tenant_id()
-    if tenant_id is None:
-        return
-    try:
-        async with get_session() as session:
-            session.add(
-                UsageLedger(
-                    tenant_id=tenant_id,
-                    conversation_id=conversation_id,
-                    model=model,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
-                    latency_ms=latency_ms,
-                    cost_usd=cost_usd,
-                    kind=kind,
-                    credits=Decimal("0.0"),
-                    key_mode=key_mode,
-                    tarifario_version=TARIFARIO_VIGENTE.version,
-                    trm_cop=trm_vigente(),
-                    result=resultado,
-                )
-            )
-    except Exception:
-        log.warning("media_ledger_failed", kind=kind, exc_info=True)
+    """Fila de costo de la nota de voz (`stt`) o la imagen (`vision`) con sus créditos reales por
+    tarifario (ADR-0208 §11-12): costo más el fee por fila. Desde `vigente_desde` del tarifario `v2`
+    el fee ya no sale de `messages`, así que no se cobra dos veces."""
+    await registrar_consumo(
+        kind=kind,
+        concepto=kind,
+        conversation_id=conversation_id,
+        model=model,
+        cost_usd=cost_usd,
+        key_mode=key_mode,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        latency_ms=latency_ms,
+        resultado=resultado,
+    )
 
 
 async def _outcome_fijo(

@@ -165,7 +165,7 @@ async def test_endpoint_publico_resuelve_por_la_conexion_del_negocio_correcto(ap
     key_b = (await _guardar(app_client, tid_b, allowed_origins=["https://otro.example"]))["key"]
 
     r = await app_client.get(_publico(key_a, "config"))
-    assert r.status_code == 200 and r.json() == {"enabled": True, "allowed_origins": [ORIGEN], "turnstile": False}
+    assert r.status_code == 200 and r.json() == {"enabled": True, "allowed_origins": [ORIGEN], "turnstile": False, "marca_propia": False}
 
     visitante = uniq("vis")
     r = await app_client.post(

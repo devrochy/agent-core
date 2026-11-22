@@ -195,6 +195,8 @@ class ContadorDelSimulador:
     def instalar(self) -> None:
         import simulador
 
+        from core.llm.base import costo_de_respuesta
+
         original = simulador.ClienteSimulado.siguiente
         contador = self
 
@@ -206,7 +208,7 @@ class ContadorDelSimulador:
                 r = await self._base.generate(**kw)
                 contador.tokens_in += int(r.usage.input_tokens)
                 contador.tokens_out += int(r.usage.output_tokens)
-                contador.costo_usd += float(self._base.estimate_cost_usd(r.usage.input_tokens, r.usage.output_tokens))
+                contador.costo_usd += costo_de_respuesta(self._base, r.usage)  # con su caché (ADR-0208 §13)
                 return r
 
             def __getattr__(self, nombre: str) -> Any:

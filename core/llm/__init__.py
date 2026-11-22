@@ -64,17 +64,20 @@ def resolve_provider(
         thinking = settings.llm_thinking_default
 
     if key in ("deepseek", "openai", "openai_compatible"):
-        from core.llm.openai_compatible import PRICING, resolve_thinking_for_model
+        from core.llm.openai_compatible import PRECIOS_CACHE, PRICING, resolve_thinking_for_model
 
         resolved_thinking = (
             resolve_thinking_for_model(resolved_model, bool(thinking)) if thinking is not None else None
         )
         pricing = PRICING.get(resolved_model, (0.0, 0.0))
+        cache_pricing, incluye_cache = PRECIOS_CACHE.get(resolved_model), True
     elif key == "anthropic":
+        from core.llm.anthropic_provider import PRECIOS_CACHE as ANTHROPIC_CACHE
         from core.llm.anthropic_provider import PRICING as ANTHROPIC_PRICING
 
         resolved_thinking = None
         pricing = ANTHROPIC_PRICING.get(resolved_model, (3.00, 15.00))
+        cache_pricing, incluye_cache = ANTHROPIC_CACHE.get(resolved_model), False
     else:
         raise ValueError(f"Proveedor LLM desconocido: {key}")
 
@@ -88,6 +91,8 @@ def resolve_provider(
             model=resolved_model,
             thinking=resolved_thinking,
             pricing_per_mtok=pricing,
+            cache_pricing_per_mtok=cache_pricing,
+            input_includes_cache=incluye_cache,
         )
 
     provider: BaseLLMProvider
@@ -121,5 +126,7 @@ def resolve_provider(
             thinking=resolved_thinking,
             pricing_per_mtok=provider.pricing_per_mtok,
             secretos=(resolved_api_key,),
+            cache_pricing_per_mtok=provider.cache_pricing_per_mtok,
+            input_includes_cache=provider.input_includes_cache,
         )
     return provider

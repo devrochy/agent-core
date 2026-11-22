@@ -19,25 +19,30 @@ from core.search import ResultadoBusqueda, escapar_ilike
 async def _buscar_conversaciones(
     tenant_id: uuid.UUID, q: str, limit: int
 ) -> list[ResultadoBusqueda]:
+    from core.api.historial import conversacion_activa_desde, historial_del_panel
+
     patron = f"%{escapar_ilike(q)}%"
+    consulta = (
+        select(Conversation, Customer)
+        .join(Customer, Customer.id == Conversation.customer_id)
+        .where(
+            Conversation.tenant_id == tenant_id,
+            Conversation.deleted_at.is_(None),
+            Customer.deleted_at.is_(None),
+            or_(
+                Customer.name.ilike(patron, escape="\\"),
+                Customer.external_id.ilike(patron, escape="\\"),
+                Customer.contact_phone.ilike(patron, escape="\\"),
+            ),
+        )
+    )
+    # Historial del plan (HU-BILL-25): el buscador no encuentra lo que la bandeja ya no muestra.
+    historial = await historial_del_panel(tenant_id)
+    if historial.desde is not None:
+        consulta = consulta.where(conversacion_activa_desde(historial.desde))
     async with get_session() as session:
         rows = (
-            await session.execute(
-                select(Conversation, Customer)
-                .join(Customer, Customer.id == Conversation.customer_id)
-                .where(
-                    Conversation.tenant_id == tenant_id,
-                    Conversation.deleted_at.is_(None),
-                    Customer.deleted_at.is_(None),
-                    or_(
-                        Customer.name.ilike(patron, escape="\\"),
-                        Customer.external_id.ilike(patron, escape="\\"),
-                        Customer.contact_phone.ilike(patron, escape="\\"),
-                    ),
-                )
-                .order_by(Conversation.started_at.desc())
-                .limit(limit)
-            )
+            await session.execute(consulta.order_by(Conversation.started_at.desc()).limit(limit))
         ).all()
     return [
         {
