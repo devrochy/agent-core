@@ -133,6 +133,17 @@ jobs:
         if: always()
         run: docker rm -f "c4-mcp-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > /dev/null 2>&1 || true
 
+      - name: Catálogo de planes sin drift (docs/planes.json)
+        # HU-BILL-28: la landing copia `docs/planes.json` de `develop` (`scripts/sync-planes.mjs`),
+        # así que se verifica en todo nivel, no solo hacia main. Solo importa
+        # `core.billing.plans`: sin BD ni packs.
+        run: |
+          python scripts/export_planes.py
+          if ! git diff --exit-code -- docs/planes.json; then
+            echo "::error file=docs/planes.json::docs/planes.json no coincide con core/billing/plans.py. Corre python scripts/export_planes.py y commitea el resultado."
+            exit 1
+          fi
+
       - name: Contrato OpenAPI sin drift (hacia main)
         # Checklist de release: `docs/openapi.json` refleja `/api/v1` (ADR-0077).
         if: github.base_ref == 'main' || github.ref == 'refs/heads/main'
