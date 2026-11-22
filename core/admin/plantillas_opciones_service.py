@@ -128,6 +128,7 @@ async def _bindings_de_los_especialistas(tenant_id: uuid.UUID) -> list[Any]:
     """Los bindings de tools de la última versión publicada de cada especialista activo, unidos (decisión del dueño
     del 2026-11-22, HU-AOS-91: lo del negocio es lo de sus agentes). Una tool queda habilitada si algún agente la
     habilita, y pide confirmación si alguno la pide."""
+    _scope(tenant_id)
     from types import SimpleNamespace
 
     from sqlalchemy import text

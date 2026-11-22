@@ -295,6 +295,7 @@ async def _usa_conocimiento(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
 async def _packs_del_spec_v2(tenant_id: uuid.UUID) -> set[str]:
     """Los `packs` del AgentSpec v2 activo, leídos con SQL de `agent_specs` (sin el modelo, que ya no existe): solo
     para el precheck y el backfill, que se van con la tabla en la parte E de HU-AOS-91."""
+    _exigir_scope(tenant_id)
     async with get_session() as session:
         fila = (
             await session.execute(
