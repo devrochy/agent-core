@@ -315,9 +315,9 @@ GUIONES: dict[str, Guion] = {g.seccion: g for g in (_VOZ, _ATENCION)}
 
 
 def _es_de_voz(clave: str) -> bool:
-    """Las que viven en la persona del AgentSpec v2 (en el Agent OS no surten efecto: la voz sale de la
-    versión publicada del agente)."""
-    return POR_CLAVE[clave].almacen.startswith("spec:persona.")
+    """Las de la persona de los valores por defecto del negocio (`agent_defaults`, ADR-0206 §6): en el Agent OS no
+    surten efecto en el turno (la voz sale de la versión publicada del agente)."""
+    return POR_CLAVE[clave].almacen.startswith("agent_defaults:persona.")
 
 
 def guiones_visibles() -> list[Guion]:

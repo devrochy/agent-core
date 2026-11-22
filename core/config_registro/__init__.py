@@ -1,7 +1,7 @@
 """Registro de opciones de configuración del negocio (SPEC-37, ADR-0166).
 
 Vista declarativa sobre el almacenamiento existente (columnas de `AppSettings`, `behavior_config`,
-`escalation_config` y la persona del spec). No tiene tablas ni migraciones. Solo lo importan la API
+`escalation_config` y los valores por defecto de los agentes en `agent_defaults`). No tiene tablas ni migraciones. Solo lo importan la API
 y el panel de administración: el runtime de turnos no, porque sus textos son para personas y no
 para el modelo.
 """

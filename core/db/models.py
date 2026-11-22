@@ -153,9 +153,12 @@ class AppSettings(Base):
     behavior_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     # {"debounce_mode": "natural", "split_style": "pocos_cortos", "guardrail_max_retries": 1, ...}
     # Inventario de claves: SPEC-37 de solvershub-docs. `tono` ya no se escribe ni se lee
-    # (HU-CFG-01): la voz es `persona.tone` del AgentSpec.
+    # (HU-CFG-01): la voz es `persona.tone` de `agent_defaults`.
     brand_voice: Mapped[str] = mapped_column(Text, default="")
     escalation_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Valores por defecto de los agentes del negocio (ADR-0206 §6): voz, modelo, memoria, políticas y playbooks
+    # base. Siembran el KernelSpec y el contenido de un agente nuevo (`core/agents/defaults_negocio.py`).
+    agent_defaults: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default=text("'{}'::jsonb"))
     # {"keywords": ["reclamo", "asesor"], "business_hours": {"tz": ..., "ranges": [...]},
     #  "out_of_hours_message": "...", "auto_escalate_after_turns": 3}
 

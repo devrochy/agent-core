@@ -99,7 +99,7 @@ async def test_lectura_compatible_con_tono_guardado_de_antes(app_client) -> None
 async def test_cli_configure_tone_escribe_la_persona() -> None:
     """Gherkin «CLI»: `agent-core configure tone` cambia `persona.tone` y no toca `behavior_config`."""
     from cli.commands.configure import cambiar_tono_persona
-    from core.agents.spec import load_active_spec
+    from core.agents import defaults_negocio
     from core.alta_negocio import onboard_tenant
     from core.shared.tenant import tenant_scope
 
@@ -110,5 +110,5 @@ async def test_cli_configure_tone_escribe_la_persona() -> None:
     assert await cambiar_tono_persona(tid, "formal") is True
 
     async with tenant_scope(tid):
-        assert (await load_active_spec()).persona.tone == "formal"
+        assert (await defaults_negocio.leer(tid)).persona.tone == "formal"  # ADR-0206 §6
     assert await _behavior(tid) == antes

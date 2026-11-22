@@ -95,6 +95,7 @@ from core.admin.waweb_service import (
 from core.admin.waweb_service import (
     session_state as waweb_session_state,
 )
+from core.agents import defaults_negocio
 from core.agents.habilitacion import (
     configure_plugin_for_tenant,
     set_pack_for_tenant,
@@ -106,7 +107,6 @@ from core.agents.spec import (
     activate_spec_version,
     load_active_spec,
     next_spec_version,
-    save_spec_if_changed,
     save_spec_version,
 )
 from core.billing.enforcement import QuotaExceeded
@@ -173,6 +173,16 @@ def _render(name: str, ctx: dict[str, Any], status_code: int = 200):  # type: ig
 
 
 # ------------------------------------------------------------------ leads globales
+
+def _campos_invalidos(exc: ValueError) -> str:
+    """Solo los campos rechazados (sin el valor): el aviso va en la query string y termina en los logs de acceso."""
+    errores = getattr(exc, "errors", None)
+    if callable(errores):
+        campos = sorted({".".join(str(p) for p in e.get("loc", ())) for e in errores()})
+        return ", ".join(c for c in campos if c)[:140] or "revisa los valores"
+    return "revisa los valores"
+
+
 @router.get("/leads", response_class=HTMLResponse)
 async def leads_global(request: Request) -> HTMLResponse:
     """Vista global de leads (ADR-0056): `Customer` + columnas que aportan los packs.
@@ -1110,85 +1120,87 @@ async def _save_spec_version(new_spec: AgentSpec) -> str | None:
     return await save_spec_version(new_spec)
 
 
+async def _save_defaults_from_spec_form(form: Any) -> RedirectResponse:
+    """`/admin/spec` sin JSON crudo: persona, modelo y políticas son valores por defecto de los agentes del
+    negocio (`agent_defaults`, ADR-0206 §6), no una versión del spec. Solo cambia lo que trae el formulario."""
+
+    def _num(clave: str, tipo: type) -> Any:
+        try:
+            return tipo(form[clave]) if str(form.get(clave) or "").strip() else None
+        except ValueError:
+            return None
+
+    persona: dict[str, Any] = {}
+    for clave, campo in (("persona_role", "role"), ("persona_tone", "tone"), ("persona_emojis", "emojis")):
+        if str(form.get(clave) or "").strip():
+            persona[campo] = str(form[clave]).strip()
+    if (calidez := _num("persona_warmth", int)) is not None:
+        persona["warmth"] = rango("persona_warmth").recortar(calidez)
+    if (largo := _num("persona_max_length", int)) is not None:
+        persona["maxLength"] = max(0, largo)
+    if "persona_forbidden" in form:
+        persona["forbiddenPhrases"] = [p.strip() for p in str(form["persona_forbidden"]).split(",") if p.strip()]
+    model: dict[str, Any] = {}
+    if str(form.get("model_primary") or "").strip():
+        model["primary"] = str(form["model_primary"]).strip()
+    if (temperatura := _num("model_temperature", float)) is not None:
+        model["temperature"] = max(0.0, min(2.0, temperatura))
+    policies: dict[str, Any] = {}
+    if (presupuesto := _num("policy_budget", float)) is not None:
+        policies["budgetUsdPerConversation"] = max(0.0, presupuesto)
+    if (topes := _num("policy_max_tool_calls", int)) is not None:
+        policies["maxToolCallsPerTurn"] = max(1, min(50, topes))
+    return await _save_defaults_from_form({"persona": persona, "model": model, "policies": policies}, "avanzado")
+
+
+async def _save_defaults_from_form(cambios: dict[str, Any], tab: str) -> RedirectResponse:
+    """Guarda en `agent_defaults` del negocio activo (merge) y redirige a la tab de origen."""
+    tid = get_current_tenant_id()
+    if tid is None:
+        return RedirectResponse(
+            f"/admin/configuracion?tab={tab}&flash=sin tenant activo&flash_type=danger", status_code=303
+        )
+    try:
+        await defaults_negocio.guardar(tid, cambios)
+    except ValueError as exc:
+        return RedirectResponse(
+            f"/admin/configuracion?tab={tab}&flash=valor inválido: {_campos_invalidos(exc)}&flash_type=danger",
+            status_code=303,
+        )
+    return RedirectResponse(f"/admin/configuracion?tab={tab}&flash={tab} guardado&flash_type=success", status_code=303)
+
+
 @router.post("/spec")
 async def spec_save(request: Request):
     admin = await current_admin(request)
     if admin is None:
         return _login_redirect()
     form = await request.form()
-    persona_role = str(form.get("persona_role", ""))
-    persona_tone = str(form.get("persona_tone", ""))
-    try:
-        persona_warmth = int(form.get("persona_warmth", 3) or 3)
-    except ValueError:
-        persona_warmth = 3
-    try:
-        persona_max_length = int(form.get("persona_max_length", 500) or 500)
-    except ValueError:
-        persona_max_length = 500
-    persona_forbidden = str(form.get("persona_forbidden", ""))
-    persona_emojis = str(form.get("persona_emojis", "sparse"))
-    model_primary = str(form.get("model_primary", ""))
-    try:
-        model_temperature = float(form.get("model_temperature", 0.3) or 0.3)
-    except ValueError:
-        model_temperature = 0.3
-    try:
-        policy_budget = float(form.get("policy_budget", 0.5) or 0.5)
-    except ValueError:
-        policy_budget = 0.5
-    try:
-        policy_max_tool_calls = int(form.get("policy_max_tool_calls", 10) or 10)
-    except ValueError:
-        policy_max_tool_calls = 10
     raw_json = str(form.get("raw_json", ""))
+    if not raw_json.strip():
+        return await _save_defaults_from_spec_form(form)
 
     current = await load_active_spec()
     try:
-        if raw_json.strip():
-            # fallback de poder: JSON completo validado por el contrato congelado
-            data = json.loads(raw_json)
-            new_spec = AgentSpec.model_validate(data)
-            # Las tools declarativas pasan por el mismo validador que su editor (HU-AOS-12):
-            # sin literales sensibles nuevos ni secretos fuera de sus dominios.
-            from core.agents.declarativas import tools_del_editor_crudo
+        # fallback de poder: JSON completo validado por el contrato congelado (persona, modelo, memoria y
+        # políticas del JSON quedan en el v2; los que usa Configuración están en `agent_defaults`)
+        data = json.loads(raw_json)
+        new_spec = AgentSpec.model_validate(data)
+        # Las tools declarativas pasan por el mismo validador que su editor (HU-AOS-12):
+        # sin literales sensibles nuevos ni secretos fuera de sus dominios.
+        from core.agents.declarativas import tools_del_editor_crudo
 
-            data = new_spec.model_dump(mode="json")
-            ext = dict(data.get("extensions") or {})
-            tools = await tools_del_editor_crudo(
-                get_current_tenant_id(), ext.get("tools"), (current.extensions or {}).get("tools")
-            )
-            if tools is None:
-                ext.pop("tools", None)
-            else:
-                ext["tools"] = tools
-            data["extensions"] = ext
-            new_spec = AgentSpec.model_validate(data)
+        data = new_spec.model_dump(mode="json")
+        ext = dict(data.get("extensions") or {})
+        tools = await tools_del_editor_crudo(
+            get_current_tenant_id(), ext.get("tools"), (current.extensions or {}).get("tools")
+        )
+        if tools is None:
+            ext.pop("tools", None)
         else:
-            # Los packs ya no se editan acá: se activan/desactivan por tenant
-            # desde /admin/plugins (una sola pantalla, sin redundancia).
-            data = current.model_dump(mode="json")
-            data["persona"].update(
-                {
-                    "role": persona_role or data["persona"].get("role", ""),
-                    "tone": persona_tone or data["persona"].get("tone", ""),
-                    "warmth": persona_warmth,
-                    "emojis": persona_emojis or data["persona"].get("emojis", "sparse"),
-                    "maxLength": persona_max_length,
-                    "forbiddenPhrases": [
-                        p.strip() for p in persona_forbidden.split(",") if p.strip()
-                    ],
-                }
-            )
-            if model_primary:
-                data["model"]["primary"] = model_primary
-            data["model"]["temperature"] = model_temperature
-            data["policies"]["budgetUsdPerConversation"] = policy_budget
-            data["policies"]["maxToolCallsPerTurn"] = policy_max_tool_calls
-            # `policies.escalation.triggers` NO se toca acá -- ese campo del
-            # contrato nunca se lee en runtime (ver `AppSettings.escalation_config`
-            # en /admin/configuracion, que sí es lo que usa el orchestrator).
-            new_spec = AgentSpec.model_validate(data)
+            ext["tools"] = tools
+        data["extensions"] = ext
+        new_spec = AgentSpec.model_validate(data)
     except Exception as exc:
         return RedirectResponse(
             f"/admin/configuracion?tab=avanzado&flash=spec_invalido: {exc}&flash_type=danger", status_code=303
@@ -2705,8 +2717,10 @@ async def settings_page(request: Request):
         escalation=dict(app_settings.escalation_config or {}),
         escalation_ranges_text=_format_business_ranges(app_settings.escalation_config or {}),
         payments_enabled="pack_payments" in enabled,
-        # Cerebro / memoria / habilidades (ADR-0050): lo versionable del spec.
+        # Habilidades (ADR-0050): lo versionable del spec. Persona, cerebro y memoria son los valores por
+        # defecto de los agentes del negocio (`agent_defaults`, ADR-0206 §6).
         spec=spec.model_dump(mode="json"),
+        defaults=defaults_negocio.a_guardar(defaults_negocio.desde_dict(app_settings.agent_defaults)),
         versions=await _spec_versions(),
         guardrails_text=_format_custom_guardrails((spec.extensions or {}).get("guardrails") or []),
         declarative_tools_json=_declarative_tools_json(spec),
@@ -2737,19 +2751,22 @@ async def settings_brain_save(
     policy_max_tool_calls: int = Form(default=10),
     policy_budget: float = Form(default=0.5),
 ):
-    """Modelo del agente (ADR-0050): primario, fallback, razonamiento y temperatura."""
+    """Modelo de los agentes (ADR-0050): primario, fallback, razonamiento y temperatura. Valor por defecto del
+    negocio en `agent_defaults` (ADR-0206 §6), sin versión del spec."""
     if await current_admin(request) is None:
         return _login_redirect()
-    current = await load_active_spec()
-    data = current.model_dump(mode="json")
-    if model_primary:
-        data["model"]["primary"] = model_primary.strip()
-    data["model"]["fallback"] = model_fallback.strip() or None
-    data["model"]["router"] = model_router.strip() or None
-    data["model"]["temperature"] = max(0.0, min(2.0, model_temperature))
-    data["policies"]["maxToolCallsPerTurn"] = max(1, min(50, policy_max_tool_calls))
-    data["policies"]["budgetUsdPerConversation"] = max(0.0, policy_budget)
-    return await _save_spec_from_form(request, data, "cerebro")
+    model: dict[str, Any] = {
+        "fallback": model_fallback.strip() or None,
+        "router": model_router.strip() or None,
+        "temperature": max(0.0, min(2.0, model_temperature)),
+    }
+    if model_primary.strip():
+        model["primary"] = model_primary.strip()
+    policies = {
+        "maxToolCallsPerTurn": max(1, min(50, policy_max_tool_calls)),
+        "budgetUsdPerConversation": max(0.0, policy_budget),
+    }
+    return await _save_defaults_from_form({"model": model, "policies": policies}, "cerebro")
 
 
 @router.post("/configuracion/memoria")
@@ -2759,7 +2776,7 @@ async def settings_memory_save(
     rag_top_k: int = Form(default=0),
     rag_min_score: float = Form(default=0.6),
 ):
-    """Memoria del agente (ADR-0050): turnos de contexto y recall RAG."""
+    """Memoria de los agentes (ADR-0050): turnos de contexto y recall RAG, en `agent_defaults` (ADR-0206 §6)."""
     if await current_admin(request) is None:
         return _login_redirect()
     await save_memory(
@@ -2942,11 +2959,6 @@ async def _save_spec_from_form(request: Request, data: dict, tab: str) -> Redire
     )
 
 
-async def _save_spec_if_changed(current: AgentSpec, data: dict) -> str | None:
-    """Delegación a `core.agents.spec.save_spec_if_changed` (fuente única)."""
-    return await save_spec_if_changed(current, data)
-
-
 @router.post("/configuracion/asistente")
 async def settings_save(
     request: Request,
@@ -2978,7 +2990,6 @@ async def settings_save(
     # con el tiempo (hallazgo de `auditor-multitenant`). No es un riesgo de
     # seguridad (el filtro solo puede restringir, nunca ampliar acceso),
     # pero evita basura persistida.
-    spec = await load_active_spec()
     from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
 
     enabled = await packs_del_negocio()
@@ -3026,19 +3037,27 @@ async def settings_save(
             "out_of_hours_message": out_of_hours_message.strip(),
             "auto_escalate_after_turns": rango("auto_escalate_after_turns").recortar(auto_escalate_after_turns),
         }
-    # Personalidad del AgentSpec (ADR-0050): se persiste como versión nueva del
-    # spec (versionable), no en AppSettings.
-    persona_data = spec.model_dump(mode="json")
-    persona_data["persona"].update(
-        {
-            "tone": persona_tone or persona_data["persona"]["tone"],
+        # Personalidad (ADR-0050): valor por defecto de los agentes del negocio en `agent_defaults`
+        # (ADR-0206 §6), en la misma transacción y sin versión del spec. Tono y emojis vacíos no cambian.
+        persona: dict[str, Any] = {
             "warmth": rango("persona_warmth").recortar(persona_warmth),
-            "emojis": persona_emojis or persona_data["persona"]["emojis"],
             "maxLength": max(0, persona_max_length),
             "forbiddenPhrases": [p.strip() for p in persona_forbidden.split(",") if p.strip()],
         }
-    )
-    await _save_spec_if_changed(spec, persona_data)
+        if persona_tone:
+            persona["tone"] = persona_tone
+        if persona_emojis:
+            persona["emojis"] = persona_emojis
+        try:
+            defaults_negocio.escribir(app_settings, {"persona": persona})
+        except ValueError as exc:
+            invalido = _campos_invalidos(exc)
+        else:
+            invalido = ""
+    if invalido:
+        return RedirectResponse(
+            f"/admin/configuracion?flash=personalidad inválida: {invalido}&flash_type=danger", status_code=303
+        )
     return RedirectResponse("/admin/configuracion?flash=Configuración guardada", status_code=303)
 
 

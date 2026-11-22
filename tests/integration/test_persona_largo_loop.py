@@ -62,6 +62,12 @@ async def _ajustar_spec(tid: uuid.UUID, *, persona: dict[str, Any] | None = None
             spec.setdefault("persona", {}).update({"maxLength": TOPE, **(persona or {})})
             spec.setdefault("policies", {}).update({"maxToolCallsPerTurn": 10, **policies})
             row.spec = spec
+        # ADR-0206 §6: el agente del turno se siembra desde `agent_defaults`, no desde el spec.
+        from core.agents import defaults_negocio
+
+        await defaults_negocio.guardar(
+            tid, {"persona": {"maxLength": TOPE, **(persona or {})}, "policies": {"maxToolCallsPerTurn": 10, **policies}}
+        )
 
 
 async def _negocio_con_tope(*, persona: dict[str, Any] | None = None, policies: dict[str, Any] | None = None, **behavior: Any):

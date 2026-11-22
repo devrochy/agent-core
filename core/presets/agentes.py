@@ -712,6 +712,7 @@ async def _aplicar(
     modules: Iterable[Any] | None,
     aplicar: bool,
 ) -> ReportePresetV2:
+    from core.agents import defaults_negocio
     from core.agents.base import contenido_base
     from core.agents.claves import KEY_COORDINADOR
     from core.agents.instalaciones_agente import packs_del_negocio
@@ -725,9 +726,9 @@ async def _aplicar(
         reporte.omitido = "sin_spec"
         return reporte
     habilitados = await packs_del_negocio(tenant_id, con_core=False)
-    # Sin General (ADR-0192 §4): la base de cada especialista sale de la configuración del negocio.
-    base_del_negocio = contenido_base(leido[1], playbooks_de_packs=_playbooks_de_packs())
     del leido  # el v2 puede llevar literales de las declarativas
+    # Sin General (ADR-0192 §4): la base de cada especialista sale de los valores por defecto del negocio (ADR-0206 §6).
+    base_del_negocio = contenido_base(await defaults_negocio.leer(tenant_id), playbooks_de_packs=_playbooks_de_packs())
     async with get_session() as session:
         base = await agentes_base(session, tenant_id)
     coordinador_id = base.get(KEY_COORDINADOR)
