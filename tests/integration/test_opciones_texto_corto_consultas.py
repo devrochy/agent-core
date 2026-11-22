@@ -66,9 +66,15 @@ async def _por_el_gate(tid: uuid.UUID, cliente: str, contenido: str) -> None:
 
 @contextmanager
 def _sentencias() -> Iterator[list[str]]:
-    """Todas las sentencias SQL que ejecuta el proceso (el engine compartido), hasta salir."""
-    from core.db.session import get_engine
+    """Todas las sentencias SQL que ejecuta el proceso (el engine compartido), hasta salir.
 
+    Cada medición arranca con la caché del interruptor global vacía (`kill_switch`, 5 s por
+    proceso): si no, en un runner lento la caché vence entre una medición y otra y una de las dos
+    lee `platform_kill_switch` y la otra no (flaky visto en agent-core#880, 2026-11-22)."""
+    from core.db.session import get_engine
+    from core.shared import kill_switch
+
+    kill_switch.invalidar()
     vistas: list[str] = []
 
     def _anota(_conn: Any, _cursor: Any, statement: str, *_a: Any) -> None:
