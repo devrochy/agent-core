@@ -9,7 +9,7 @@
   - `AgentSummary` y `AgentDetail` traen `nivel_ia` (por defecto `estandar`).
 - **El gestor no ve el modelo** (§5). Para quien no es master:
   - `GET /admin/agent-models` devuelve `items` vacío, `provider` y `business_model` en `""` y `byok_model`, `effective_model` y `effective_source` en `null`. `min_phrases` y el consumo no cambian.
-  - `GET /admin/settings` devuelve `brain.model_primary`, `model_fallback` y `model_router` en `null`. `model_primary` pasa a ser `str | null` en el esquema.
+  - `GET /admin/settings` devuelve `brain.model_primary` vacío (`""`) y `model_fallback` y `model_router` en `null`. `model_primary` sigue siendo texto obligatorio, así que el contrato no se rompe para la APK instalada.
   - `PUT /admin/settings/brain` ignora los modelos que mande el gestor y guarda el resto.
   - El catálogo de opciones marca `model_primary`, `model_router` y `model_fallback` como del master.
   - La nota y el aviso de publicar ya no nombran el modelo.

@@ -218,8 +218,9 @@ class BotPausedState(BaseModel):
 
 
 class BrainSettings(BaseModel):
-    # Los modelos solo los ve y los cambia el master (ADR-0210 §5): para el gestor vienen en null.
-    model_primary: str | None = None
+    # Los modelos solo los ve y los cambia el master (ADR-0210 §5): para el gestor `model_primary` viene vacío
+    # (sigue siendo texto obligatorio: la APK instalada lo lee así) y `fallback`/`router` en null.
+    model_primary: str
     model_fallback: str | None = None
     model_router: str | None = None
     model_temperature: float = 0.3
@@ -416,7 +417,7 @@ def _brain_out(defaults: DefaultsDelNegocio, *, master: bool) -> BrainSettings:
     """`master=False` (gestor): sin los modelos, el negocio elige el nivel de IA del agente (ADR-0210 §5)."""
     model, policies = defaults.model, defaults.policies
     return BrainSettings(
-        model_primary=model.primary if master else None,
+        model_primary=model.primary if master else "",
         model_fallback=model.fallback if master else None,
         model_router=model.router if master else None,
         model_temperature=float(model.temperature),

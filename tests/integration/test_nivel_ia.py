@@ -385,7 +385,7 @@ async def test_el_gestor_no_ve_modelos_y_el_master_si(negocios, app_client) -> N
     r = await app_client.get("/api/v1/admin/settings", headers=gestor)
     assert r.status_code == 200, r.text
     cerebro = r.json()["brain"]
-    assert (cerebro["model_primary"], cerebro["model_fallback"], cerebro["model_router"]) == (None, None, None)
+    assert (cerebro["model_primary"], cerebro["model_fallback"], cerebro["model_router"]) == ("", None, None)
     assert (await app_client.get("/api/v1/admin/settings", headers=master)).json()["brain"]["model_primary"]
 
     # El gestor no cambia los modelos por defecto: se ignoran, el resto se guarda.
@@ -395,7 +395,7 @@ async def test_el_gestor_no_ve_modelos_y_el_master_si(negocios, app_client) -> N
         json={"model_primary": "deepseek-v4-pro", "model_router": "deepseek-v4-pro", "model_temperature": 0.4},
     )
     assert r.status_code == 200, r.text
-    assert r.json()["model_primary"] is None and r.json()["model_temperature"] == pytest.approx(0.4)
+    assert r.json()["model_primary"] == "" and r.json()["model_temperature"] == pytest.approx(0.4)
     despues = (await app_client.get("/api/v1/admin/settings", headers=master)).json()["brain"]
     assert (despues["model_primary"], despues["model_router"]) == (antes["model_primary"], antes["model_router"])
 
