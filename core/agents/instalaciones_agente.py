@@ -292,6 +292,22 @@ async def _usa_conocimiento(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
     return fila is not None
 
 
+async def _packs_del_spec_v2(tenant_id: uuid.UUID) -> set[str]:
+    """Los `packs` del AgentSpec v2 activo, leídos con SQL de `agent_specs` (sin el modelo, que ya no existe): solo
+    para el precheck y el backfill, que se van con la tabla en la parte E de HU-AOS-91."""
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT spec -> 'packs' FROM agent_specs WHERE tenant_id = :t AND is_active AND deleted_at IS NULL "
+                    "LIMIT 1"
+                ),
+                {"t": tenant_id},
+            )
+        ).scalar_one_or_none()
+    return {str(p) for p in fila if isinstance(p, str)} - {CORE_PACK_ID} if isinstance(fila, list) else set()
+
+
 async def backfill_habilidades_por_agente(
     tenant_ids: list[uuid.UUID] | None = None, *, aplicar: bool = False
 ) -> list[dict[str, object]]:
@@ -299,7 +315,6 @@ async def backfill_habilidades_por_agente(
     habilidades de su plantilla (por `key` o `source_template`) y las opcionales que el negocio ya tiene, SIN borrar
     nada. Idempotente: lo que ya está instalado no se toca. Pagos nace `pending_config` (falta elegir la cuenta).
     Dry-run por defecto. Devuelve una fila por agente con lo que instaló (o instalaría)."""
-    from core.agents.spec import enabled_packs, leer_spec_activo
     from core.presets import PresetError, load_plantilla
     from core.shared.tenant import tenant_scope
 
@@ -316,8 +331,7 @@ async def backfill_habilidades_por_agente(
     filas: list[dict[str, object]] = []
     for tid, slug in negocios:
         async with tenant_scope(tid):
-            activo = await leer_spec_activo(tid)
-            del_negocio = set(enabled_packs(activo[1])) if activo else set()
+            del_negocio = await _packs_del_spec_v2(tid) | {CORE_PACK_ID}
             async with get_session() as session:
                 agentes = (
                     await session.execute(
@@ -369,7 +383,6 @@ async def precheck_packs_del_negocio(
       `quitar_sobrantes` se desinstalan (borrado lógico) de esos agentes.
 
     Dry-run por defecto. Idempotente. Se despliega HU-AOS-91 parte B con cero diferencias o con cada una resuelta."""
-    from core.agents.spec import enabled_business_packs, leer_spec_activo
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
@@ -386,8 +399,7 @@ async def precheck_packs_del_negocio(
     filas: list[dict[str, object]] = []
     for tid, slug in negocios:
         async with tenant_scope(tid):
-            activo = await leer_spec_activo(tid)
-            del_spec = set(enabled_business_packs(activo[1])) if activo else set()
+            del_spec = await _packs_del_spec_v2(tid)
             instaladas = await packs_instalados(tid, con_core=False)
             faltan, sobran = sorted(del_spec - instaladas), sorted(instaladas - del_spec)
             if not faltan and not sobran:

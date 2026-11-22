@@ -721,15 +721,9 @@ async def _aplicar(
     from core.agents.claves import KEY_COORDINADOR
     from core.agents.instalaciones_agente import packs_del_negocio
     from core.agents.instancias import agentes_base
-    from core.agents.spec import leer_spec_activo
     from core.kernel.procedures import catalogo_de_acciones
     from core.plugin_manager import plugin_manager
 
-    leido = await leer_spec_activo(tenant_id)
-    if leido is None:
-        reporte.omitido = "sin_spec"
-        return reporte
-    del leido  # el v2 puede llevar literales de las declarativas
     modulos = list(modules) if modules is not None else plugin_manager.list_modules()
     # Una habilidad es del negocio si algún agente activo la tiene instalada (ADR-0206, HU-AOS-91): las del preset
     # todavía no lo están (las instala `_instalar_plantilla` en el agente que crea), así que cuentan las que el
