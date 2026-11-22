@@ -41,6 +41,7 @@ from typing import Any, Literal
 
 from sqlalchemy import text
 
+from core.billing.tarifario import creditos_congelados
 from core.db.session import get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id
@@ -238,6 +239,8 @@ class Gasto:
     output_tokens: int = 0
     cost_usd: Decimal = Decimal(0)
     latency_ms: int | None = None
+    # Llave con la que se gastó (ADR-0144): `byok` solo paga el fee del tarifario. Default seguro.
+    key_mode: str = "platform"
 
     @property
     def tokens(self) -> int:
@@ -581,15 +584,24 @@ async def liquidar(
             {"t": estado.tenant_id, "a": estado.a2a_conversation_id, "usd": usd, "tok": tokens},
         )
         if gasto is not None and gasto.tokens > 0:
+            # Créditos congelados al escribir, igual que `turn` (ADR-0208 §11): las cuatro columnas juntas.
+            # Si el cálculo falla, la fila va con las cuatro en NULL (como un turno): no se pierde el costo.
+            try:
+                creditos = creditos_congelados(usd, "agent_run", gasto.key_mode)  # type: ignore[arg-type]
+            except Exception:
+                log.warning("a2a_ledger_credits_failed")
+                creditos = dict.fromkeys(("credits", "key_mode", "tarifario_version", "trm_cop"))
             await session.execute(
                 text(
                     "INSERT INTO usage_ledger (id, tenant_id, conversation_id, model, input_tokens, output_tokens, "
                     "latency_ms, cost_usd, turn_id, connection_id, agent_instance_id, release_id, kind, a2a_call_id, "
-                    "cache_write_tokens) "
+                    "cache_write_tokens, credits, key_mode, tarifario_version, trm_cop) "
                     # `cache_write_tokens = 0`: significado de la 0114 (HU-AOS-35), sin caché en el gasto A2A.
-                    "VALUES (:id, :t, :conv, :m, :tin, :tout, :ms, :usd, :turn, :c, :inst, :rel, 'agent_run', :call, 0)"
+                    "VALUES (:id, :t, :conv, :m, :tin, :tout, :ms, :usd, :turn, :c, :inst, :rel, 'agent_run', :call, 0, "
+                    ":credits, :key_mode, :tarifario_version, :trm_cop)"
                 ),
                 {
+                    **creditos,
                     "id": uuid.uuid4(),
                     "t": estado.tenant_id,
                     "conv": estado.conversation_id,

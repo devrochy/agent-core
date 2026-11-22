@@ -13,9 +13,10 @@ aparte, la memoria. Un pack no puede importar de otro, así que vive acá.
   - `grabado` (solo evals y fuera de producción, `grabacion(ruta, modo)`): los vectores de `text-embedding-3-small`
     guardados en un archivo; en replay un texto sin grabar falla y nunca sale a la red.
 - **Ledger:** cada lote de **ingesta** escribe una fila `usage_ledger` con `kind='embedding'`,
-  el tenant del `tenant_scope` vigente (nunca de un argumento), `cost_usd` real y `credits = 0`
-  (el dueño decidió absorber los embeddings, ADR-0145 §3). Las consultas no escriben fila: su
-  costo se redondea a 0 y los tokens van en la auditoría del turno.
+  el tenant del `tenant_scope` vigente (nunca de un argumento), `cost_usd` real y sus créditos
+  congelados por el tarifario (ADR-0208 §11, que enmienda la absorción de ADR-0145 §3). Antes de
+  gastar, la subida verifica el saldo (`creditos_de_ingesta`, 409 `plan_limit_creditos`, §16). Las
+  consultas no escriben fila: su costo se redondea a 0 y los tokens van en la auditoría del turno.
 - Nunca se registra el texto embebido (logs ni ledger): solo modelo, conteos e ids.
 """
 
@@ -253,6 +254,16 @@ def costo_usd(modelo: str, tokens: int) -> float:
     return round(PRECIOS_EMBEDDINGS.get(modelo, 0.0) * tokens / 1_000_000, 6)
 
 
+def creditos_de_ingesta(caracteres: int) -> Decimal:
+    """Créditos que costaría embeber `caracteres` de texto con el modelo de producción (~4
+    caracteres por token), para verificar el saldo antes de gastar (ADR-0208 §16). Es una cota:
+    el costo real lo fija la fila del ledger de cada lote."""
+    from core.billing.tarifario import creditos_por_evento, trm_vigente
+
+    tokens = max(0, caracteres) // 4 + 1
+    return creditos_por_evento(costo_usd(MODELO_OPENAI, tokens), "embedding", "platform", trm_vigente())
+
+
 async def embeber_conocimiento(
     textos: Sequence[str],
     *,
@@ -286,7 +297,7 @@ async def embeber_conocimiento(
 
 
 async def _registrar_ingesta(tenant_id: uuid.UUID, embebidos: Embebidos, document_id: uuid.UUID | None) -> None:
-    from core.billing.tarifario import TARIFARIO_VIGENTE, trm_vigente
+    from core.billing.tarifario import creditos_congelados
     from core.db.models import UsageLedger
     from core.db.session import get_session
 
@@ -306,12 +317,8 @@ async def _registrar_ingesta(tenant_id: uuid.UUID, embebidos: Embebidos, documen
                         "proposito": "ingesta",
                         **({"document_id": str(document_id)} if document_id is not None else {}),
                     },
-                    # Absorbidos por la plataforma (decisión del dueño, ADR-0145 §3). Tarifario y
-                    # TRM van igual: `ck_usage_credits_completos` (ADR-0144) los exige con `credits`.
-                    credits=Decimal("0.0"),
-                    key_mode="platform",
-                    tarifario_version=TARIFARIO_VIGENTE.version,
-                    trm_cop=trm_vigente(),
+                    # Costo real por tarifario (ADR-0208 §11). Siempre con la llave de la plataforma.
+                    **creditos_congelados(embebidos.cost_usd, "embedding", "platform"),
                 )
             )
     except Exception as exc:
@@ -327,6 +334,7 @@ __all__ = [
     "Embebidos",
     "EmbeddingsError",
     "costo_usd",
+    "creditos_de_ingesta",
     "embeber_conocimiento",
     "grabacion",
     "vector_hash",

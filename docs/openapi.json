@@ -42159,7 +42159,7 @@
             }
           },
           "409": {
-            "description": "Tope del plan: `error.code = plan_limit_documentos`, `error.details = {metric, used, limit}`; no se escribió nada."
+            "description": "Tope del plan: `error.code = plan_limit_documentos | plan_limit_conocimiento_mb | plan_limit_creditos`, `error.details = {metric, used, limit}`; no se escribió nada."
           },
           "413": {
             "description": "El archivo supera 20 MB (`error.code = muy_grande`)."
@@ -42319,6 +42319,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_creditos`, `error.details = {metric, used, limit}`; no se escribió nada."
           },
           "422": {
             "description": "Validation Error",
@@ -57671,6 +57674,16 @@
             "type": "boolean",
             "title": "By Agent Truncated",
             "default": false
+          },
+          "playground": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlaygroundCredit"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -85335,6 +85348,35 @@
           "lock_version"
         ],
         "title": "AgentScheduleOut"
+      },
+      "PlaygroundCredit": {
+        "properties": {
+          "used": {
+            "type": "number",
+            "title": "Used"
+          },
+          "free_limit": {
+            "type": "number",
+            "title": "Free Limit"
+          },
+          "free_remaining": {
+            "type": "number",
+            "title": "Free Remaining"
+          },
+          "charged": {
+            "type": "number",
+            "title": "Charged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "used",
+          "free_limit",
+          "free_remaining",
+          "charged"
+        ],
+        "title": "PlaygroundCredit",
+        "description": "Consumo del playground del panel en el mes del ciclo (D-79, ADR-0208 §15). Es gratis hasta\n`free_limit` créditos; lo que pasa (`charged`) ya está sumado en `used` del crédito y en\n`by_concept.playground`. El playground lo lee para avisar antes de empezar a descontar."
       }
     }
   }
