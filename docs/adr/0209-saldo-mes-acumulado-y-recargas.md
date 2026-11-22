@@ -26,7 +26,7 @@ D-79 pide tres cosas:
    |---|---|---|
    | `id` | uuid | PK |
    | `tenant_id` | uuid not null | Índice `(tenant_id, ciclo)` |
-   | `ciclo` | text not null | `AAAAMM` del ciclo en el que cuenta el abono (el de `ventana_mensual`) |
+   | `ciclo` | timestamptz not null | `inicio` exacto de la ventana del ciclo en que cuenta el abono (`ventana_mensual`, `core/billing/periodos.py:100`). No es el mes: un período reiniciado puede empezar dos ventanas en el mismo mes |
    | `tipo` | text | `acumulado` \| `recarga` (CHECK) |
    | `creditos` | numeric(12,1) | CHECK `> 0` |
    | `vence_en` | timestamptz null | Solo `acumulado`: fin del último ciclo en que puede contar |
@@ -45,10 +45,11 @@ D-79 pide tres cosas:
 
 3. **Cierre del ciclo: arrastre y acumulación.** Al cerrar un ciclo, una tarea de `core/tasks/billing_lifecycle.py` reparte lo consumido según el orden del punto 2 y calcula lo que queda de cada fuente. Después inserta para el ciclo siguiente:
    - **Recargas:** lo que queda de cada recarga, con su mismo `origen`. No vencen.
-   - **Acumulado que no vence:** lo que queda de cada abono `acumulado` cuyo `vence_en` sea posterior al ciclo siguiente.
-   - **Sobrante del mes:** como `acumulado` nuevo, con `origen = <AAAAMM del ciclo>` y `vence_en = fin del ciclo + features.acumulable_meses`. Con `acumulable_meses` en 0 o ausente (Free y Basic), el sobrante del mes se pierde.
+   - **Acumulado que sigue vigente:** lo que queda de cada abono `acumulado` con `vence_en >= fin del ciclo siguiente`.
+   - **Sobrante del mes:** como `acumulado` nuevo, con `origen = <inicio del ciclo que cierra>` y `vence_en` = fin del ciclo que cierra avanzado `features.acumulable_meses` períodos con `sumar_periodo` y el `dia_ancla` (no con un intervalo fijo de meses). Así Empresarial (2) conserva el sobrante de N en N+1 y N+2. Con `acumulable_meses` en 0 o ausente (Free y Basic), el sobrante del mes se pierde.
    - **Colchón:** lo consumido por encima del saldo (ADR-0208) no se arrastra como deuda: el ciclo siguiente empieza sin restar nada. La plataforma absorbe solo lo que quede descubierto al cierre. Si el negocio compra una recarga dentro del mismo ciclo, esa recarga cubre primero lo consumido en el colchón, porque el saldo del ciclo la incluye.
    - **Negocios vencidos o cancelados:** el cierre corre igual para todo negocio con grants, aunque `tenant_operativo` (`core/billing/enforcement.py:76`) lo tenga sin operar. Así las recargas no se pierden y vuelven a contar al reactivar. Lo acumulado sigue venciendo por su fecha.
+   - **Período reiniciado:** cuando `aplicar_pago_de_periodo` reinicia `period_start` (`core/billing/service.py:284-288`, al volver tras cancelar o tras más de un período vencido), en la misma transacción se cierra la ventana que se abandona con este mismo arrastre, y los abonos pasan a la ventana nueva.
    - **Reintentos:** la tarea es idempotente por la unicidad del punto 1.
 
 4. **Recargas: un pago más de la plataforma** (ADR-0123).

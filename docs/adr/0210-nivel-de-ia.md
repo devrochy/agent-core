@@ -33,7 +33,8 @@ D-79 pide tres cosas:
    - **Sumar un proveedor** (ya existe `core/llm/anthropic_provider.py`) es cambiar el mapa y publicar versiones nuevas, sin que el negocio vea nada.
 3. **Cuándo se traduce.**
    - **Dentro de `publicar`:** el nivel se resuelve en `publicar` (`core/agents/versiones.py:501`, donde hoy se aplica `modelo`, línea 531), leyendo `agents.nivel_ia`. Así sirve para los siete llamadores (`core/agents/editor.py:819`, `core/agents/base.py:163` y `:228`, `core/presets/agentes.py:467` y `:606`, `referencias_retiradas.py:510` y `:519`). Si se resolviera en cada llamador, un preset o una republicación automática devolvería un agente Avanzado a flash sin avisar.
-   - **Prioridad:** el nivel manda sobre el `modelo` de reemplazo que pasa el editor cuando el modelo fue retirado.
+   - **Prioridad:** con la llave de la plataforma, el nivel manda sobre el `modelo` de reemplazo que pasa el editor cuando el modelo fue retirado.
+   - **Con llave propia (BYOK, `_usa_llave_propia`):** `publicar` no aplica el nivel y conserva el modelo del negocio (`modelo_del_negocio`, `core/agents/editor.py:511-517` y `:780-782`), igual que el turno en el punto 7. Si no, un negocio con proveedor propio publicaría `deepseek-flash` y su llamada fallaría siempre.
    - **Versión congelada:** una versión publicada guarda su modelo. El hash de la versión incluye `model.primary` (`versiones.py:535`), así que cambiar de nivel da una versión nueva, y volver al nivel anterior reusa la que ya existía (ADR-0117). Cambiar el mapa no toca las versiones vivas: se aplica en la próxima publicación.
 4. **Gate de plan.**
    - **Quién puede elegir Avanzado:** solo los planes con `features.nivel_ia = "avanzado"`, que hoy son Premium y Empresarial. Desde otro plan responde 409 `plan_nivel_ia_not_included`.
