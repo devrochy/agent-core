@@ -18,8 +18,8 @@ TRUNCATE, y `app_runtime` solo con SELECT e INSERT (patrón de 0069). Sin `delet
 borra; la única excepción es `purge_tenant` (0072), que descubre las tablas por la columna `tenant_id`
 y apaga los triggers con `session_replication_role`.
 
-Aditiva: tabla nueva y vacía, sin locks sobre tablas existentes. El downgrade la borra (pierde los
-abonos: solo para revertir un despliegue recién hecho).
+Aditiva: tabla nueva y vacía, sin locks sobre tablas existentes. El downgrade la borra solo si está
+vacía: con abonos aborta, porque perdería créditos pagados.
 
 **Numeración:** 0154 con `down_revision = "0152"`; la 0153 la usan otras ramas en curso (HU-BILL-21,
 `0153_usage_kind_tts`). Se renumera al integrar, para que quede después de la 0153 (ADR-0209 §6).
@@ -46,7 +46,7 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE TABLE credit_grants (
-          id uuid PRIMARY KEY,
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
           tenant_id uuid NOT NULL,
           ciclo timestamptz NOT NULL,
           tipo text NOT NULL,
@@ -55,9 +55,10 @@ def upgrade() -> None:
           origen text NOT NULL,
           created_at timestamptz NOT NULL DEFAULT now(),
           CONSTRAINT ck_credit_grants_tipo CHECK (tipo IN ('acumulado', 'recarga')),
-          CONSTRAINT ck_credit_grants_creditos CHECK (creditos > 0),
+          -- El tope rechaza también NaN (en Postgres `NaN > 0` es verdadero).
+          CONSTRAINT ck_credit_grants_creditos CHECK (creditos > 0 AND creditos < 100000000000),
           CONSTRAINT ck_credit_grants_vence_en CHECK (
-            (tipo = 'recarga' AND vence_en IS NULL) OR (tipo = 'acumulado' AND vence_en IS NOT NULL)
+            (tipo = 'recarga' AND vence_en IS NULL) OR (tipo = 'acumulado' AND vence_en > ciclo)
           ),
           CONSTRAINT ck_credit_grants_origen CHECK (length(origen) BETWEEN 1 AND 200)
         );
@@ -95,6 +96,17 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
+    # Las recargas son créditos pagados y `origen` no tiene FK: no se borran en silencio.
+    op.execute(
+        """
+        DO $do$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM credit_grants) THEN
+                RAISE EXCEPTION 'credit_grants tiene abonos: el downgrade de 0154 los perdería';
+            END IF;
+        END $do$;
+        """
+    )
     op.execute("DROP TRIGGER IF EXISTS credit_grants_sin_vaciar ON credit_grants")
     op.execute("DROP TRIGGER IF EXISTS credit_grants_inmutable ON credit_grants")
     op.execute("DROP POLICY IF EXISTS credit_grants_tenant_isolation ON credit_grants")
