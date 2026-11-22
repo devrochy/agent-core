@@ -147,6 +147,9 @@ CATALOGO: dict[str, CronMeta] = dict(
         # ---- Facturación de la plataforma
         _m("core.billing_lifecycle", "Facturación de la plataforma", "Normalización de suscripciones vencidas",
            "Pasa las suscripciones de prueba o activas vencidas a su estado real.", "0 4 * * *"),
+        _m("core.billing_cierre_ciclo", "Facturación de la plataforma", "Cierre del ciclo de créditos",
+           "Pasa al ciclo nuevo lo que queda de las recargas y lo acumulado, y acumula el sobrante del mes.",
+           "5 * * * *"),
         _m("core.billing_renovacion", "Facturación de la plataforma", "Renovación del plan",
            "Cobra el período siguiente de cada negocio y avisa por su canal preferido.", "0 13 * * *",
            sensitive=True),

@@ -54,20 +54,42 @@ async def credito_del_mes(
     """Crédito consumido en el mes del ciclo (HU-BILL-04/06, ADR-0144), o None si no se pudo
     medir (sin suscripción, schema sin migrar o fallo): el panel muestra «medición pendiente» en
     vez de una barra falsa. Ventana: `periodos.ventana_mensual` desde `period_start`."""
-    from core.billing.creditos import PLAYGROUND_GRATIS_POR_CICLO, creditos_enteros, medir_creditos
+    from core.billing.creditos import (
+        PLAYGROUND_GRATIS_POR_CICLO,
+        creditos_enteros,
+        leer_abonos,
+        medir_creditos,
+        repartir,
+    )
     from core.billing.periodos import ventana_mensual
+    from core.billing.plans import get_plan
 
     if overview is None or overview.period_start is None:
         return None
     inicio, fin = ventana_mensual(overview.period_start, overview.dia_ancla, now or datetime.now(UTC))
+    plan = get_plan(overview.plan_id or "")
     try:
         async with tenant_scope(tenant_id):
             async with get_session() as session:
                 consumo = await medir_creditos(session, tenant_id, desde=inicio, hasta=fin, por_agente=True)
+                abonos = await leer_abonos(session, tenant_id, inicio)
     except Exception as exc:
         log.warning("billing_credit_failed", tenant_id=str(tenant_id), error=type(exc).__name__)
         return None
+    # Mismo reparto que el turno (`creditos._saldo_del_mes`): mes → acumulado → recargas (ADR-0209 §2).
+    reparto = repartir(consumo.total, (plan.monthly_credits if plan else None) or 0, abonos)
     return {
+        "balance": {
+            "total": float(reparto.total),
+            "month": float(reparto.mes),
+            "accumulated": float(reparto.acumulado),
+            "accumulated_expires_at": reparto.acumulado_vence_en,
+            "top_ups": float(reparto.recargas),
+            "used_month": float(reparto.usado_mes),
+            "used_accumulated": float(reparto.usado_acumulado),
+            "used_top_ups": float(reparto.usado_recargas),
+            "over_balance": float(reparto.sobre_el_saldo),
+        },
         "used": float(consumo.total),
         "used_rounded": creditos_enteros(consumo.total),
         "period_start": inicio,

@@ -385,6 +385,18 @@ def _billing_lifecycle() -> Any:
     return normalize_expired_subscriptions()
 
 
+# Cierre del ciclo de créditos (HU-BILL-22, ADR-0209 §3): cada hora, porque el ciclo empieza a la hora
+# del `period_start` de cada negocio. Arrastra recargas y acumulado al ciclo nuevo; idempotente.
+_BILLING_CIERRE_CICLO_TASK = "core.billing_cierre_ciclo"
+
+
+@core_cron(_BILLING_CIERRE_CICLO_TASK, crontab(minute="5"))
+def _billing_cierre_ciclo() -> Any:
+    from core.tasks.billing_lifecycle import cerrar_ciclos_de_credito
+
+    return cerrar_ciclos_de_credito()
+
+
 # Renovación del plan de la plataforma (HU-SH-04, ADR-0123): el cobro del período siguiente
 # BILLING_DIAS_RENOVACION días antes, con aviso por el canal preferido. A las 13:00 UTC
 # (08:00 en Bogotá), para que el aviso llegue de mañana.

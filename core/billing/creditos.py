@@ -31,7 +31,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import ROUND_CEILING, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import Literal
 
 from sqlalchemy import and_, case, func, literal, or_, select, text
@@ -273,6 +273,11 @@ def creditos_enteros(valor: Decimal) -> int:
     return int(valor.quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
+def saldo_entero(limite: int | Decimal) -> int:
+    """Saldo para mostrar, hacia abajo: con abonos lleva décimas y nunca se muestra más de lo que hay."""
+    return int(Decimal(limite).to_integral_value(rounding=ROUND_DOWN))
+
+
 # --------------------------------------------- acciones de IA cotizadas (HU-BILL-16, ADR-0194)
 
 
@@ -297,18 +302,145 @@ def cotizar(concepto: Concepto, unidades: int, key_mode: KeyMode) -> int:
     return int((por_unidad * unidades).to_integral_value(rounding=ROUND_CEILING))
 
 
+# ----------------------------------------- saldo del ciclo: mes, acumulado y recargas (ADR-0209)
+
+TIPOS_DE_ABONO = ("acumulado", "recarga")
+_DECIMA = Decimal("0.1")
+
+
+@dataclass(frozen=True)
+class Abono:
+    """Un `credit_grant` del ciclo (ADR-0209 §1): `acumulado` con `vence_en` o `recarga` sin él."""
+
+    tipo: str
+    creditos: Decimal
+    origen: str
+    vence_en: datetime | None = None
+
+
+@dataclass(frozen=True)
+class UsoDeAbono:
+    abono: Abono
+    usado: Decimal
+
+    @property
+    def queda(self) -> Decimal:
+        return max(self.abono.creditos - self.usado, Decimal(0))
+
+
+@dataclass(frozen=True)
+class RepartoDelSaldo:
+    """Lo consumido en el ciclo repartido entre las fuentes del saldo, en el orden de gasto (ADR-0209 §2):
+    primero el mes, luego lo acumulado (el que vence antes primero) y al final las recargas. Lo que pasa
+    del saldo es el colchón (`sobre_el_saldo`, ADR-0208 §5): no se le carga a ninguna fuente."""
+
+    mes: Decimal
+    usado_mes: Decimal
+    abonos: tuple[UsoDeAbono, ...] = ()
+    sobre_el_saldo: Decimal = Decimal(0)
+
+    def _de(self, tipo: str) -> tuple[UsoDeAbono, ...]:
+        return tuple(u for u in self.abonos if u.abono.tipo == tipo)
+
+    @property
+    def queda_mes(self) -> Decimal:
+        return max(self.mes - self.usado_mes, Decimal(0))
+
+    @property
+    def acumulado(self) -> Decimal:
+        return sum((u.abono.creditos for u in self._de("acumulado")), Decimal(0))
+
+    @property
+    def usado_acumulado(self) -> Decimal:
+        return sum((u.usado for u in self._de("acumulado")), Decimal(0))
+
+    @property
+    def recargas(self) -> Decimal:
+        return sum((u.abono.creditos for u in self._de("recarga")), Decimal(0))
+
+    @property
+    def usado_recargas(self) -> Decimal:
+        return sum((u.usado for u in self._de("recarga")), Decimal(0))
+
+    @property
+    def total(self) -> Decimal:
+        return self.mes + self.acumulado + self.recargas
+
+    @property
+    def acumulado_vence_en(self) -> datetime | None:
+        """Vencimiento más próximo de lo acumulado que todavía queda (None si no queda nada)."""
+        fechas = [u.abono.vence_en for u in self._de("acumulado") if u.queda > 0 and u.abono.vence_en]
+        return min(fechas) if fechas else None
+
+
+def orden_de_gasto(abonos: list[Abono] | tuple[Abono, ...]) -> list[Abono]:
+    """Acumulado antes que recargas; entre acumulados, el que vence antes; el `origen` desempata para que
+    el reparto sea reproducible."""
+    lejano = datetime.max.replace(tzinfo=UTC)
+    return sorted(
+        abonos,
+        key=lambda a: (a.tipo != "acumulado", a.vence_en or lejano, a.origen),
+    )
+
+
+def repartir(usado: Decimal, mes: Decimal | int, abonos: list[Abono] | tuple[Abono, ...]) -> RepartoDelSaldo:
+    """Reparte `usado` entre el crédito del mes y los abonos del ciclo (ADR-0209 §2). Función pura: el saldo
+    del turno, `/admin/plan` y el cierre del ciclo usan la misma, así nunca discrepan."""
+    resto = max(Decimal(usado), Decimal(0))
+    mes = Decimal(mes)
+    usado_mes = min(resto, mes)
+    resto -= usado_mes
+    usos: list[UsoDeAbono] = []
+    for abono in orden_de_gasto(abonos):
+        tomado = min(resto, abono.creditos)
+        resto -= tomado
+        usos.append(UsoDeAbono(abono, tomado))
+    return RepartoDelSaldo(mes=mes, usado_mes=usado_mes, abonos=tuple(usos), sobre_el_saldo=resto)
+
+
+def creditos_que_quedan(valor: Decimal) -> Decimal:
+    """Lo que se arrastra al ciclo siguiente: a la décima y hacia abajo (nunca se crea crédito)."""
+    return max(valor, Decimal(0)).quantize(_DECIMA, rounding=ROUND_DOWN)
+
+
+async def leer_abonos(session, tenant_id: uuid.UUID, ciclo: datetime) -> list[Abono]:  # type: ignore[no-untyped-def]
+    """Los `credit_grants` del negocio con `ciclo` = inicio de la ventana (RLS + `tenant_id` explícito)."""
+    from core.db.models import CreditGrant
+
+    _exigir_scope(tenant_id)
+    filas = (
+        await session.execute(
+            select(CreditGrant.tipo, CreditGrant.creditos, CreditGrant.origen, CreditGrant.vence_en).where(
+                CreditGrant.tenant_id == tenant_id, CreditGrant.ciclo == ciclo
+            )
+        )
+    ).all()
+    return [Abono(tipo=t, creditos=Decimal(c), origen=o, vence_en=v) for t, c, o, v in filas]
+
+
 @dataclass(frozen=True)
 class SaldoDeCreditos:
     usado: Decimal
-    limite: int | None  # None = el plan no define crédito (o no hay suscripción): no se limita
+    # Saldo del ciclo: crédito mensual del plan + abonos del ciclo (ADR-0209 §2). None = el plan no define
+    # crédito (o no hay suscripción): no se limita. Decimal con abonos (llevan décimas).
+    limite: int | Decimal | None
     # Ventana del ciclo medida (`ventana_mensual`); None cuando no se limita. El inicio fija la clave
-    # idempotente de los avisos de consumo (HU-BILL-20).
+    # idempotente de los avisos de consumo (HU-BILL-20) y es el `ciclo` de los abonos.
     inicio: datetime | None = None
     fin: datetime | None = None
+    # Desglose por fuente (HU-BILL-22); None cuando no se limita (o en saldos armados a mano en tests).
+    desglose: RepartoDelSaldo | None = None
 
     @property
     def disponible(self) -> Decimal | None:
         return None if self.limite is None else max(Decimal(self.limite) - self.usado, Decimal(0))
+
+    @property
+    def credito_mensual(self) -> Decimal | None:
+        """El crédito del mes del plan, sin abonos: la base del colchón (ADR-0208 §5)."""
+        if self.desglose is not None:
+            return self.desglose.mes
+        return None if self.limite is None else Decimal(self.limite)
 
 
 def _exigir_scope(tenant_id: uuid.UUID) -> None:
@@ -326,7 +458,8 @@ async def alcanza(
     *,
     now: datetime | None = None,
 ) -> SaldoDeCreditos:
-    """Verifica que el crédito del mes alcance para gastar `creditos` más; si no, levanta
+    """Verifica que el saldo del ciclo (mes + acumulado + recargas, ADR-0209) alcance para gastar `creditos`
+    más; si no, levanta
     `QuotaExceeded("creditos", usado, límite)`, que `core.api.plan_limits.plan_limit_error`
     convierte en 409 `plan_limit_creditos` con `{metric, used, limit}` (ADR-0142 §6).
 
@@ -359,7 +492,7 @@ async def alcanza(
             creditos=float(creditos),
         )
         return saldo
-    raise QuotaExceeded("creditos", creditos_enteros(saldo.usado), saldo.limite)
+    raise QuotaExceeded("creditos", creditos_enteros(saldo.usado), saldo_entero(saldo.limite))
 
 
 # Colchón para las conversaciones abiertas (ADR-0208 §5, D-79 con P-06 opción A): el 5 % del crédito
@@ -394,9 +527,10 @@ class DecisionDelTurno:
         return max(Decimal(0), self.saldo.usado - Decimal(self.saldo.limite))
 
 
-def tamano_del_colchon(limite: int | None) -> Decimal:
-    """Créditos del colchón del ciclo: el 5 % del crédito mensual; 0 sin crédito mensual."""
-    return Decimal(0) if not limite else Decimal(limite) * COLCHON_FRACCION
+def tamano_del_colchon(credito_mensual: int | Decimal | None) -> Decimal:
+    """Créditos del colchón del ciclo: el 5 % del crédito MENSUAL del plan (ADR-0208 §5), sin contar lo
+    acumulado ni las recargas; 0 sin crédito mensual."""
+    return Decimal(0) if not credito_mensual else Decimal(credito_mensual) * COLCHON_FRACCION
 
 
 async def conversacion_abierta(
@@ -445,7 +579,9 @@ async def decidir_turno(
 
     _exigir_scope(tenant_id)
     saldo = await _saldo_del_mes(session, tenant_id, now=now, con_lock=False)
-    colchon = tamano_del_colchon(saldo.limite)
+    # El colchón es el 5 % del crédito del mes; lo usado del colchón se mide contra el saldo total, así una
+    # recarga del mismo ciclo cubre primero lo consumido en el colchón (ADR-0209 §3).
+    colchon = tamano_del_colchon(saldo.credito_mensual)
     if saldo.limite is None or saldo.usado < saldo.limite:
         return DecisionDelTurno("normal", saldo, colchon_limite=colchon)
     if not get_settings().billing_bloquear_por_creditos:
@@ -470,12 +606,14 @@ async def _saldo_del_mes(
     now: datetime | None,
     con_lock: bool,
 ) -> SaldoDeCreditos:
-    """Consumido y límite del mes del ciclo, el cálculo común de `alcanza` y `decidir_turno`. Es el único
-    lugar del saldo: las recargas y lo acumulado (ADR-0209, HU-BILL-22) se suman aquí.
+    """Consumido y saldo del ciclo, el cálculo común de `alcanza` y `decidir_turno`. Es el único lugar del
+    saldo (ADR-0209 §2, HU-BILL-22).
 
-    La ventana es la de `ventana_mensual` desde el ciclo de la suscripción y el límite es
-    `Plan.monthly_credits`, igual que `/admin/plan` (`plan_view.credito_del_mes`). Sin suscripción,
-    sin `period_start` o sin crédito en el plan, `limite=None` (no se limita). Con `con_lock`, toma
+    La ventana es la de `ventana_mensual` desde el ciclo de la suscripción. El límite es
+    `Plan.monthly_credits` + Σ `credit_grants` con `ciclo` = inicio de esa ventana (lo acumulado y las
+    recargas), igual que `/admin/plan` (`plan_view.credito_del_mes`). Sin contador ni columna de saldo
+    (ADR-0045): lo consumido sale del ledger y se reparte con `repartir`. Sin suscripción, sin
+    `period_start` o sin crédito en el plan, `limite=None` (no se limita). Con `con_lock`, toma
     `pg_advisory_xact_lock('billing:creditos:<tenant>')` antes de medir (ver `alcanza`)."""
     from core.billing.enforcement import subscription_overview
     from core.billing.periodos import ventana_mensual
@@ -491,7 +629,9 @@ async def _saldo_del_mes(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": f"billing:creditos:{tenant_id}"}
         )
     usado = (await medir_creditos(session, tenant_id, desde=inicio, hasta=fin)).total
-    return SaldoDeCreditos(usado=usado, limite=plan.monthly_credits, inicio=inicio, fin=fin)
+    desglose = repartir(usado, plan.monthly_credits, await leer_abonos(session, tenant_id, inicio))
+    limite = plan.monthly_credits + desglose.acumulado + desglose.recargas
+    return SaldoDeCreditos(usado=usado, limite=limite, inicio=inicio, fin=fin, desglose=desglose)
 
 
 async def imagen_ya_cobrada(session, tenant_id: uuid.UUID, image_key: str) -> bool:  # type: ignore[no-untyped-def]
@@ -517,15 +657,24 @@ async def imagen_ya_cobrada(session, tenant_id: uuid.UUID, image_key: str) -> bo
 __all__ = [
     "COLCHON_FRACCION",
     "ESTADOS_PLANTILLA_ENVIADA",
+    "TIPOS_DE_ABONO",
+    "Abono",
     "ConsumoDeCreditos",
     "CreditoPorAgente",
     "DecisionDelTurno",
+    "RepartoDelSaldo",
     "SaldoDeCreditos",
+    "UsoDeAbono",
     "alcanza",
     "conversacion_abierta",
     "cotizar",
     "creditos_enteros",
+    "creditos_que_quedan",
     "decidir_turno",
     "imagen_ya_cobrada",
+    "leer_abonos",
     "medir_creditos",
+    "orden_de_gasto",
+    "repartir",
+    "saldo_entero",
 ]
