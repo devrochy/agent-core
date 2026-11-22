@@ -27,7 +27,13 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
-from core.admin.collaborators_service import apply_pack_roles, ensure_tenant_link, scope_del_negocio
+from core.admin.collaborators_service import (
+    apply_pack_roles,
+    ensure_tenant_link,
+    pack_collaborator_roles,
+    scope_del_negocio,
+    validar_pack_roles,
+)
 from core.admin.roles import actua_como_master
 from core.db.models import Admin, AdminPermission, Tenant, TenantInvitation, TenantUser
 from core.db.session import get_session
@@ -100,6 +106,10 @@ async def crear_invitacion(
     error = await _invitado_valido(admin_id)
     if error is not None:
         return error
+    # Solo roles de los packs activos en el negocio (#870).
+    error = await validar_pack_roles(pack_roles or [], tenant_id)
+    if error is not None:
+        return error
 
     async with scope_del_negocio(tenant_id), get_session() as session:
         link = (
@@ -144,6 +154,18 @@ async def crear_invitacion(
         )
     log.info("tenant_invitation_created", tenant_id=str(tenant_id), admin_id=str(admin_id), role=role)
     return None
+
+
+async def _roles_aun_activos(pack_roles: list[str], tenant_id: uuid.UUID) -> list[str]:
+    """Al aceptar, solo los roles de pack que el negocio sigue ofreciendo (#870): el pack pudo quedar
+    inactivo entre la invitación y la respuesta. Los demás se descartan con un aviso."""
+    if not pack_roles:
+        return []
+    validos = {r["value"] for r in await pack_collaborator_roles(tenant_id)}
+    descartados = [v for v in pack_roles if v not in validos]
+    if descartados:
+        log.warning("invitacion_roles_de_pack_inactivos", tenant_id=str(tenant_id), roles=descartados)
+    return [v for v in pack_roles if v in validos]
 
 
 def _vigente():  # type: ignore[no-untyped-def]
@@ -276,7 +298,7 @@ async def aceptar_invitacion(*, invitation_id: uuid.UUID, admin_id: uuid.UUID) -
         role = invitacion.role
         pack_roles = list(invitacion.pack_roles or [])
     await ensure_tenant_link(admin_id, tenant_id, role)
-    await apply_pack_roles(pack_roles, tenant_id, admin_id)
+    await apply_pack_roles(await _roles_aun_activos(pack_roles, tenant_id), tenant_id, admin_id)
     log.info("tenant_invitation_accepted", tenant_id=str(tenant_id), admin_id=str(admin_id))
     return None
 
@@ -544,7 +566,7 @@ async def canjear_invitacion(token: str, new_password: str) -> tuple[str | None,
         email = admin.email
         session.add(TenantUser(tenant_id=tenant_id, admin_id=admin_id, role=role))
         token_de_sesion = nueva_sesion(session, admin_id)
-    await apply_pack_roles(pack_roles, tenant_id, admin_id)
+    await apply_pack_roles(await _roles_aun_activos(pack_roles, tenant_id), tenant_id, admin_id)
 
     from core.shared.audit import record_audit
     from core.shared.tenant import tenant_scope

@@ -226,6 +226,11 @@ async def create_collaborator(
             return "no hay tenant activo"
         tenant_role = "owner" if role == "owner" else "colaborador"
 
+    # Solo roles de los packs activos en el negocio (#870), antes de escribir nada.
+    error = await validar_pack_roles(pack_roles or [], tenant_id)
+    if error is not None:
+        return error
+
     async with get_session() as session:
         existing = (
             await session.execute(select(Admin).where(Admin.email == email))
@@ -1005,20 +1010,118 @@ def audit(action: str, actor: str, target: str, **detail: Any) -> None:
     log.info("admin_rbac_change", action=action, actor=actor, target=target, **detail)
 
 
-async def pack_collaborator_roles() -> list[dict[str, str]]:
-    """Roles de colaborador que aportan los packs ACTIVOS del tenant (ADR-0066)."""
+def _roles_declarados(module: Any) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for role in getattr(module, "collaborator_roles", []) or []:
+        role_id = str(role.get("id") or "").strip()
+        if role_id:
+            out.append({"value": f"{module.id}:{role_id}", "label": str(role.get("label") or role_id)})
+    return out
+
+
+async def modulos_habilitados_del_negocio(tenant_id: uuid.UUID) -> set[str]:
+    """Packs de negocio ACTIVOS en el negocio (#870): en su AgentSpec, no apagados por error
+    (`disabled_plugins_for_tenant`) y con un especialista publicado que los cubre. Es la misma regla
+    con la que el panel habilita cada módulo (`packs_con_especialista`): un pack que solo está en el
+    spec, sin agente, se ve con candado y no aporta roles de colaborador.
+
+    No confundir con `packs_activos_del_negocio` de ADR-0206 (HU-AOS-90, sobre `pack_installations`):
+    cuando llegue, reemplaza aquí a `enabled_packs(load_active_spec())`; la condición del especialista sigue."""
+    from core.agents.instancias import packs_con_especialista
     from core.agents.spec import CORE_PACK_ID, enabled_packs, load_active_spec
 
-    enabled = enabled_packs(await load_active_spec())
+    async with tenant_scope(tenant_id):
+        habilitados = enabled_packs(await load_active_spec(tenant_id)) - {CORE_PACK_ID}
+        if not habilitados:
+            return set()
+        apagados = await plugin_manager.disabled_plugins_for_tenant(tenant_id)
+        async with get_session() as session:
+            con_agente = await packs_con_especialista(session, tenant_id)
+    return (habilitados - apagados) & con_agente
+
+
+async def pack_collaborator_roles(tenant_id: uuid.UUID | None = None) -> list[dict[str, str]]:
+    """Roles de colaborador que aportan los packs ACTIVOS del negocio (ADR-0066, #870)."""
+    tenant_id = tenant_id or get_current_tenant_id()
+    if tenant_id is None:
+        return []
+    activos = await modulos_habilitados_del_negocio(tenant_id)
     out: list[dict[str, str]] = []
     for module in plugin_manager.list_modules():
-        if module.id not in enabled or module.id == CORE_PACK_ID:
-            continue
-        for role in getattr(module, "collaborator_roles", []) or []:
-            role_id = str(role.get("id") or "").strip()
-            if role_id:
-                out.append({"value": f"{module.id}:{role_id}", "label": str(role.get("label") or role_id)})
+        if module.id in activos:
+            out.extend(_roles_declarados(module))
     return out
+
+
+ROL_DE_PACK_INACTIVO = "ese rol es de un módulo que no está activo en este negocio"
+
+
+async def validar_pack_roles(values: list[str], tenant_id: uuid.UUID | None) -> str | None:
+    """Error si algún rol de pack no lo ofrece hoy el negocio (#870): pack inactivo, rol que el pack
+    no declara o alta sin negocio. Se llama ANTES de escribir nada; `apply_pack_roles` no valida
+    (lo usan también los datos de prueba y el propio pack)."""
+    if not values:
+        return None
+    if tenant_id is None:
+        return ROL_DE_PACK_INACTIVO
+    validos = {r["value"] for r in await pack_collaborator_roles(tenant_id)}
+    return None if set(values) <= validos else ROL_DE_PACK_INACTIVO
+
+
+def _modulo_del_rol(value: str) -> Any | None:
+    """El pack instalado que declara ese rol (activo o no en el negocio), o None."""
+    pack_id, _, role_id = value.partition(":")
+    for module in plugin_manager.list_modules():
+        if module.id == pack_id and any(r["value"] == value for r in _roles_declarados(module)):
+            return module if role_id else None
+    return None
+
+
+async def revoke_pack_role(
+    *, actor: Admin, admin_id: uuid.UUID, value: str, current_tenant_id: uuid.UUID | None
+) -> str | None:
+    """Quita a la cuenta un rol de pack en el negocio activo (#870): p. ej. el perfil de Gestor de
+    Cobranza, para que vuelva a la política de Colaborador. El pack da de baja su perfil sin tocar
+    registros ni carteras (`on_collaborator_role_removed`); volver a darle el rol revive el mismo.
+
+    Vale aunque el pack ya no esté activo en el negocio: es justo el caso que hay que poder
+    corregir. Un dueño/tester solo sobre colaboradores de su negocio activo; el master, sobre
+    cualquier cuenta vinculada al negocio activo."""
+    if current_tenant_id is None:
+        return "no hay tenant activo"
+    if actor.id == admin_id:
+        return "no podés cambiar tu propio perfil"
+    module = _modulo_del_rol(value)
+    if module is None:
+        return "rol de pack inválido"
+    async with get_session() as session:
+        target = await session.get(Admin, admin_id)
+        rol_en_negocio = (
+            await session.execute(
+                select(TenantUser.role).where(
+                    TenantUser.admin_id == admin_id, TenantUser.tenant_id == current_tenant_id
+                )
+            )
+        ).scalar_one_or_none()
+    if target is not None and target.deleted_at is not None and (
+        actor.role == "master" or target.deleted_from_tenant_id == current_tenant_id
+    ):
+        return CUENTA_ELIMINADA
+    # Misma respuesta para una cuenta de otro negocio que para una inexistente.
+    if target is None or target.deleted_at is not None or rol_en_negocio is None:
+        return "admin no encontrado"
+    if actor.role != "master" and (target.role in ROLES_DE_PLATAFORMA or rol_en_negocio != "colaborador"):
+        return "no podés cambiar esa cuenta"
+    _, _, role_id = value.partition(":")
+    try:
+        async with tenant_scope(current_tenant_id):
+            await module.on_collaborator_role_removed(current_tenant_id, admin_id, role_id)
+    except Exception:
+        log.warning(
+            "on_collaborator_role_removed_failed", pack=module.id, tenant_id=str(current_tenant_id), exc_info=True
+        )
+        return "no se pudo quitar el perfil; intenta de nuevo"
+    return None
 
 
 # ------------------------------------------------------------------ perfiles de pack (ADR-0176)
@@ -1031,7 +1134,7 @@ async def perfiles_de_pack(
     *,
     ver_detalle: Callable[[str], bool],
 ) -> dict[uuid.UUID, list[PackProfile]]:
-    """Perfiles que los packs habilitados del negocio tienen de estos colaboradores (hook
+    """Perfiles que los packs instalados tienen de estos colaboradores en el negocio (hook
     `collaborator_profiles`). Una llamada por pack con TODOS los ids (sin N+1), en paralelo y con un tope de
     `PERFILES_TIMEOUT_S` por pack: si uno falla o se pasa, el listado sale sin sus perfiles (`log.warning`).
 
@@ -1039,11 +1142,10 @@ async def perfiles_de_pack(
     `role_id`, `ref_id` y `etiqueta` y se descartan `resumen` y `edit`. Solo se aceptan ids pedidos."""
     if not admin_ids:
         return {}
-    from core.agents.spec import enabled_packs, load_active_spec
-
-    async with tenant_scope(tenant_id):
-        habilitados = enabled_packs(await load_active_spec(tenant_id))
-    modulos = [m for m in plugin_manager.list_modules() if m.id in habilitados]
+    # Todos los packs instalados, no solo los habilitados en el negocio (#870): `rol_de_acceso` también
+    # los consulta todos, así que un perfil que manda en el acceso tiene que verse (y poder quitarse)
+    # en Equipo aunque el pack ya no esté activo.
+    modulos = list(plugin_manager.list_modules())
     pedidos = set(admin_ids)
 
     async def pedir(modulo: Any) -> dict[uuid.UUID, list[PackProfile]]:

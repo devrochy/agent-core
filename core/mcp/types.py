@@ -687,6 +687,15 @@ class BaseModule(ABC):
         """
         return None
 
+    async def on_collaborator_role_removed(self, tenant_id: uuid.UUID, admin_id: uuid.UUID, role_id: str) -> None:
+        """Hook opcional (#870): al admin `admin_id` se le quitó el rol de pack `role_id` en `tenant_id`
+        desde Equipo; la cuenta sigue en el negocio como colaborador. El pack da de baja lógica el
+        perfil que creó `on_collaborator_role`, sin borrar registros ni asignaciones (volver a darle
+        el rol lo revive), e invalida lo que haya cacheado de su rol de acceso. Lo llama el core bajo
+        el `tenant_scope` del negocio. Default: no-op.
+        """
+        return None
+
     async def on_collaborator_removed(self, tenant_id: uuid.UUID, admin_id: uuid.UUID) -> None:
         """Hook opcional (ADR-0198): la cuenta `admin_id` se dio de baja en `tenant_id`.
 

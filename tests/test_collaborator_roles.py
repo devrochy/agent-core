@@ -26,3 +26,8 @@ def test_colaborador_roles_default_vacio() -> None:
 def test_on_collaborator_role_default_no_op() -> None:
     """El hook es opcional: el default no hace nada (no rompe al core)."""
     asyncio.run(_Modulo().on_collaborator_role(uuid.uuid4(), uuid.uuid4(), "gestor"))
+
+
+def test_on_collaborator_role_removed_default_no_op() -> None:
+    """Quitar un rol de pack (#870) también es opcional para el pack."""
+    asyncio.run(_Modulo().on_collaborator_role_removed(uuid.uuid4(), uuid.uuid4(), "gestor"))
