@@ -439,3 +439,43 @@ async def test_una_recarga_rechazada_no_acredita(app_client, produccion) -> None
     [pago] = await _pagos(tid)
     assert pago.status == "rechazado"
     assert await _abonos(tid) == []
+
+
+@pytest.mark.parametrize(
+    ("concepto", "creditos", "periodo"),
+    [("recarga", None, None), ("recarga", "0", None), ("recarga", "NaN", None), ("plan", "10", None), ("recarga", "10", "plat-x-202611"), ("otro", None, None)],
+)
+async def test_los_check_de_la_tabla_rechazan_una_recarga_mal_formada(concepto: str, creditos: str | None, periodo: str | None) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from core.db.models import SubscriptionPayment
+
+    tid = await _negocio("premium")
+    sub = await _suscripcion(tid)
+    with pytest.raises(IntegrityError):
+        async with _scope(tid) as s:
+            s.add(
+                SubscriptionPayment(
+                    tenant_id=tid, subscription_id=sub.id, plan_id="premium", amount_cop=1, provider="wompi",
+                    provider_reference=uniq("ck"), concepto=concepto, creditos=Decimal(creditos) if creditos else None,
+                    periodo=periodo,
+                )
+            )
+            await s.commit()
+
+
+@pytest.mark.aislamiento
+async def test_una_recarga_revertida_despues_de_acreditarse_alerta_y_no_toca_el_abono(app_client, produccion, alertas) -> None:
+    from core.billing.checkout import apply_payment
+
+    tid = await _negocio("premium")
+    assert (await _comprar(app_client, tid, "recarga_5000")).status_code == 200
+    link = produccion.links[-1]
+    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=4_675_000) is True
+    # Wompi anula la transacción después (VOIDED → rechazado): el abono queda y se alerta.
+    assert await apply_payment(provider_reference=link, status="rechazado", amount_in_cents=4_675_000) is False
+    [pago] = await _pagos(tid)
+    assert pago.status == "aprobado"
+    assert len(await _abonos(tid)) == 1
+    [alerta] = alertas
+    assert (alerta["severity"], alerta["title"]) == ("critical", "Recarga revertida después de acreditarse")

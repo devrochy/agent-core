@@ -454,6 +454,8 @@ async def apply_payment(
         monto_distinto: tuple[str | None, int | None] | None = None
         periodo: Periodo | None = None
         recarga: str | None = None
+        recarga_revertida: str | None = None
+        monto_es_recarga = False
         async with tenant_scope(tid):
             async with get_session() as session:
                 # Mismo orden de candados que el canal asistente (`aplicar_pago_de_periodo`):
@@ -473,16 +475,24 @@ async def apply_payment(
                 if payment is None or not payment.checkout_url or payment.provider in (PROVEEDOR_RENOVACION, "asistente"):
                     return False
                 if payment.status in ("aprobado", DUPLICADO, "monto_distinto"):
-                    return False  # ya procesado: idempotente
-                if status != "aprobado":
+                    if payment.status == "aprobado" and payment.concepto == "recarga" and status == "rechazado":
+                        # Una recarga ya acreditada que el proveedor revierte después (VOIDED): el abono no se
+                        # deshace (`credit_grants` es solo de inserción), se alerta para revisarlo a mano.
+                        recarga_revertida = provider_reference
+                    else:
+                        return False  # ya procesado: idempotente
+                elif status != "aprobado":
                     if status == "rechazado" and payment.status == "pendiente":
                         payment.status = "rechazado"
                         return True
                     return False
-                if amount_in_cents is None or int(amount_in_cents) != round(float(payment.amount_cop) * 100):
+                if recarga_revertida is not None:
+                    pass  # no se toca nada: se alerta fuera de la transacción
+                elif amount_in_cents is None or int(amount_in_cents) != round(float(payment.amount_cop) * 100):
                     # Sin monto firmado o con otro monto: no se aplica (como `pack_payments`).
                     payment.status = "monto_distinto"
                     monto_distinto = (payment.periodo, amount_in_cents)
+                    monto_es_recarga = payment.concepto == "recarga"
                     log.error(
                         "subscription_payment_monto_distinto",
                         tenant_id=str(tid),
@@ -543,13 +553,27 @@ async def apply_payment(
                         )
                     elif resultado.resultado == DUPLICADO and resultado.nuevo:
                         duplicado = resultado
+        if recarga_revertida is not None:
+            from core.shared.alerts import send_alert
+
+            log.error("recarga_revertida_tras_acreditar", tenant_id=str(tid))
+            await send_alert(
+                "Recarga revertida después de acreditarse",
+                f"Negocio {tid}, pago {recarga_revertida}: el proveedor revirtió una recarga que ya se había "
+                "acreditado. Los créditos no se descuentan solos: revisarlo a mano.",
+                severity="critical",
+            )
+            return False
         if monto_distinto is not None:
             from core.shared.alerts import send_alert
 
             recibido = f"{monto_distinto[1]} centavos" if monto_distinto[1] is not None else "un monto sin firmar"
+            que, cual = ("Recarga", f"pago {provider_reference}") if monto_es_recarga else (
+                "Pago del plan", f"período {monto_distinto[0]}"
+            )
             await send_alert(
-                "Pago del plan con monto distinto",
-                f"Negocio {tid}, período {monto_distinto[0]}: llegaron {recibido} y el link era por otro monto. "
+                f"{que} con monto distinto",
+                f"Negocio {tid}, {cual}: llegaron {recibido} y el link era por otro monto. "
                 "No se aplicó: revisarlo a mano.",
                 severity="critical",
             )

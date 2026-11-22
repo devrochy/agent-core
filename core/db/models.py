@@ -1580,6 +1580,16 @@ class SubscriptionPayment(Base):
             unique=True,
             postgresql_where=text("status = 'aprobado' and periodo is not null and deleted_at is null"),
         ),
+        # Migración 0156 (ADR-0209 §4, HU-BILL-23).
+        CheckConstraint("concepto IN ('plan', 'recarga')", name="ck_subscription_payments_concepto"),
+        CheckConstraint(
+            "(concepto = 'recarga' AND creditos IS NOT NULL AND creditos > 0 AND creditos < 100000000000) "
+            "OR (concepto = 'plan' AND creditos IS NULL)",
+            name="ck_subscription_payments_creditos",
+        ),
+        CheckConstraint(
+            "concepto <> 'recarga' OR periodo IS NULL", name="ck_subscription_payments_recarga_sin_periodo"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
