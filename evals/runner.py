@@ -28,18 +28,47 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from agentcore_contracts import AgentSpec
-
 from core.onboarding import tenants_root
 
 if TYPE_CHECKING:
+    from core.agents.turno import AgenteDelTurno
     from core.llm.types import LLMMessage
 
 SCENARIOS_DIR = Path(__file__).parent / "golden_scenarios"
 SPECS_DIR = Path(__file__).parent / "specs"
 
 
-def _load_spec(tenant: str | None) -> AgentSpec:
+def agente_de_evals(datos: dict[str, Any]) -> AgenteDelTurno:
+    """El agente del turno de un spec de evals (ADR-0206, HU-AOS-91), como lo armaría una release: su contenido
+    `agentspec/3` desde los valores por defecto que trae el spec (persona, modelo, memoria, políticas y playbooks,
+    `contenido_base`), con sus bindings de tools, y el `KernelSpec` del Coordinador desde la misma voz. Los packs del
+    spec son las habilidades del agente. El archivo conserva la forma de siempre: no hace falta el AgentSpec v2."""
+    import uuid as _uuid
+
+    from core.agents import defaults_negocio
+    from core.agents.base import contenido_base, kernel_del_negocio
+    from core.agents.turno import agente_del_turno
+    from core.shared.release_vigente import AgenteCongelado
+
+    defaults = defaults_negocio.desde_dict(datos)
+    contenido = contenido_base(defaults)
+    contenido["tools"] = [
+        {"tool": b["tool"], "enabled": bool(b.get("enabled", True)), "scopes": list(b.get("scopes") or [])}
+        for b in datos.get("tools") or []
+    ]
+    cero = _uuid.UUID(int=0)
+    agente = AgenteCongelado(
+        instance_id=cero, agent_id=cero, key="evals", role="specialist", version_id=cero, version=1,
+        contract="agentspec/3", content=contenido,
+    )
+    kernel = AgenteCongelado(
+        instance_id=cero, agent_id=cero, key="coordinador", role="core", version_id=cero, version=1,
+        contract="kernelspec/1", content=kernel_del_negocio(defaults),
+    )
+    return agente_del_turno(agente, kernel, skills=tuple(datos.get("packs") or ()), tenant_plugins=())
+
+
+def _load_spec(tenant: str | None) -> AgenteDelTurno:
     """Spec real: del tenant (TENANTS_ROOT/<slug>/evals/spec.json) o el neutro
     del framework. ADR-0016: el gate evalúa la configuración real, no una sintética."""
     if tenant:
@@ -50,7 +79,7 @@ def _load_spec(tenant: str | None) -> AgentSpec:
         path = SPECS_DIR / "framework.json"
         if not path.exists():
             raise FileNotFoundError(f"Spec del framework no encontrada: {path}")
-    return AgentSpec.model_validate(json.loads(path.read_text()))
+    return agente_de_evals(json.loads(path.read_text()))
 
 
 def _scenario_paths(tenant: str | None, patterns: list[str]) -> list[Path]:
@@ -205,7 +234,7 @@ def _falla_argumentos_prohibidos(valor: object, llamadas: list[Any]) -> str:
     return f"llamó con argumentos que el cliente no dio: {puestos}" if puestos else ""
 
 
-def _spec_del_escenario(scenario: dict, spec: AgentSpec, tenant: str | None) -> AgentSpec:
+def _spec_del_escenario(scenario: dict, spec: AgenteDelTurno, tenant: str | None) -> AgenteDelTurno:
     """`spec` del escenario: otro spec del framework (`evals/specs/<nombre>.json`) para los packs que el neutro no
     trae. Con `--tenant` manda el spec real del negocio (ADR-0016) y el campo se rechaza."""
     nombre = scenario.get("spec")
@@ -215,11 +244,11 @@ def _spec_del_escenario(scenario: dict, spec: AgentSpec, tenant: str | None) -> 
         raise ValueError("`spec` por escenario solo vale en el golden del framework, no con --tenant")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", str(nombre)):
         raise ValueError(f"spec inválido: {nombre!r}")
-    return AgentSpec.model_validate(json.loads((SPECS_DIR / f"{nombre}.json").read_text()))
+    return agente_de_evals(json.loads((SPECS_DIR / f"{nombre}.json").read_text()))
 
 
 async def run_scenario(
-    path: Path, spec: AgentSpec, tenant_id: uuid.UUID, tenant: str | None = None
+    path: Path, spec: AgenteDelTurno, tenant_id: uuid.UUID, tenant: str | None = None
 ) -> tuple[str, bool, str]:
     scenario = json.loads(path.read_text())
     name = scenario["name"]
@@ -279,11 +308,10 @@ async def run_scenario(
     # Antes se pasaban TODAS las skills del host, así que un escenario podía pasar
     # aunque el flujo del tenant excluyera la tool.
     from core.agents.flow import render_flow, resolve_flow
-    from core.agents.spec import enabled_packs
     from core.leads.tools import es_de_captar_leads
     from core.shared.tenant import tenant_scope
 
-    enabled = enabled_packs(spec)
+    enabled = set(spec.packs) | {"core"}
     # El golden no tiene agente: Captar leads (del core, con binding, ADR-0193) se ofrece como antes de moverla si el
     # negocio vende (comercio), para que las grabaciones midan lo mismo, o si el spec del escenario trae el binding,
     # como un agente sin comercio con la habilidad (HU-AOS-70).

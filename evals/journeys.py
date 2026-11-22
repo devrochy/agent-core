@@ -1231,20 +1231,35 @@ def _solo_bases_de_prueba() -> None:
         raise SystemExit(f"Los journeys solo corren contra una base local, no contra {host!r}.")
 
 
+async def _version_de_atencion(tenant_id: uuid.UUID) -> int | None:
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            return (
+                await session.execute(
+                    text(
+                        "select max(v.version) from agent_versions v join agents a on a.id = v.agent_id "
+                        "and a.tenant_id = v.tenant_id where v.tenant_id = :t and a.key = :k"
+                    ),
+                    {"t": tenant_id, "k": KEY_ATENCION},
+                )
+            ).scalar_one_or_none()
+
+
 async def _guardar(tenant_id: uuid.UUID, set_id: str, resultados: list, k: int, simulador: dict) -> None:  # type: ignore[type-arg]
-    """`eval_runs` del negocio de la corrida, atado a la versión de su AgentSpec."""
+    """`eval_runs` del negocio de la corrida, atado a la versión publicada del agente de la corrida (`atencion`)."""
     try:
         from consistencia import persistir
-
-        from core.agents.spec import load_active_spec
-        from core.shared.tenant import tenant_scope
 
         sys.path.insert(0, str(EVALS_DIR))
         from runner import _git_ref  # type: ignore[import-not-found]
 
-        async with tenant_scope(tenant_id):
-            spec = await load_active_spec()
-        await persistir(tenant_id, f"journeys:{set_id}@{spec.version}", _git_ref(), resultados, k, simulador)
+        version = await _version_de_atencion(tenant_id)
+        await persistir(tenant_id, f"journeys:{set_id}@{KEY_ATENCION}:{version}", _git_ref(), resultados, k, simulador)
     except Exception as exc:  # no rompe la corrida: el resultado ya se imprimió
         print(f"(no se guardó la corrida: {type(exc).__name__}: {exc})")
 
