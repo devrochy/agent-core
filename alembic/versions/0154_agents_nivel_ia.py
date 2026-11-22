@@ -8,8 +8,8 @@
 
 Reversible: el downgrade quita el CHECK y la columna.
 
-Revision ID: 0153
-Revises: 0152
+Revision ID: 0154
+Revises: 0153
 Create Date: 2026-11-22
 """
 
@@ -19,8 +19,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0153"
-down_revision = "0152"
+revision = "0154"
+down_revision = "0153"
 branch_labels = None
 depends_on = None
 
