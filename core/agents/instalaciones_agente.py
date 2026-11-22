@@ -294,9 +294,13 @@ async def _usa_conocimiento(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> bool:
 
 async def _packs_del_spec_v2(tenant_id: uuid.UUID) -> set[str]:
     """Los `packs` del AgentSpec v2 activo, leídos con SQL de `agent_specs` (sin el modelo, que ya no existe): solo
-    para el precheck y el backfill, que se van con la tabla en la parte E de HU-AOS-91."""
+    para el precheck y el backfill. Es lo que se corre si la guarda de la migración 0157 la frena; después de 0157 la
+    tabla no existe y devuelve vacío."""
     _exigir_scope(tenant_id)
     async with get_session() as session:
+        # La migración 0157 borra la tabla: sin ella no queda nada que comparar (es lo que el precheck ya miró).
+        if (await session.execute(text("SELECT to_regclass('agent_specs')"))).scalar() is None:
+            return set()
         fila = (
             await session.execute(
                 text(

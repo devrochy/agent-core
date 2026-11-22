@@ -10,7 +10,7 @@
   versión existente → se devuelve esa (idempotente). El número es `max + 1` con la fila del
   agente bloqueada (`FOR UPDATE`), así dos publicaciones a la vez no chocan. Publicar no
   activa nada: la release por conexión llega con HU-AOS-14.
-- `publicar(..., contenido=..., legacy_agent_spec_id=...)` es también el camino del backfill
+- `publicar(..., contenido=...)` es también el camino del backfill
   de HU-AOS-13: misma validación y mismo hash.
 
 Todo corre dentro del `tenant_scope` del negocio (RLS) y además filtra por `tenant_id`.
@@ -547,7 +547,6 @@ async def publicar(
     notes: str = "",
     label: str | None = None,
     contenido: Any = None,
-    legacy_agent_spec_id: uuid.UUID | None = None,
     lock_version: int | None = None,
     modelo: str | None = None,
 ) -> tuple[AgentVersionRecord, bool]:
@@ -671,7 +670,6 @@ async def publicar(
             flow_hash=huella_flujo,
             schedule=horario,
             schedule_hash=huella_horario,
-            legacy_agent_spec_id=legacy_agent_spec_id,
             notes=notes[:2000],
             created_by=actor,
         )

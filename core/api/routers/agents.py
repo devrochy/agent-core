@@ -256,7 +256,7 @@ def _version(v: Any) -> AgentVersionSummary:
         content_hash=v.content_hash,
         flow_hash=v.flow_hash,
         notes=v.notes,
-        legacy=v.legacy_agent_spec_id is not None,
+        legacy=False,  # `legacy_agent_spec_id` se borró con agent_specs (0157, HU-AOS-91)
         created_at=v.created_at,
     )
 

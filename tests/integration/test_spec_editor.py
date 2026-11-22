@@ -22,7 +22,7 @@ pytestmark = [
 
 
 async def _versiones(tenant_id) -> int:  # type: ignore[no-untyped-def]
-    """Filas de `agent_specs` del negocio, por SQL: el modelo se borró y la tabla sigue hasta la parte E de HU-AOS-91."""
+    """Versiones de agentes del negocio: retirar el editor del v2 no crea ninguna (`agent_specs` se borró en 0157)."""
     from sqlalchemy import text
 
     from core.db.session import get_session
@@ -32,7 +32,7 @@ async def _versiones(tenant_id) -> int:  # type: ignore[no-untyped-def]
         async with get_session() as s:
             return int(
                 (
-                    await s.execute(text("select count(*) from agent_specs where tenant_id = :t"), {"t": tenant_id})
+                    await s.execute(text("select count(*) from agent_versions where tenant_id = :t"), {"t": tenant_id})
                 ).scalar_one()
             )
 

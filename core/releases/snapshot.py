@@ -10,7 +10,7 @@ nada de la release, así que se copia lo que la release CONGELÓ y nada más:
   clientes, mensajes, configuración de packs).
 - **`importar`** (`agentcore_eval`, dentro del `tenant_scope` del negocio efímero): inserta las
   filas conservando los UUID (las FKs compuestas y el manifiesto los referencian) y reescribiendo
-  `tenant_id`. Se anulan las referencias que no existen allí (`created_by`, `legacy_agent_spec_id`,
+  `tenant_id`. Se anulan las referencias que no existen allí (`created_by`,
   `graph_version_id`): el grafo A2A viaja dentro del manifiesto y es lo que lee el runtime.
 - **`importar_pack_versions`** (rol dueño de la base de eval): `pack_versions` es una tabla de
   sistema de solo lectura para `app_runtime`.
