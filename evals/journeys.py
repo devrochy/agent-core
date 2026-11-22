@@ -265,6 +265,8 @@ async def _habilidades_de_la_corrida(tenant_id: uuid.UUID, definicion: dict[str,
         pendientes = {p.get("pack") for p in await _pendientes_del_preset(tenant_id)}
         refs += _playbook_refs([p for p in manifest.packs if p not in pendientes], list(manifest.playbooks))
     packs += [p for p in (definicion.get("config") or {}) if p not in packs]
+    # Y al final los de todo pack habilitado que faltaran, como hacía `load_active_spec` al leer el v2.
+    refs += _pack_playbook_refs(packs)
     unicos: dict[str, dict[str, str]] = {}
     for ref in refs:
         unicos.setdefault(ref["name"], ref)
