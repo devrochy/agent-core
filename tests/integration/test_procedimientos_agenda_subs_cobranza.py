@@ -299,7 +299,7 @@ async def test_tras_el_si_confirmo_se_ejecuta_lo_que_vio_el_cliente_aunque_el_mo
               "description": "Limpieza facial profunda (60 min).", "attendee_email": "felipe@example.com"}
     guion = _Guion([
         ("iniciar_procedimiento", {"procedure_id": proc}),
-        ("actualizar_tarea", {"slots": {"horario": f"{dia}T10:00:00", "correo": "felipe@example.com"}}),
+        ("actualizar_tarea", {"slots": {"start_datetime": f"{dia}T10:00:00", "attendee_email": "felipe@example.com"}}),
         ("create_calendar_event", vistos),
         "Te agendo la limpieza el martes a las 10, ¿confirmas?",
     ])
