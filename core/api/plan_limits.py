@@ -8,6 +8,9 @@ para todas las entradas que pueden levantar `QuotaExceeded` de un tope estructur
 Desde HU-BILL-19 (ADR-0208 §9-10) también traduce lo que el plan no incluye (`PlanNoIncluye`): un canal
 (`plan_channel_not_included`, `details = {channel, plan}`) o una habilidad (`plan_plugin_not_included`,
 `details = {skills, min_plan, plan}`). Los dos son 409 y no escriben nada.
+
+Desde HU-BILL-25, una feature del plan (`plan_feature_not_included`, `details = {feature, plan}`): la
+exportación de conversaciones y las conversaciones fuera del historial del plan.
 """
 
 from __future__ import annotations
@@ -105,6 +108,22 @@ def plan_limit_responses_de(*metricas: str, canal: bool = False, habilidad: bool
     }
 
 
+def plan_feature_responses(*features: str) -> dict[int | str, dict[str, str]]:
+    """409 de una ruta que depende de una feature del plan (HU-BILL-25): `plan_feature_not_included`
+    con `error.details = {feature, plan}` (`historial` suma `historial_dias`)."""
+    nombres = ", ".join(f"`{f}`" for f in features)
+    return {
+        409: {
+            "description": (
+                "El plan no incluye la feature: `error.code = plan_feature_not_included`, "
+                f"`error.details = {{feature, plan}}` (feature {nombres}"
+                + ("; `historial` trae además `historial_dias`" if "historial" in features else "")
+                + "). No se escribió nada."
+            )
+        }
+    }
+
+
 def plan_conexion_responses() -> dict[int | str, dict[str, str]]:
     """409 de una ruta que da de alta o activa una conexión (ADR-0208 §8-9)."""
     return plan_limit_responses_de("conexiones", "correos", canal=True)
@@ -112,6 +131,7 @@ def plan_conexion_responses() -> dict[int | str, dict[str, str]]:
 
 __all__ = [
     "plan_conexion_responses",
+    "plan_feature_responses",
     "plan_limit_code",
     "plan_limit_error",
     "plan_limit_message",
