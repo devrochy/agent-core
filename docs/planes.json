@@ -12,6 +12,7 @@
           "web"
         ],
         "descuento_recarga": null,
+        "exportar": false,
         "historial_dias": 30,
         "marca_propia": false,
         "nivel_ia": "estandar",
@@ -44,6 +45,7 @@
           "telegram"
         ],
         "descuento_recarga": 0,
+        "exportar": false,
         "historial_dias": 90,
         "marca_propia": false,
         "nivel_ia": "estandar",
@@ -78,6 +80,7 @@
           "messenger"
         ],
         "descuento_recarga": 15,
+        "exportar": true,
         "historial_dias": 365,
         "marca_propia": true,
         "nivel_ia": "avanzado",
@@ -112,6 +115,7 @@
           "messenger"
         ],
         "descuento_recarga": 25,
+        "exportar": true,
         "historial_dias": null,
         "marca_propia": true,
         "nivel_ia": "avanzado",
