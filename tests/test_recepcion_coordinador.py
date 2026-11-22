@@ -14,6 +14,7 @@ from test_agente_del_turno import v2_completo
 
 from core.agents.base import kernel_del_negocio
 from core.agents.claves import KEY_COORDINADOR
+from core.agents.defaults_negocio import DefaultsDelNegocio
 from core.agents.recepcion import (
     ATRIBUTOS_DE_PERFIL,
     TOOLS_RECEPCION,
@@ -28,10 +29,10 @@ T = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
 def _coordinador() -> AgenteCongelado:
-    spec = AgentSpec.model_validate(v2_completo())
+    defaults = DefaultsDelNegocio.model_validate(AgentSpec.model_validate(v2_completo()).model_dump(mode="json"))
     return AgenteCongelado(
         instance_id=uuid.uuid4(), agent_id=uuid.uuid4(), key=KEY_COORDINADOR, role="core", version_id=uuid.uuid4(),
-        version=4, contract="kernelspec/1", content=kernel_del_negocio(spec),
+        version=4, contract="kernelspec/1", content=kernel_del_negocio(defaults),
     )
 
 

@@ -1,8 +1,8 @@
 """Adenda 2026-11-14 de ADR-0191: la voz de Configuración se siembra en el Coordinador.
 
 La voz del turno sale del `KernelSpec` congelado en la release. Este módulo prueba que
-`sembrar_voz_del_negocio` publica una versión nueva del Coordinador cuando la persona del negocio
-cambió, y que no escribe nada cuando ya coinciden. Sin base de datos: las piezas que tocan BD se
+`sembrar_voz_del_negocio` publica una versión nueva del Coordinador cuando la persona de los valores
+por defecto del negocio (`agent_defaults`, ADR-0206 §6) cambió, y que no escribe nada cuando ya coinciden. Sin base de datos: las piezas que tocan BD se
 monkeypatchean.
 """
 
@@ -15,14 +15,19 @@ from typing import Any
 import pytest
 from agentcore_contracts import KernelSpec
 
-from core.agents import base, versiones
+from core.agents import base, defaults_negocio, versiones
+from core.agents.defaults_negocio import DefaultsDelNegocio
 
 TENANT = uuid.UUID("11111111-1111-1111-1111-111111111111")
 AGENTE = uuid.UUID("22222222-2222-2222-2222-222222222222")
 
 
-def _persona(*, warmth: int = 5, tone: str = "cercano", emojis: str = "sparse", role: str = "asistente") -> Any:
-    return SimpleNamespace(persona=SimpleNamespace(tone=tone, warmth=warmth, emojis=emojis, role=role))
+def _persona(
+    *, warmth: int = 5, tone: str = "cercano", emojis: str = "sparse", role: str = "asistente"
+) -> DefaultsDelNegocio:
+    return DefaultsDelNegocio.model_validate(
+        {"persona": {"tone": tone, "warmth": warmth, "emojis": emojis, "role": role}}
+    )
 
 
 def _kernel(**voice: Any) -> KernelSpec:
@@ -47,19 +52,18 @@ class _Sesion:
 
 
 def _parchear(monkeypatch: pytest.MonkeyPatch, *, kernel: KernelSpec, persona: Any, publicar: Any) -> None:
-    async def leer(_tid: uuid.UUID) -> tuple[str, Any]:
-        return ("agent-default", persona)
+    async def leer(_tid: uuid.UUID) -> DefaultsDelNegocio:
+        return persona
 
     async def listar(_tid: uuid.UUID, _aid: uuid.UUID) -> list[Any]:
         return [SimpleNamespace(content=kernel.model_dump(mode="json", by_alias=True))]
 
-    from core.agents import spec as spec_mod
     from core.kernel import procedures
     from core.plugin_manager import plugin_manager
 
     monkeypatch.setattr(base, "get_current_tenant_id", lambda: TENANT)
     monkeypatch.setattr(base, "get_session", lambda: _Sesion())
-    monkeypatch.setattr(spec_mod, "leer_spec_activo", leer)
+    monkeypatch.setattr(defaults_negocio, "leer", leer)
     monkeypatch.setattr(versiones, "listar_versiones", listar)
     monkeypatch.setattr(versiones, "publicar", publicar)
     monkeypatch.setattr(plugin_manager, "list_modules", lambda: [])

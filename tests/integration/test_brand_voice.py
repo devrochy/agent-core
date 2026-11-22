@@ -71,12 +71,8 @@ async def test_ensure_brand_voice_sin_archivo_no_falla() -> None:
 
 
 def test_identity_out_marca_warning_si_vacio() -> None:
-    from agentcore_contracts import AgentSpec
-
-    from core.agents.spec import DEFAULT_SPEC
     from core.api.routers.settings import _identity_out
 
-    spec = AgentSpec.model_validate(DEFAULT_SPEC)
-    out = _identity_out(None, spec, available=[])
+    out = _identity_out(None, available=[])
     assert out.brand_voice == ""
     assert out.brand_voice_warning is True

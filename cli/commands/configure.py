@@ -20,23 +20,27 @@ TONOS_PERSONA = ["formal", "neutral", "cercano", "informal"]
 
 
 async def cambiar_tono_persona(tid, tono: str) -> bool:
-    """Escribe `persona.tone` en una versión nueva del AgentSpec del negocio.
+    """Escribe `persona.tone` en los valores por defecto de los agentes del negocio (`app_settings.agent_defaults`,
+    ADR-0206 §6); el resto de la persona no cambia.
 
     Devuelve False si el negocio no tiene `AppSettings` (no pasó por `agent-core init`)."""
-    from core.agents.spec import load_active_spec, save_spec_if_changed
+    from core.agents import defaults_negocio
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    async with tenant_scope(tid):
-        async with get_session() as session:
-            settings_row = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+    async with tenant_scope(tid), get_session() as session:
+        settings_row = (
+            await session.execute(
+                select(AppSettings)
+                .where(AppSettings.tenant_id == tid, AppSettings.deleted_at.is_(None))
+                .limit(1)
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
         if settings_row is None:
             return False
-        spec = await load_active_spec()
-        data = spec.model_dump(mode="json")
-        data["persona"]["tone"] = tono
-        await save_spec_if_changed(spec, data, tid)
+        defaults_negocio.escribir(settings_row, {"persona": {"tone": tono}})
     return True
 
 
@@ -44,8 +48,8 @@ async def cambiar_tono_persona(tid, tono: str) -> bool:
 def tone(tenant: str = typer.Argument(..., help="Tenant (slug o UUID)")) -> None:
     """Cambia el tono de la persona del asistente (formal | neutral | cercano | informal).
 
-    Escribe `persona.tone` del AgentSpec (versionado), que es lo único que llega al prompt
-    (HU-CFG-01): la clave vieja `behavior_config["tono"]` ya no se escribe.
+    Escribe `persona.tone` de los valores por defecto de los agentes (`agent_defaults`, ADR-0206 §6): siembra la voz
+    del Coordinador y de los agentes nuevos. La clave vieja `behavior_config["tono"]` ya no se escribe (HU-CFG-01).
     """
     selected = questionary.select("Tono:", choices=TONOS_PERSONA).ask()
 
@@ -79,7 +83,11 @@ def llm(tenant: str = typer.Argument(..., help="Tenant (slug o UUID)")) -> None:
 
         tid = await resolve_tenant(tenant)
         async with tenant_scope(tid), get_session() as session:
-            settings_row = (await session.execute(select(AppSettings).limit(1))).scalar_one_or_none()
+            settings_row = (
+                await session.execute(
+                    select(AppSettings).where(AppSettings.tenant_id == tid, AppSettings.deleted_at.is_(None)).limit(1)
+                )
+            ).scalar_one_or_none()
             if settings_row is None:
                 console.print("[red]No hay configuración. Corre: agent-core init[/red]")
                 return

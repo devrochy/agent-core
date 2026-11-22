@@ -88,9 +88,10 @@ async def test_editor_crea_version_nueva_y_activa(app_client, moto_setup) -> Non
     antes = await _active_versions(t2)
     r = await app_client.post("/admin/spec", headers=headers, data=_payload())
     assert r.status_code == 303
-    assert "activado" in r.headers["location"]
-    despues = await _active_versions(t2)
-    assert despues and despues != antes, "debe quedar una versión nueva activa"
+    # Desde ADR-0206 §6 el formulario guarda los valores por defecto de los agentes (`agent_defaults`), no una
+    # versión de `agent_specs`.
+    assert "guardado" in r.headers["location"]
+    assert (await _active_versions(t2)) == antes
 
 
 async def test_editor_rechaza_valor_fuera_del_contrato(app_client, moto_setup) -> None:
@@ -104,5 +105,5 @@ async def test_editor_rechaza_valor_fuera_del_contrato(app_client, moto_setup) -
         "/admin/spec", headers=headers, data=_payload(persona_tone="amable")
     )
     assert r.status_code == 303
-    assert "spec_invalido" in r.headers["location"], "tono inválido → flash de error"
+    assert "inv%C3%A1lido" in r.headers["location"], "tono inválido → flash de error"
     assert (await _active_versions(t2)) == antes, "no debe crearse versión con un spec inválido"

@@ -1,0 +1,9 @@
+{
+  "title": "Cita",
+  "start_datetime": "Fecha y hora",
+  "description": "Detalle",
+  "attendee_email": "Correo",
+  "duration_minutes": "Duración (minutos)",
+  "calendar": "Agenda",
+  "nombre": "Nombre"
+}

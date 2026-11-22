@@ -15,7 +15,8 @@ from typing import Any
 from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 
-from core.agents.spec import DEFAULT_SPEC, load_active_spec, save_spec_if_changed
+from core.agents import defaults_negocio
+from core.agents.spec import load_active_spec, save_spec_if_changed
 from core.db.models import AppSettings, Tenant
 from core.db.session import get_session
 from core.presets import PresetError, PresetManifest, load_fragment, load_preset
@@ -125,12 +126,31 @@ async def _actualizar_spec(manifest: PresetManifest, habilitados: list[str], ten
     for ref in _playbook_refs(habilitados, manifest.playbooks):
         if ref["name"] not in existentes:
             data["playbooks"].append(ref)
-    defaults = DEFAULT_SPEC["persona"]
-    for clave, valor in manifest.persona.model_dump(exclude_none=True).items():
-        # Solo si el negocio no lo cambió (sigue en el default del spec).
-        if data["persona"].get(clave) == defaults.get(clave):
-            data["persona"][clave] = valor
     return await save_spec_if_changed(spec, data, tenant_id)
+
+
+async def _actualizar_persona(manifest: PresetManifest, tenant_id: uuid.UUID) -> None:
+    """La persona del preset va a los valores por defecto de los agentes del negocio (`agent_defaults`, ADR-0206 §6),
+    clave por clave y solo si el negocio no la cambió (sigue en el por defecto)."""
+    del_preset = manifest.persona.model_dump(exclude_none=True)
+    if not del_preset:
+        return
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                select(AppSettings)
+                .where(AppSettings.tenant_id == tenant_id, AppSettings.deleted_at.is_(None))
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if fila is None:
+            fila = AppSettings(tenant_id=tenant_id)
+            session.add(fila)
+        actual = defaults_negocio.desde_dict(fila.agent_defaults).persona
+        por_defecto = defaults_negocio.POR_DEFECTO.persona
+        cambios = {k: v for k, v in del_preset.items() if getattr(actual, k) == getattr(por_defecto, k)}
+        if cambios:
+            defaults_negocio.escribir(fila, {"persona": cambios})
 
 
 async def _actualizar_app_settings(manifest: PresetManifest, tenant_id: uuid.UUID) -> None:
@@ -221,6 +241,7 @@ async def apply_preset(tenant_id: uuid.UUID, preset_id: str, *, sembrar_ejemplos
                 resultado.pasos.append(f"{pack_id} pendiente de configurar ({detalle})")
 
         resultado.spec_version = await _actualizar_spec(manifest, resultado.habilitados, tenant_id)
+        await _actualizar_persona(manifest, tenant_id)
         await _actualizar_app_settings(manifest, tenant_id)
         if manifest.proveedor_suscripciones in resultado.habilitados:
             from core.subscriptions import guardar_proveedor

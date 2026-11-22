@@ -1,8 +1,9 @@
 """Configuración avanzada del agente (memoria, herramientas y horario).
 
-Fuente única del panel SSR y la API (ADR-0076/0077). Todo se persiste como una
+Fuente única del panel SSR y la API (ADR-0076/0077). Las herramientas se persisten como una
 versión nueva del `AgentSpec` (versionable, ADR-0050/0051/0052) reusando
-`core.agents.spec.save_spec_if_changed`.
+`core.agents.spec.save_spec_if_changed`; la memoria es un valor por defecto de los agentes del
+negocio y vive en `app_settings.agent_defaults` (ADR-0206 §6, `core.agents.defaults_negocio`).
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ import re
 import uuid
 from typing import Any
 
+from core.agents import defaults_negocio
+from core.agents.defaults_negocio import DefaultsDelNegocio
 from core.agents.spec import enabled_packs, load_active_spec, save_spec_if_changed
 from core.mcp.host import mcp_host
 
@@ -55,14 +58,13 @@ def validate_business_ranges(ranges: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 # ------------------------------------------------------------------ memoria
-def read_memory(spec) -> dict[str, Any]:  # type: ignore[no-untyped-def]
-    data = spec.model_dump(mode="json")
-    memory = data.get("memory") or {}
-    rag = memory.get("rag") or {}
+def read_memory(defaults: DefaultsDelNegocio) -> dict[str, Any]:
+    """Memoria de los valores por defecto del negocio. Sin RAG: top-k 0 y la similitud por defecto."""
+    rag = defaults.memory.rag
     return {
-        "short_term_turns": int(memory.get("shortTermTurns", 30) or 30),
-        "rag_top_k": int(rag.get("topK", 0) or 0),
-        "rag_min_score": float(rag.get("minScore", 0.6) or 0.0),
+        "short_term_turns": defaults.memory.shortTermTurns,
+        "rag_top_k": rag.topK if rag is not None else 0,
+        "rag_min_score": float(rag.minScore) if rag is not None else 0.6,
     }
 
 
@@ -72,19 +74,18 @@ async def save_memory(
     short_term_turns: int,
     rag_top_k: int,
     rag_min_score: float,
-) -> str | None:
-    spec = await load_active_spec()
-    data = spec.model_dump(mode="json")
-    data["memory"]["shortTermTurns"] = max(1, min(200, short_term_turns))
-    if rag_top_k and rag_top_k > 0:
-        data["memory"]["rag"] = {
-            "topK": max(1, min(20, rag_top_k)),
-            "minScore": max(0.0, min(1.0, rag_min_score)),
-        }
-    else:
-        data["memory"]["rag"] = None
-    await save_spec_if_changed(spec, data, tenant_id)
-    return None
+) -> DefaultsDelNegocio | None:
+    """Guarda la memoria en `agent_defaults` (merge: el resto de los valores no cambia). Sin negocio no hace nada."""
+    if tenant_id is None:
+        return None
+    rag = (
+        {"topK": max(1, min(20, rag_top_k)), "minScore": max(0.0, min(1.0, rag_min_score))}
+        if rag_top_k and rag_top_k > 0
+        else None
+    )
+    return await defaults_negocio.guardar(
+        tenant_id, {"memory": {"shortTermTurns": max(1, min(200, short_term_turns)), "rag": rag}}
+    )
 
 
 # ------------------------------------------------------------------ habilidades (tools)

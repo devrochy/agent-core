@@ -534,7 +534,7 @@ VOZ = [
         explicacion="Cómo suena el asistente: más formal o más cercano al hablar con tus clientes.",
         valores=VALORES_TONO,
         por_defecto=_PERSONA_POR_DEFECTO["tone"],
-        almacen="spec:persona.tone",
+        almacen="agent_defaults:persona.tone",
     ),
     Opcion(
         clave="persona_warmth",
@@ -545,7 +545,7 @@ VOZ = [
         minimo=rango("persona_warmth").minimo,
         maximo=rango("persona_warmth").maximo,
         por_defecto=_PERSONA_POR_DEFECTO["warmth"],
-        almacen="spec:persona.warmth",
+        almacen="agent_defaults:persona.warmth",
     ),
     Opcion(
         clave="persona_emojis",
@@ -555,7 +555,7 @@ VOZ = [
         explicacion="Con qué frecuencia usa emojis en sus respuestas.",
         valores=VALORES_EMOJIS,
         por_defecto=_PERSONA_POR_DEFECTO["emojis"],
-        almacen="spec:persona.emojis",
+        almacen="agent_defaults:persona.emojis",
     ),
     Opcion(
         clave="persona_max_length",
@@ -567,7 +567,7 @@ VOZ = [
         minimo=rango("persona_max_length").minimo,
         maximo=rango("persona_max_length").maximo,
         por_defecto=_PERSONA_POR_DEFECTO["maxLength"],
-        almacen="spec:persona.maxLength",
+        almacen="agent_defaults:persona.maxLength",
     ),
     Opcion(
         clave="persona_forbidden",
@@ -577,7 +577,7 @@ VOZ = [
         explicacion="Frases que el asistente nunca debe decir.",
         ejemplo="garantizado, sin falta",
         por_defecto=list(_PERSONA_POR_DEFECTO["forbiddenPhrases"]),
-        almacen="spec:persona.forbiddenPhrases",
+        almacen="agent_defaults:persona.forbiddenPhrases",
     ),
 ]
 
@@ -852,7 +852,7 @@ CEREBRO = [
             "las respuestas."
         ),
         por_defecto=_MODELO_POR_DEFECTO["primary"],
-        almacen="spec:model.primary",
+        almacen="agent_defaults:model.primary",
     ),
     Opcion(
         clave="model_router",
@@ -861,7 +861,7 @@ CEREBRO = [
         etiqueta="Modelo para turnos complejos",
         explicacion="Modelo que se usa en los turnos difíciles que no necesitan herramientas. Vacío, usa el principal.",
         por_defecto="",
-        almacen="spec:model.router",
+        almacen="agent_defaults:model.router",
     ),
     Opcion(
         clave="model_fallback",
@@ -870,7 +870,7 @@ CEREBRO = [
         etiqueta="Modelo de respaldo",
         explicacion="Se usa si el modelo principal falla. Vacío, no hay respaldo y el cliente recibe un aviso.",
         por_defecto="",
-        almacen="spec:model.fallback",
+        almacen="agent_defaults:model.fallback",
     ),
     Opcion(
         clave="model_temperature",
@@ -884,7 +884,7 @@ CEREBRO = [
         minimo=TEMPERATURA[0],
         maximo=TEMPERATURA[1],
         por_defecto=_MODELO_POR_DEFECTO["temperature"],
-        almacen="spec:model.temperature",
+        almacen="agent_defaults:model.temperature",
     ),
     Opcion(
         clave="policy_max_tool_calls",
@@ -898,7 +898,7 @@ CEREBRO = [
         minimo=rango("policy_max_tool_calls").minimo,
         maximo=rango("policy_max_tool_calls").maximo,
         por_defecto=_POLITICAS_POR_DEFECTO["maxToolCallsPerTurn"],
-        almacen="spec:policies.maxToolCallsPerTurn",
+        almacen="agent_defaults:policies.maxToolCallsPerTurn",
     ),
     Opcion(
         clave="policy_budget",
@@ -910,7 +910,7 @@ CEREBRO = [
         minimo=PRESUPUESTO_USD[0],
         maximo=PRESUPUESTO_USD[1],
         por_defecto=_POLITICAS_POR_DEFECTO["budgetUsdPerConversation"],
-        almacen="spec:policies.budgetUsdPerConversation",
+        almacen="agent_defaults:policies.budgetUsdPerConversation",
     ),
 ]
 
@@ -925,7 +925,7 @@ MEMORIA = [
         minimo=rango("short_term_turns").minimo,
         maximo=rango("short_term_turns").maximo,
         por_defecto=_MEMORIA_POR_DEFECTO["shortTermTurns"],
-        almacen="spec:memory.shortTermTurns",
+        almacen="agent_defaults:memory.shortTermTurns",
     ),
     Opcion(
         clave="rag_top_k",
@@ -939,7 +939,7 @@ MEMORIA = [
         minimo=rango("rag_top_k").minimo,
         maximo=rango("rag_top_k").maximo,
         por_defecto=0,
-        almacen="spec:memory.rag.topK",
+        almacen="agent_defaults:memory.rag.topK",
     ),
     Opcion(
         clave="rag_min_score",
@@ -953,7 +953,7 @@ MEMORIA = [
         minimo=SIMILITUD_RAG[0],
         maximo=SIMILITUD_RAG[1],
         por_defecto=SIMILITUD_RAG_POR_DEFECTO,
-        almacen="spec:memory.rag.minScore",
+        almacen="agent_defaults:memory.rag.minScore",
     ),
 ]
 
