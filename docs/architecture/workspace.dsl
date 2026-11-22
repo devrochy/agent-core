@@ -3,7 +3,7 @@
 // Estado leído de origin/develop el 2026-11-08. Los comentarios citan la evidencia.
 //
 // Quedan fuera a propósito:
-// - Stubs sin código: apps/{agentos,gateway,worker}, packages/{core-crm,core-runtime,channel-whatsapp}, plugins/.
+// - Sin código: plugins/ (heredado). Los stubs apps/* y packages/{core-crm,core-runtime,channel-whatsapp} se borraron en HU-AOS-91.
 // - GitHub y GHCR: solo intervienen en CI (.github/workflows/ci-postgres-image.yml), no en ejecución.
 //
 // Preguntas abiertas:

@@ -33,8 +33,8 @@ difícil de revertir.
 - `packages/contracts` (`agentcore_contracts`): tipos pydantic congelados; cambiarlos
   exige ADR.
 - `cli/`: comando `agent-core` (Typer).
-- **Sin código nuevo** en `apps/*`, `packages/{core-crm,core-runtime,channel-whatsapp}`
-  (stubs, HU-REP-01) ni en `plugins/` (heredado).
+- **Sin código nuevo** en `plugins/` (heredado). Los stubs `apps/*` y
+  `packages/{core-crm,core-runtime,channel-whatsapp}` se borraron en HU-AOS-91 (ADR-0206 §10).
 - `core/admin/templates/` (panel SSR) está en retiro (ADR-0076): las vistas nuevas van al
   repo `solvershub-panel` y consumen `/api/v1`.
 

@@ -57,12 +57,11 @@ packages/contracts     tipos compartidos (pydantic), congelados, sin dependencia
 packages/pack-*        verticales instalables (pack-commerce, pack-calendar)
 plugins/               heredado del monolith (migrando a packages/pack-*)
 tenants/               artefactos por tenant, GITIGNORED (catalog.json · docs/ · evals/)
-apps/                  stubs del plan original (hogares futuros: gateway/panel/worker)
 ```
 
-Los stubs de `apps/*` y de los packages `core-crm`, `core-runtime`, `channel-whatsapp`
-son residuos del plan; no hay que escribir código nuevo ahí: el código nuevo vive en
-`core/` (runtime) o en `packages/pack-*` (verticales).
+El código nuevo vive en `core/` (runtime), en `packages/pack-*` (verticales) o en
+`packages/channel-*` (canales). Los stubs del plan original (`apps/*`, `core-crm`,
+`core-runtime`, `channel-whatsapp`) se borraron en HU-AOS-91 (ADR-0206 §10).
 
 El panel deja de ser SSR (ADR-0076): la UI vive en `panel-web/` (Next.js + shadcn/ui)
 y consume `/api/v1` (ADR-0077) con tipos TS generados del OpenAPI. Las plantillas de
