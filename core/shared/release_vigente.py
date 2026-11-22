@@ -38,7 +38,7 @@ CAMPOS_DE_PROMPT = ("assistant_name", "business_description", "language", "brand
 class AgenteCongelado:
     """Un componente de la release: la instancia y la versión exacta de su agente, con el
     contenido congelado de la versión (`agentspec/3` o `kernelspec/1`). Datos planos: este
-    módulo es hoja y no importa los contratos; `core/agents/spec_de_release.py` los valida."""
+    módulo es hoja y no importa los contratos; `core/agents/turno.py` los valida."""
 
     instance_id: uuid.UUID
     agent_id: uuid.UUID

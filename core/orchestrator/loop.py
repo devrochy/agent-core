@@ -28,8 +28,8 @@ from core.agents.compiler import aviso_no_disponible
 from core.agents.flow import confirmed_actions_v2, render_flow, resolve_flow
 from core.agents.horario_agente import con_horario_del_agente
 from core.agents.responses import load_response
-from core.agents.spec import enabled_packs, load_active_spec
-from core.agents.spec_de_release import spec_del_turno
+from core.agents.spec import enabled_packs
+from core.agents.turno import del_turno
 from core.config import get_settings
 from core.config_limites import leer_entero
 from core.datos_cliente.ajustes import herramientas_activas as datos_del_cliente_activos
@@ -327,10 +327,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     if customer is None or await conversacion_bloqueada(conversation, customer):
         return None
 
-    # ---------------- 0. AgentSpec del tenant (Sprint 2, ADR-0014)
-    spec = await load_active_spec()
-    # Release del turno, sticky por episodio (ADR-0117 §4). El turno (HU-AOS-15) ejecuta la versión congelada del especialista en foco y el
-    # KernelSpec de la release, en la forma v2 que lee este loop; sin release, el mismo v2.
+    # ---------------- 0. Release del turno, sticky por episodio (ADR-0117 §4). El turno ejecuta la versión congelada
+    # del agente en foco y el KernelSpec de la release sobre `AgentSpecV3` (ADR-0206 §1, HU-AOS-90).
     asignacion = await fijar_release_del_turno(conversation, texto=latest_message)  # texto: router de HU-AOS-17
     # Lead base (ADR-0205 §7): en toda conversación real, antes de los cortes por pausa, cuota o presupuesto, y
     # sin depender de que el foco tenga Captar leads. El aviso al dueño sí depende del foco (§9).
@@ -346,11 +344,15 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         # `release_missing`; la release 1 llega al alta de la conexión.
         log.warning("turno_sin_release", conversation_id=str(conversation.id))
         return None
-    # Lo compilado del agente en foco, una vez por versión (HU-AOS-35, adenda de ADR-0117): la
-    # vista v2, el flujo de la release y los bloques fijos del prompt. None sin release o
-    # si no se pudo compilar de forma determinista: el turno se arma como siempre.
+    # Lo compilado del agente en foco, una vez por versión (HU-AOS-35, adenda de ADR-0117): el
+    # agente del turno, el flujo de la release y los bloques fijos del prompt. None si no se pudo
+    # compilar de forma determinista: el turno se arma como siempre.
     compilado = await _compilado_del_turno()
-    spec = compilado.spec() if compilado is not None else spec_del_turno(spec)
+    spec = compilado.spec() if compilado is not None else del_turno()
+    if spec is None:
+        # La ranura no tiene agente en foco (otro negocio o sin release): falla cerrado, sin respuesta.
+        log.warning("turno_sin_agente_en_foco", conversation_id=str(conversation.id))
+        return None
 
     # Cuota del período (ADR-0045) y presupuesto agotado (ADR-0015): políticas del kernel.
     bloqueo = await politicas_del_turno(conversation, spec)
@@ -834,8 +836,8 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
                     retry_instruction=await instruccion_correctiva(spec, veredicto),
                 )
             else:
-                # Reglas declarativas del tenant (ADR-0051): `spec.extensions["guardrails"]`.
-                custom_rules = (spec.extensions or {}).get("guardrails") if spec.extensions else None
+                # Reglas del agente (ADR-0051), tipadas en `AgentSpecV3.guardrails` (ADR-0206 §1).
+                custom_rules = spec.guardrails or None
                 verdict = await run_guardrails(
                     borrador,
                     [*history_tool_results, *all_tool_results],
@@ -1102,18 +1104,14 @@ def _ejecutor_de_consulta(conversation: Conversation, customer: Customer):  # ty
     """Consultas entre agentes (HU-AOS-19, adenda de ADR-0116 §5): la acción corre con el spec, el
     binding y la identidad del agente que responde, sin escribir memoria, con auditoría y una
     clave idempotente. Una acción que pide confirmación en su binding no se ejecuta."""
-    from core.agents.spec_de_release import spec_v2_desde_release
+    from core.agents.turno import agente_del_turno
 
     async def ejecutar(destino: AgenteCongelado, nombre: str, args: dict[str, Any], clave: str) -> dict[str, Any]:
         actual = release_vigente.vigente()
         if actual is None:
             return {"error": "consulta_sin_release"}
-        spec = spec_v2_desde_release(
-            destino,
-            release_vigente.kernel_del_turno(),
-            tenant_id=actual.tenant_id,
-            skills=actual.skills,
-            tenant_plugins=actual.tenant_plugins,
+        spec = agente_del_turno(
+            destino, release_vigente.kernel_del_turno(), skills=actual.skills, tenant_plugins=actual.tenant_plugins
         )
         if _requiere_confirmacion(spec, nombre):
             return {"error": "consulta_requiere_confirmacion"}

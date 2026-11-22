@@ -120,10 +120,10 @@ def _habilitar(pack_de_prueba: Any, monkeypatch) -> None:  # type: ignore[no-unt
     # El pack de prueba no existe en el binario, así que ninguna release puede concederlo: estos
     # Gherkin miden la mecánica del motor y corren el turno sin release (como antes del ruteo por
     # conexión siempre, ADR-0191). La concesión por release la cubren los tests de HU-ARCH-34.
-    async def _sin_release(*_a: Any, **_k: Any) -> None:
-        return None
+    # Desde HU-AOS-90 el turno no lee `agent_specs`: el agente del turno se arma desde el negocio.
+    from _turno_sin_release import instalar
 
-    monkeypatch.setattr("core.orchestrator.loop.fijar_release_del_turno", _sin_release)
+    instalar(monkeypatch)
     LLAMADAS.clear()
 
 
@@ -260,21 +260,21 @@ async def test_etapa_normal_no_cambia_el_modelo(negocio: uuid.UUID, monkeypatch)
 
 
 async def test_reintento_del_verificador_usa_el_respaldo(negocio: uuid.UUID, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from _turno_sin_release import instalar
+
     from core.orchestrator import loop
     from core.orchestrator.verificador.verificador import Veredicto
 
-    original = loop.load_active_spec
-
-    async def spec_con_respaldo() -> Any:
-        spec = await original()
+    def con_respaldo(spec: Any) -> Any:
         return spec.model_copy(update={"model": spec.model.model_copy(update={"fallback": "deepseek-v4-pro"})})
+
+    instalar(monkeypatch, con_respaldo)
 
     veredictos = iter([Veredicto(texto="x", passed=False, motivo="monto_sin_evidencia")])
 
     def verificar(borrador: str, *a: Any, **k: Any) -> Veredicto:
         return next(veredictos, Veredicto(texto=borrador))
 
-    monkeypatch.setattr(loop, "load_active_spec", spec_con_respaldo)
     monkeypatch.setattr(loop, "verificar_seguro", verificar)
     conv = await _conversacion(negocio, "hola")
     base = _Guion(["El total es $999.999."])

@@ -178,8 +178,7 @@ async def politicas_de_entrada(
     (la respuesta fija y el escalamiento, si los hay, ya se hicieron); `False` = sigue al
     despacho. El inbound ya está guardado: el historial queda completo aunque se bloquee."""
     # Imports en la llamada: los tests parchean `core.gateway.sender.send_to_conversation`,
-    # `core.orchestrator.escalation.escalate` y `core.agents.spec.load_active_spec`.
-    from core.agents.spec import load_active_spec
+    # `core.orchestrator.escalation.escalate`. El texto de escalamiento sale de `respuestas` (ADR-0206 §4).
     from core.gateway.sender import send_to_conversation
     from core.orchestrator.escalation import escalate
 
@@ -219,12 +218,12 @@ async def politicas_de_entrada(
         # está guardado y lo vería como duplicado), así que nada opcional puede ir antes.
         await bloquear(conversation, "escalation_keyword", status="escalated")
         await _escalar_por_palabra(conversation.id, mensaje[:200])
-        # El texto es opcional: si el spec no carga (p. ej. BD caída), va el fijo.
-        # `load_active_spec()` sin tenant explícito resuelve el de la
-        # conversación en curso vía el `tenant_scope` que el consumer ya abrió.
+        # El texto es opcional: si el playbook no carga, va el fijo. Corre antes de fijar la release: el texto sale de
+        # `respuestas` (con el override del negocio del `tenant_scope`), no de `agent_specs` (ADR-0206 §4).
         try:
-            spec = await load_active_spec()
-            escalation_text = await load_response(spec, "escalation") or ESCALATION_REPLY
+            from core.agents.turno import SoloRespuestas
+
+            escalation_text = await load_response(SoloRespuestas(), "escalation") or ESCALATION_REPLY
         except Exception as exc:
             log.warning(
                 "escalation_text_fallback",

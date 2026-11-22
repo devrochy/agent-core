@@ -1,6 +1,6 @@
 """Lo compilado de una release por agente (HU-AOS-35, adenda de ADR-0117 §7).
 
-Las versiones son inmutables: la vista v2 del agente en foco, el flujo de la release y los bloques
+Las versiones son inmutables: el agente del turno (`AgenteDelTurno`, ADR-0206 §1), el flujo de la release y los bloques
 fijos del prompt se arman UNA vez por `(tenant_id, release_id, agent_version_id)` y se guardan en
 `ReleaseCongelada` (`core/releases/cargar.py`), que ya tiene tope de bytes, evicción y la guarda de
 `tenant_scope`. Aquí solo vive la función que compila: pura respecto del turno (recibe todo por
@@ -27,9 +27,8 @@ from typing import TYPE_CHECKING, Any
 from core.shared.logger import get_logger
 
 if TYPE_CHECKING:
-    from agentcore_contracts import AgentSpec
-
     from core.agents.flow import ResolvedFlow
+    from core.agents.turno import AgenteDelTurno
     from core.shared.release_vigente import AgenteCongelado
 
 log = get_logger(__name__)
@@ -47,19 +46,23 @@ class Compilado:
     """Lo compilado de un agente de una release. `bloques_fijos` es el prefijo del prompt (sin el
     bloque dinámico) y `flujo` el de la release completa (None si no declara flujo)."""
 
-    _spec: AgentSpec
+    _spec: AgenteDelTurno
     flujo: ResolvedFlow | None
     flow_summary: str
     bloques_fijos: tuple[str, ...]
     bytes: int
 
-    def spec(self) -> AgentSpec:
-        """Copia de la vista: lo compilado es de todos los turnos de la release y nadie debe
+    def spec(self) -> AgenteDelTurno:
+        """Copia del agente del turno: lo compilado es de todos los turnos de la release y nadie debe
         mutarlo (mismo criterio que las copias de `cargar.py`)."""
-        return self._spec.model_copy(deep=True)
+        import dataclasses
+
+        return dataclasses.replace(
+            self._spec, v3=self._spec.v3.model_copy(deep=True), kernel=self._spec.kernel.model_copy(deep=True)
+        )
 
 
-def herramientas_estaticas(spec: AgentSpec) -> set[str]:
+def herramientas_estaticas(spec: Any) -> set[str]:
     """Las herramientas que la release habilita, sin filtros del turno: las acciones del binario
     de los packs habilitados (el core incluido) más las declarativas de la versión."""
     from core.agents.spec import enabled_packs
@@ -89,7 +92,7 @@ async def compilar(
     determinista."""
     from core.agents.flow import ErrorDeLecturaDeFlujo, render_flow, resolve_flow
     from core.agents.playbooks import ErrorDeLectura
-    from core.agents.spec_de_release import spec_v2_desde_release
+    from core.agents.turno import agente_del_turno
     from core.llm.prompt_builder import PromptContext, bloques_fijos
     from core.shared.release_vigente import CAMPOS_DE_PROMPT
 
@@ -97,10 +100,8 @@ async def compilar(
     if faltan:
         raise ErrorDeCompilacion(f"la release no congela {faltan}")
     try:
-        spec = spec_v2_desde_release(
-            foco, kernel, tenant_id=tenant_id, skills=tuple(skills), tenant_plugins=tuple(tenant_plugins)
-        )
-    except Exception as exc:  # la vista no valida: el turno sigue como siempre (y loggea allí)
+        spec = agente_del_turno(foco, kernel, skills=tuple(skills), tenant_plugins=tuple(tenant_plugins))
+    except Exception as exc:  # no valida el contrato: el turno sigue como siempre (y loggea allí)
         raise ErrorDeCompilacion("vista inválida") from exc
     try:
         flujo = await resolve_flow(
@@ -127,7 +128,7 @@ async def compilar(
         bloques = await bloques_fijos(spec, ctx, tenant_slug="", overrides=playbooks, estricto=True)
     except (ErrorDeLectura, ErrorDeLecturaDeFlujo) as exc:
         raise ErrorDeCompilacion("error de lectura") from exc
-    tamano = sum(len(b.encode("utf-8")) for b in bloques) + len(spec.model_dump_json().encode("utf-8"))
+    tamano = sum(len(b.encode("utf-8")) for b in bloques) + spec.tamano_en_bytes()
     return Compilado(
         _spec=spec, flujo=flujo, flow_summary=flow_summary, bloques_fijos=tuple(bloques), bytes=tamano
     )

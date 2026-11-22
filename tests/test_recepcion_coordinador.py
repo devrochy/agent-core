@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 
 from agentcore_contracts import AgentSpec, AgentSpecV3
-from test_spec_de_release import v2_completo
+from test_agente_del_turno import v2_completo
 
 from core.agents.base import kernel_del_negocio
 from core.agents.claves import KEY_COORDINADOR
@@ -21,7 +21,7 @@ from core.agents.recepcion import (
     es_vista_de_recepcion,
     vista_de_recepcion,
 )
-from core.agents.spec_de_release import spec_v2_desde_release
+from core.agents.turno import agente_del_turno
 from core.shared.release_vigente import AgenteCongelado
 
 T = uuid.UUID("11111111-1111-1111-1111-111111111111")
@@ -61,12 +61,12 @@ def test_un_especialista_no_se_convierte_en_vista() -> None:
     assert vista_de_recepcion(especialista, modelo="x") is especialista
 
 
-def test_la_vista_v2_no_tiene_packs_y_se_anota_como_recepcion() -> None:
+def test_el_agente_del_turno_de_recepcion_no_tiene_packs_y_se_anota_aparte() -> None:
     coordinador = _coordinador()
     vista = vista_de_recepcion(coordinador, modelo="deepseek-flash")
-    spec = spec_v2_desde_release(vista, coordinador, tenant_id=T, skills=("pack_commerce",), tenant_plugins=())
+    spec = agente_del_turno(vista, coordinador, skills=("pack_commerce",), tenant_plugins=())
     assert spec.version == f"coordinador@recepcion:{coordinador.version}"
-    assert spec.packs == []
+    assert spec.packs == () and spec.recepcion
     assert {t.tool for t in spec.tools if t.enabled} == set(TOOLS_RECEPCION)
     assert [p.name for p in spec.playbooks] == ["respuestas"]
 
@@ -76,9 +76,7 @@ async def test_el_prompt_lleva_el_playbook_de_recepcion_y_no_el_de_captar_leads(
     from core.llm.prompt_builder import PromptContext, bloques_fijos
 
     coordinador = _coordinador()
-    spec = spec_v2_desde_release(
-        vista_de_recepcion(coordinador, modelo="m"), coordinador, tenant_id=T, skills=(), tenant_plugins=()
-    )
+    spec = agente_del_turno(vista_de_recepcion(coordinador, modelo="m"), coordinador, skills=(), tenant_plugins=())
     bloques = await bloques_fijos(spec, PromptContext(assistant_name="Ana", business_description="Tienda"), tenant_slug=None)
     recepcion = load_core_playbook("recepcion-coordinador").strip()
     assert recepcion in bloques

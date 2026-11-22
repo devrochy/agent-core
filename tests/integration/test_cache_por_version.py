@@ -236,7 +236,7 @@ async def test_lo_compilado_se_entrega_como_copia(negocios) -> None:  # type: ig
         compilado = await release.compilado(release.foco())
     assert compilado is not None
     copia = compilado.spec()
-    copia.persona.maxLength = 1
+    copia.v3.persona.maxLength = 1  # el agente del turno es inmutable; su `AgentSpecV3` es una copia
     assert compilado.spec().persona.maxLength != 1
 
 
@@ -307,7 +307,7 @@ async def test_dos_agentes_con_el_mismo_contenido_compilan_vistas_distintas(nego
             uno = await release.compilado(foco)
             dos = await release.compilado(gemelo)
         assert uno is not None and dos is not None and uno is not dos
-        assert uno.spec().id != dos.spec().id and dos.spec().id == "gemelo"
+        assert uno.spec().agente.key != dos.spec().agente.key and dos.spec().agente.key == "gemelo"
     finally:
         release.componentes = tuple(c for c in release.componentes if c is not gemelo)
         release._compilados.pop(gemelo.version_id, None)

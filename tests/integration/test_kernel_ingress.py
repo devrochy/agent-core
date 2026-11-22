@@ -395,10 +395,10 @@ async def _conversacion_de(tid: uuid.UUID, cliente: str) -> uuid.UUID:
     return filas[0]["id"]
 
 
-async def test_palabra_de_escalamiento_escala_aunque_no_cargue_el_spec(monkeypatch) -> None:
-    """Antes, si `load_active_spec` fallaba quedaba la decisión `escalated` sin escalamiento:
-    el reintento del consumer ve el inbound como duplicado y no lo rehace. Ahora escala y
-    responde el texto fijo."""
+async def test_palabra_de_escalamiento_escala_aunque_no_cargue_el_texto(monkeypatch) -> None:
+    """Antes, si fallaba cargar el texto quedaba la decisión `escalated` sin escalamiento: el reintento del consumer
+    ve el inbound como duplicado y no lo rehace. Ahora escala y responde el texto fijo. Desde ADR-0206 §4 el texto
+    sale del playbook `respuestas` (no de `agent_specs`)."""
     from core.orchestrator.escalation import ESCALATION_REPLY
 
     tid = await _negocio(escalation_config={"keywords": ["quiero un humano"]})
@@ -408,7 +408,7 @@ async def test_palabra_de_escalamiento_escala_aunque_no_cargue_el_spec(monkeypat
     async def _spec_caido(*_a: Any, **_k: Any) -> Any:
         raise ConnectionError("BD caída")
 
-    monkeypatch.setattr("core.agents.spec.load_active_spec", _spec_caido)
+    monkeypatch.setattr("core.agents.playbooks.load_playbook", _spec_caido)
 
     conv = await _entrar(tid, uniq("wa-kws"), "quiero un humano")
 
