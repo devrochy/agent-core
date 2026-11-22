@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agentcore_contracts import AgentSpec, Procedure, ToolBinding, __version__
+from agentcore_contracts import Procedure, __version__
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -29,6 +29,7 @@ from core.agents.flow import (
     flow_to_procedures,
     resolve_flow,
 )
+from core.agents.turno import AgenteDelTurno, agente_desde_defaults
 from core.kernel.procedures import (
     ActionInfo,
     Issue,
@@ -70,7 +71,7 @@ def codes(issues: list[Issue]) -> list[str]:
 
 # ------------------------------------------------------------------ contrato
 def test_version_del_paquete_y_export() -> None:
-    assert __version__ == "3.2.0"
+    assert __version__ == "4.0.0"
     assert Procedure.model_fields["contract"].default == "procedure/1"
 
 
@@ -367,24 +368,23 @@ def test_catalogo_es_del_binario_sin_negocio(modulos, monkeypatch: pytest.Monkey
 
 
 # ------------------------------------------------------------------ conversión
-def _spec(packs: list[str]) -> AgentSpec:
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={
-            "role": "asistente",
-            "tone": "cercano",
-            "warmth": 3,
-            "emojis": "sparse",
-            "maxLength": 500,
-            "forbiddenPhrases": [],
+def _spec(packs: list[str], tools: list[dict[str, Any]] | None = None) -> AgenteDelTurno:
+    return agente_desde_defaults(
+        {
+            "persona": {
+                "role": "asistente",
+                "tone": "cercano",
+                "warmth": 3,
+                "emojis": "sparse",
+                "maxLength": 500,
+                "forbiddenPhrases": [],
+            },
+            "model": {"primary": "deepseek-flash"},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": [],
+            "tools": tools or [],
+            "policies": {"maxToolCallsPerTurn": 10},
         },
-        model={"primary": "deepseek-flash"},
-        memory={"shortTermTurns": 30},
-        playbooks=[],
-        tools=[],
-        policies={"maxToolCallsPerTurn": 10},
         packs=packs,
     )
 
@@ -441,11 +441,13 @@ async def test_conversion_hereda_la_confirmacion_del_binding_v2(
     el linter la acepta como confirmación, así marcar una acción irreversible no obliga a
     cambiar la conducta al convertir."""
     monkeypatch.setattr(flow_mod, "load_tenant_flow", lambda slug: None)
-    spec = _spec(["pack_commerce", "pack_payments"])
-    spec.tools = [
-        ToolBinding(tool="crear_pedido", enabled=True, requiresConfirmation=True),
-        ToolBinding(tool="agregar_item_pedido", enabled=False, requiresConfirmation=True),
-    ]
+    spec = _spec(
+        ["pack_commerce", "pack_payments"],
+        tools=[
+            {"tool": "crear_pedido", "enabled": True, "requiresConfirmation": True},
+            {"tool": "agregar_item_pedido", "enabled": False, "requiresConfirmation": True},
+        ],
+    )
     flow = await resolve_flow(spec, slug="acme", available=set(catalogo))
     assert flow is not None
     con_irreversible = dict(catalogo)

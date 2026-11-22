@@ -15,7 +15,6 @@ from typing import Any
 
 import pytest
 from agentcore_contracts import (
-    AgentSpec,
     AgentSpecV3,
     KernelSpec,
     SecretRef,
@@ -47,12 +46,14 @@ def codes(issues: list[Any]) -> list[str]:
 
 # ------------------------------------------------------------------ paquete
 def test_major_3_y_sin_espejo_ts() -> None:
-    # 3.1.0: `knowledge` opcional (ADR-0145, adenda de ADR-0113 del 2026-10-20).
-    assert __version__ == "3.2.0"
+    # 3.1.0: `knowledge` opcional (ADR-0145, adenda de ADR-0113 del 2026-10-20). 4.0.0: sin el v2 (ADR-0206 §8).
+    assert __version__ == "4.0.0"
     assert not (REPO / "packages" / "contracts" / "src").exists()
     assert not (REPO / "packages" / "contracts" / "package.json").exists()
-    # `AgentSpec` sigue siendo el v2: lo leen el loop legacy, los presets y el alta.
-    assert {"packs", "extensions", "tenantId"} <= set(AgentSpec.model_fields)
+    # 4.0.0: el `AgentSpec` v2 salió del paquete (ADR-0206 §8); el agente es `AgentSpecV3`.
+    import agentcore_contracts
+
+    assert not hasattr(agentcore_contracts, "AgentSpec")
     assert AgentSpecV3.model_fields["contract"].default == "agentspec/3"
     assert KernelSpec.model_fields["contract"].default == "kernelspec/1"
 

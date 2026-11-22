@@ -1,15 +1,20 @@
-"""Tests del AgentSpec desde BD y playbooks (Sprint 2, ADR-0014).
+"""Tests del prompt y los playbooks del agente del turno (Sprint 2, ADR-0014).
 
-Unit tests sin BD: el ensamblador y el loader reciben un `AgentSpec` construido,
-no tocan la base de datos.
+Unit tests sin BD: el ensamblador y el loader reciben el agente del turno (`AgenteDelTurno`) armado con
+`agente_desde_defaults`, como el de una release; no tocan la base de datos. Antes usaban el `AgentSpec` v2, que salió
+de los contratos en 4.0.0 (ADR-0206 §8).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import pytest
-from agentcore_contracts import AgentSpec
+from pydantic import ValidationError
 
 from core.agents.playbooks import load_playbook
+from core.agents.turno import AgenteDelTurno, agente_desde_defaults
 from core.llm.prompt_builder import PromptContext, build_system_blocks
 
 DEFAULT_PLAYBOOKS = [
@@ -19,28 +24,40 @@ DEFAULT_PLAYBOOKS = [
 ]
 
 
-def make_spec(playbooks: list[dict[str, str]] | None = None) -> AgentSpec:
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={
-            "role": "asistente",
-            "tone": "cercano",
-            "warmth": 3,
-            "emojis": "sparse",
-            "maxLength": 500,
-            "forbiddenPhrases": [],
-        },
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30},
-        playbooks=playbooks if playbooks is not None else DEFAULT_PLAYBOOKS,
-        tools=[],
-        policies={
-            "maxToolCallsPerTurn": 10,
-        },
-        packs=[],
+PERSONA: dict[str, Any] = {
+    "role": "asistente",
+    "tone": "cercano",
+    "warmth": 3,
+    "emojis": "sparse",
+    "maxLength": 500,
+    "forbiddenPhrases": [],
+}
+
+
+def make_spec(playbooks: list[dict[str, str]] | None = None, **persona: Any) -> AgenteDelTurno:
+    """El agente del turno con los playbooks dados (explícitos: los por defecto agregan `respuestas`) y la persona
+    con los cambios de `persona` (el agente es frozen: cada variante se arma de nuevo)."""
+    return agente_desde_defaults(
+        {
+            "persona": {**PERSONA, **persona},
+            "model": {"primary": "deepseek-flash", "temperature": 0.3},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": playbooks if playbooks is not None else DEFAULT_PLAYBOOKS,
+            "policies": {"maxToolCallsPerTurn": 10},
+        }
     )
+
+
+@dataclass(frozen=True)
+class _Ref:
+    name: str
+
+
+@dataclass(frozen=True)
+class _ConPlaybooks:
+    """Un índice de playbooks sin validar (lo que `load_playbook` acepta: `TienePlaybooks`)."""
+
+    playbooks: tuple[_Ref, ...]
 
 
 @pytest.mark.asyncio
@@ -82,8 +99,11 @@ async def test_load_playbook_rechaza_nombre_con_traversal() -> None:
     `playbook_roots()`) para leer un archivo fuera de lo previsto, incluido
     el override PRIVADO de otro tenant."""
     malicious = "../otro-tenant/playbooks/ventas"
-    spec = make_spec(playbooks=[{"name": malicious, "description": "x"}])
-    assert await load_playbook(spec, malicious) is None
+    # Hoy el contrato v3 ya no deja ese nombre en el índice de un agente (`PlaybookRefV3.name` tiene patrón)...
+    with pytest.raises(ValidationError):
+        make_spec(playbooks=[{"name": malicious, "description": "x"}])
+    # ...y el loader sigue rechazándolo aunque llegue en un índice sin validar (defensa en profundidad).
+    assert await load_playbook(_ConPlaybooks((_Ref(malicious),)), malicious) is None
 
 
 @pytest.mark.asyncio
@@ -181,9 +201,7 @@ async def test_persona_llega_como_variables_de_plantilla() -> None:
 def test_persona_frase_prohibida_es_guardrail_duro() -> None:
     from core.orchestrator.loop import _persona_frase_prohibida
 
-    spec = make_spec()
-    spec.persona.forbiddenPhrases = ["garantizado"]
-    spec.persona.maxLength = 20
+    spec = make_spec(forbiddenPhrases=["garantizado"], maxLength=20)
 
     verdict = _persona_frase_prohibida("Está GARANTIZADO el resultado", spec)
     assert verdict is not None and verdict.reason == "persona_forbidden_phrase"
@@ -196,19 +214,17 @@ def test_persona_frase_prohibida_es_guardrail_duro() -> None:
 def test_persona_excede_largo_es_tope_blando() -> None:
     from core.orchestrator.loop import _persona_excede_largo
 
-    spec = make_spec()
-    spec.persona.maxLength = 20
+    spec = make_spec(maxLength=20)
     assert _persona_excede_largo("X" * 21, spec)
     assert not _persona_excede_largo("X" * 20, spec)
-    spec.persona.maxLength = 0
+    spec = make_spec(maxLength=0)
     assert not _persona_excede_largo("X" * 5000, spec), "0 apaga el tope"
 
 
 async def test_instruccion_largo_sale_del_playbook_o_del_respaldo(monkeypatch) -> None:
     from core.orchestrator import loop
 
-    spec = make_spec()
-    spec.persona.maxLength = 320
+    spec = make_spec(maxLength=320)
 
     async def sin_seccion(_spec, _key):
         return None

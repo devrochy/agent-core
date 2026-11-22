@@ -2,8 +2,8 @@
 
 Antes vivía en `packages/contracts/tests/`, fuera de `testpaths`, y no corría."""
 
+import agentcore_contracts
 from agentcore_contracts import (
-    AgentSpec,
     InboundMessage,
     Tone,
     __version__,
@@ -11,9 +11,11 @@ from agentcore_contracts import (
 
 
 def test_version_congelada() -> None:
-    # 3.0.0: `agentspec/3` y `kernelspec/1` (ADR-0113, HU-AOS-12); `AgentSpec` sigue siendo v2.
+    # 3.0.0: `agentspec/3` y `kernelspec/1` (ADR-0113, HU-AOS-12); `AgentSpec` seguía siendo v2.
     # 3.1.0: `AgentSpecV3.knowledge` opcional (ADR-0145, adenda de ADR-0113 del 2026-10-20).
-    assert __version__ == "3.2.0"
+    # 3.2.0: `ExposedQuery.action` opcional (adenda HU-AOS-19 de ADR-0113).
+    # 4.0.0: sale el `AgentSpec` v2 y los tipos que solo usaba él (ADR-0206 §8, HU-AOS-91).
+    assert __version__ == "4.0.0"
 
 
 def test_inbound_message_shape() -> None:
@@ -56,33 +58,9 @@ def test_inbound_message_content_variants() -> None:
         assert msg.content[0].type == part["type"]
 
 
-def test_agent_spec_shape() -> None:
-    spec = AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={
-            "role": "vendedor",
-            "tone": "cercano",
-            "warmth": 3,
-            "emojis": "sparse",
-            "maxLength": 500,
-            "forbiddenPhrases": [],
-            "locale": "es-CO",
-        },
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30, "summarize": True},
-        playbooks=[{"name": "ventas", "description": "Playbook de ventas"}],
-        tools=[{"tool": "crear_lead", "enabled": True, "scopes": ["crm:lead:w"]}],
-        policies={
-            "escalation": {"triggers": ["asesor"]},
-            "confirmBeforeWrite": True,
-            "maxToolCallsPerTurn": 5,
-        },
-        packs=["pack_commerce"],
-    )
-    assert spec.persona.tone in Tone.__args__
-    # v2.0.0 (ADR-0050): los campos de v1 que se eliminaron se ignoran al cargar un spec viejo.
-    assert not hasattr(spec.policies, "escalation")
-    assert "locale" not in spec.persona.model_dump()
-    assert "tenantId" in spec.model_dump()
+def test_el_agent_spec_v2_ya_no_se_exporta() -> None:
+    """ADR-0206 §8: el agente es `AgentSpecV3` y el Coordinador `KernelSpec`; `Tone` sigue."""
+    for nombre in ("AgentSpec", "Persona", "ToolBinding", "PlaybookRef", "AgentModel", "AgentMemory", "AgentPolicies", "RagConfig"):
+        assert not hasattr(agentcore_contracts, nombre), nombre
+        assert nombre not in agentcore_contracts.__all__, nombre
+    assert set(Tone.__args__) == {"formal", "neutral", "cercano", "informal"}

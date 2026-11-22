@@ -11,20 +11,18 @@ from core.llm import prompt_builder
 
 
 def _spec() -> Any:
-    from agentcore_contracts import AgentSpec
+    from core.agents.turno import agente_desde_defaults
 
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={"role": "asistente", "tone": "cercano", "warmth": 3, "emojis": "sparse", "maxLength": 500,
-                 "forbiddenPhrases": []},
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30},
-        playbooks=[{"name": "identidad", "description": "Identidad del asistente"}],
-        tools=[],
-        policies={"maxToolCallsPerTurn": 10},
-        packs=[],
+    return agente_desde_defaults(
+        {
+            "persona": {"role": "asistente", "tone": "cercano", "warmth": 3, "emojis": "sparse", "maxLength": 500,
+                         "forbiddenPhrases": []},
+            "model": {"primary": "deepseek-flash", "temperature": 0.3},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": [{"name": "identidad", "description": "Identidad del asistente"}],
+            "tools": [],
+            "policies": {"maxToolCallsPerTurn": 10},
+        }
     )
 
 

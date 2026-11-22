@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import get_args
 
 import pytest
-from agentcore_contracts import Persona
+from agentcore_contracts import Tone
+from agentcore_contracts.kernelspec import Emojis
 from pydantic import ValidationError
 
 from core.config import DEBOUNCE_DELAY_MS
@@ -114,9 +115,9 @@ def test_estilo_de_envio_sale_de_caps() -> None:
     assert {v.valor: v.nota for v in o.valores}["varios_cortos"] == f"hasta {CAPS['varios_cortos']} por respuesta"
 
 
-def test_tono_y_emojis_salen_del_contrato_de_persona() -> None:
-    assert [v.valor for v in POR_CLAVE["persona_tone"].valores] == list(get_args(Persona.model_fields["tone"].annotation))
-    assert [v.valor for v in POR_CLAVE["persona_emojis"].valores] == list(get_args(Persona.model_fields["emojis"].annotation))
+def test_tono_y_emojis_salen_del_contrato_de_la_voz() -> None:
+    assert [v.valor for v in POR_CLAVE["persona_tone"].valores] == list(get_args(Tone))
+    assert [v.valor for v in POR_CLAVE["persona_emojis"].valores] == list(get_args(Emojis))
 
 
 def test_los_rangos_de_whatsapp_web_son_los_de_la_politica() -> None:

@@ -215,10 +215,9 @@ def agente_desde_defaults(
 
     defaults = defaults_negocio.desde_dict(dict(datos))
     contenido = contenido_base(defaults)
-    contenido["tools"] = [
-        {"tool": b["tool"], "enabled": bool(b.get("enabled", True)), "scopes": list(b.get("scopes") or [])}
-        for b in (datos.get("tools") or [])
-    ]
+    # Los bindings con todos los campos de `ToolBindingV3` que traigan (scopes, tope por conversación, confirmación).
+    campos = ("tool", "enabled", "scopes", "maxCallsPerConversation", "requiresConfirmation")
+    contenido["tools"] = [{k: b[k] for k in campos if k in b} for b in (datos.get("tools") or [])]
     contenido["declarativeTools"] = list(datos.get("declarativeTools") or [])
     cero = uuid.UUID(int=0)
     agente = AgenteCongelado(

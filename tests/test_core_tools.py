@@ -5,10 +5,13 @@ Unit tests sin BD: registro de la skill del core y extracción de mensajes.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
 import pytest
-from agentcore_contracts import AgentSpec
 
 from core.agents.responses import load_response
+from core.agents.turno import AgenteDelTurno, agente_desde_defaults
 from core.tools.core_skill import CoreSkill
 
 EXPECTED_TOOLS = {
@@ -26,27 +29,27 @@ EXPECTED_TOOLS = {
 }
 
 
-def make_spec(playbooks: list[dict[str, str]]) -> AgentSpec:
-    return AgentSpec(
-        id="agent-1",
-        version="1.0.0",
-        tenantId="t1",
-        persona={
-            "role": "asistente",
-            "tone": "cercano",
-            "warmth": 3,
-            "emojis": "sparse",
-            "maxLength": 500,
-            "forbiddenPhrases": [],
+def make_spec(
+    playbooks: list[dict[str, str]], *, packs: Sequence[str] = (), tools: Sequence[dict[str, Any]] = ()
+) -> AgenteDelTurno:
+    """El agente del turno (frozen): para cambiar packs o bindings se arma de nuevo."""
+    return agente_desde_defaults(
+        {
+            "persona": {
+                "role": "asistente",
+                "tone": "cercano",
+                "warmth": 3,
+                "emojis": "sparse",
+                "maxLength": 500,
+                "forbiddenPhrases": [],
+            },
+            "model": {"primary": "deepseek-flash", "temperature": 0.3},
+            "memory": {"shortTermTurns": 30},
+            "playbooks": playbooks,
+            "tools": list(tools),
+            "policies": {"maxToolCallsPerTurn": 10},
         },
-        model={"primary": "deepseek-flash", "temperature": 0.3},
-        memory={"shortTermTurns": 30},
-        playbooks=playbooks,
-        tools=[],
-        policies={
-            "maxToolCallsPerTurn": 10,
-        },
-        packs=[],
+        packs=packs,
     )
 
 
@@ -140,9 +143,7 @@ def test_crm_config_copy_editable_por_tenant() -> None:
 @pytest.mark.asyncio
 async def test_tool_denial_pack_y_binding(monkeypatch: pytest.MonkeyPatch) -> None:
     """ADR-0019: la costura de ejecución niega tools de packs no habilitados y
-    tools deshabilitadas por ToolBinding. Fail-open si no hay binding."""
-    from agentcore_contracts.contracts import ToolBinding
-
+    tools deshabilitadas por su binding. Fail-open si no hay binding."""
     from core.mcp.types import MCPTool
     from core.orchestrator.loop import _tool_denial
 
@@ -166,15 +167,17 @@ async def test_tool_denial_pack_y_binding(monkeypatch: pytest.MonkeyPatch) -> No
     assert await _tool_denial(spec, "fake_pack_tool") is not None
 
     # pack habilitado → corre
-    spec.packs = ["core", "pack_fake"]
+    spec = make_spec([], packs=["core", "pack_fake"])
     assert await _tool_denial(spec, "fake_pack_tool") is None
 
     # binding deshabilitado → niega aunque el pack esté habilitado
-    spec.tools = [ToolBinding(tool="fake_pack_tool", enabled=False, scopes=[])]
-    assert "deshabilitada" in await _tool_denial(spec, "fake_pack_tool")
+    spec = make_spec(
+        [], packs=["core", "pack_fake"], tools=[{"tool": "fake_pack_tool", "enabled": False, "scopes": []}]
+    )
+    assert "deshabilitada" in (await _tool_denial(spec, "fake_pack_tool") or "")
 
     # fail-open: tool del core sin binding corre
-    spec.tools = []
+    spec = make_spec([], packs=["core", "pack_fake"])
     core_tool = MCPTool(
         name="core_fake",
         description="t",
@@ -222,17 +225,12 @@ def test_calendar_skill_sin_estado_por_tenant() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_binding_scopes_maxcalls_requires_confirmation(monkeypatch) -> None:
-    """ADR-0050: el motor real de ToolBinding. `enabled` ya existía; acá se cubren
+    """ADR-0050: el motor real de los bindings (`ToolBindingV3`). `enabled` ya existía; acá se cubren
     maxCallsPerConversation, requiresConfirmation y que scopes no rompa."""
     import uuid as _uuid
 
-    from agentcore_contracts.contracts import ToolBinding
-
     from core.mcp.types import MCPTool
     from core.orchestrator.loop import _binding_requires_confirmation, _tool_denial
-
-    spec = make_spec([])
-    spec.packs = ["core"]
 
     tool = MCPTool(
         name="safe_tool",
@@ -248,18 +246,20 @@ async def test_tool_binding_scopes_maxcalls_requires_confirmation(monkeypatch) -
     )
 
     # scopes presentes no bloquean por sí solos (autorización la aplica el pack/guardrail)
-    spec.tools = [ToolBinding(tool="safe_tool", enabled=True, scopes=["orders:write"])]
+    spec = make_spec([], packs=["core"], tools=[{"tool": "safe_tool", "enabled": True, "scopes": ["orders:write"]}])
     assert await _tool_denial(spec, "safe_tool") is None
 
     # requiresConfirmation se detecta
-    spec.tools = [ToolBinding(tool="safe_tool", enabled=True, scopes=[], requiresConfirmation=True)]
+    spec = make_spec(
+        [], packs=["core"], tools=[{"tool": "safe_tool", "enabled": True, "scopes": [], "requiresConfirmation": True}]
+    )
     assert _binding_requires_confirmation(spec, "safe_tool") is True
     assert _binding_requires_confirmation(spec, "otra") is False
 
     # maxCallsPerConversation: con `audit_log` de 2 llamadas y tope 2 → niega
-    spec.tools = [
-        ToolBinding(tool="safe_tool", enabled=True, scopes=[], maxCallsPerConversation=2)
-    ]
+    spec = make_spec(
+        [], packs=["core"], tools=[{"tool": "safe_tool", "enabled": True, "scopes": [], "maxCallsPerConversation": 2}]
+    )
     conv_id = _uuid.uuid4()
 
     async def _fake_count(conversation_id, tool_name):
@@ -276,8 +276,7 @@ async def test_tool_denial_requiere_conexion(monkeypatch) -> None:
     from core.mcp.types import MCPTool
     from core.orchestrator.loop import _tool_denial
 
-    spec = make_spec([])
-    spec.packs = ["core"]
+    spec = make_spec([], packs=["core"])
     tool = MCPTool(
         name="agendar",
         description="t",

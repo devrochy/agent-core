@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 
-from agentcore_contracts import AgentSpec, AgentSpecV3
+from agentcore_contracts import AgentSpecV3
 from test_agente_del_turno import v2_completo
 
 from core.agents.base import kernel_del_negocio
@@ -29,7 +29,7 @@ T = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
 def _coordinador() -> AgenteCongelado:
-    defaults = DefaultsDelNegocio.model_validate(AgentSpec.model_validate(v2_completo()).model_dump(mode="json"))
+    defaults = DefaultsDelNegocio.model_validate(v2_completo())
     return AgenteCongelado(
         instance_id=uuid.uuid4(), agent_id=uuid.uuid4(), key=KEY_COORDINADOR, role="core", version_id=uuid.uuid4(),
         version=4, contract="kernelspec/1", content=kernel_del_negocio(defaults),

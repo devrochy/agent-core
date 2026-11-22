@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any, get_args
 
-from agentcore_contracts import KernelSpec, Persona
+from agentcore_contracts import KernelSpec, Tone
+from agentcore_contracts.kernelspec import Emojis
 from annotated_types import Ge, Le
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
@@ -101,7 +102,7 @@ _NOTA_TONO = {
 }
 VALORES_TONO = [
     ValorPosible(valor=t, etiqueta=_ETIQUETA_TONO.get(t, t), nota=_NOTA_TONO.get(t, ""))
-    for t in get_args(Persona.model_fields["tone"].annotation)
+    for t in get_args(Tone)
 ]
 
 _ETIQUETA_EMOJIS = {"none": "Ninguno", "sparse": "Pocos", "free": "Libres"}
@@ -112,7 +113,7 @@ _NOTA_EMOJIS = {
 }
 VALORES_EMOJIS = [
     ValorPosible(valor=e, etiqueta=_ETIQUETA_EMOJIS.get(e, e), nota=_NOTA_EMOJIS.get(e, ""))
-    for e in get_args(Persona.model_fields["emojis"].annotation)
+    for e in get_args(Emojis)
 ]
 
 _ETIQUETA_IDIOMA = {"es": "Español", "en": "Inglés", "pt": "Portugués"}

@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import pytest
-from agentcore_contracts import AgentSpec
+from agentcore_contracts import ToolBindingV3
 
 from core.agents.base import contenido_base, kernel_del_negocio
 from core.agents.claves import KEY_COORDINADOR
@@ -92,15 +92,18 @@ def v2_completo() -> dict[str, Any]:
 KEY = "atencion"
 
 
-def _congelados(raw: dict[str, Any], catalogo: Mapping[str, ActionInfo]) -> tuple[AgenteCongelado, AgenteCongelado, AgentSpec]:
-    """(especialista, Coordinador, v2 de la configuración) como quedarían en la release: la base del
+def _congelados(
+    raw: dict[str, Any], catalogo: Mapping[str, ActionInfo]
+) -> tuple[AgenteCongelado, AgenteCongelado, DefaultsDelNegocio]:
+    """(especialista, Coordinador, valores por defecto del negocio) como quedarían en la release: la base del
     especialista sale de la configuración y la plantilla le pone bindings, reglas y declarativas."""
     del catalogo
-    spec = AgentSpec.model_validate(raw)
-    # Los valores por defecto del negocio (`agent_defaults`, ADR-0206 §6) con lo que traía el v2 (como el backfill 0152).
-    defaults = DefaultsDelNegocio.model_validate(spec.model_dump(mode="json"))
+    # Los valores por defecto del negocio (`agent_defaults`, ADR-0206 §6) con lo que traía el v2 (como el backfill
+    # 0152): `extra="ignore"` descarta `id`, `tenantId`, `packs`, `tools` y `extensions`.
+    defaults = DefaultsDelNegocio.model_validate(raw)
+    assert defaults != DefaultsDelNegocio(), "el fixture no debe caer en los valores por defecto"
     contenido = contenido_base(defaults)
-    contenido["tools"] = [b.model_dump(mode="json") for b in spec.tools]
+    contenido["tools"] = [ToolBindingV3.model_validate(b).model_dump(mode="json") for b in raw["tools"]]
     contenido["guardrails"] = [
         {"name": "gratis", "kind": "forbidden_phrase", "phrases": ["gratis para siempre"], "action": "escalate"},
         {"name": "link", "kind": "required_tool", "phrases": ["link de pago"], "tool": "confirmar_pago_pedido"},
@@ -124,7 +127,7 @@ def _congelados(raw: dict[str, Any], catalogo: Mapping[str, ActionInfo]) -> tupl
         instance_id=uuid.uuid4(), agent_id=uuid.uuid4(), key=KEY_COORDINADOR, role="core", version_id=uuid.uuid4(),
         version=1, contract="kernelspec/1", content=kernel_del_negocio(defaults),
     )
-    return especialista, kernel, spec
+    return especialista, kernel, defaults
 
 
 # ---------------------------------------------------------------- la vista
@@ -148,10 +151,11 @@ def test_el_agente_del_turno_devuelve_lo_que_el_loop_lee(catalogo) -> None:
     assert (vista.policies.maxToolCallsPerTurn, vista.policies.budgetUsdPerConversation) == (
         original.policies.maxToolCallsPerTurn, original.policies.budgetUsdPerConversation,
     )
-    assert set(vista.packs) == set(original.packs)
+    raw = v2_completo()
+    assert set(vista.packs) == set(raw["packs"])
     # Bindings: exactamente los del agente.
     assert [(b.tool, b.enabled, list(b.scopes)) for b in vista.tools] == [
-        (b.tool, b.enabled, list(b.scopes)) for b in original.tools
+        (b.tool, b.enabled, list(b.scopes)) for b in (ToolBindingV3.model_validate(t) for t in raw["tools"])
     ]
     # Guardrails y declarativas: de los campos tipados del v3, no de `extensions`.
     reglas = {g["name"]: g for g in vista.guardrails}

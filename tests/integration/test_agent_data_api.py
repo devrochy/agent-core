@@ -387,19 +387,21 @@ async def test_el_loop_guarda_la_procedencia_al_ejecutar_la_tool() -> None:
             ]
 
     def _spec_que_concede() -> Any:
-        from agentcore_contracts import AgentSpec
+        from core.agents.turno import agente_desde_defaults
 
-        return AgentSpec.model_validate(
+        # El agente del turno de `ventas` (la procedencia sale del foco de la release, no de su rótulo de versión).
+        return agente_desde_defaults(
             {
-                "id": "ventas", "version": "ventas@v3:3", "tenantId": str(tid),
                 "persona": {
                     "role": "r", "tone": "cercano", "warmth": 3, "emojis": "sparse", "maxLength": 500,
                     "forbiddenPhrases": [],
                 },
                 "model": {"primary": "m"}, "memory": {"shortTermTurns": 10}, "playbooks": [],
                 "tools": [{"tool": "tool_de_prueba_procedencia", "enabled": True, "scopes": []}],
-                "policies": {"maxToolCallsPerTurn": 3}, "packs": ["pack_commerce"],
-            }
+                "policies": {"maxToolCallsPerTurn": 3},
+            },
+            packs=["pack_commerce"],
+            key="ventas",
         )
 
     e = await _escenario()
