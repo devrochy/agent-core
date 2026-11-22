@@ -586,8 +586,9 @@ async def liquidar(
         if gasto is not None and gasto.tokens > 0:
             # Créditos congelados al escribir, igual que `turn` (ADR-0208 §11): las cuatro columnas juntas.
             # Si el cálculo falla, la fila va con las cuatro en NULL (como un turno): no se pierde el costo.
+            creditos: dict[str, Any]
             try:
-                creditos = creditos_congelados(usd, "agent_run", gasto.key_mode)  # type: ignore[arg-type]
+                creditos = creditos_congelados(usd, "agent_run", "byok" if gasto.key_mode == "byok" else "platform")
             except Exception:
                 log.warning("a2a_ledger_credits_failed")
                 creditos = dict.fromkeys(("credits", "key_mode", "tarifario_version", "trm_cop"))
