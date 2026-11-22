@@ -32,11 +32,7 @@ def redis_falso(monkeypatch: pytest.MonkeyPatch) -> FakeRedis:
     async def _claim(*_a, **_k) -> bool:  # type: ignore[no-untyped-def]
         return True
 
-    async def _con_cuota(*_a, **_k) -> bool:  # type: ignore[no-untyped-def]
-        return True
-
     monkeypatch.setattr(inbound_mod, "claim_message_once", _claim)
-    monkeypatch.setattr("core.billing.enforcement.check_metric", _con_cuota)
     return falso
 
 
@@ -110,22 +106,28 @@ async def test_error_de_descarga_se_publica_sin_key(redis_falso: FakeRedis) -> N
     assert redis_falso.sets == []
 
 
-async def test_cuota_agotada_no_encola(
-    redis_falso: FakeRedis, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(("mime", "wamid"), [("audio/ogg", "W-AUDIO-SIN-TOPE"), ("image/jpeg", "W-IMG-SIN-TOPE")])
+async def test_media_no_se_descarta_por_cuota(
+    redis_falso: FakeRedis, monkeypatch: pytest.MonkeyPatch, mime: str, wamid: str
 ) -> None:
-    async def _sin_cuota(*_a, **_k) -> bool:  # type: ignore[no-untyped-def]
-        return False
+    """HU-BILL-18 (ADR-0208 §1): ya no hay tope de audios ni de imágenes; la media entra siempre y el
+    crédito del mes la cobra. Ni siquiera se consulta una cuota."""
 
-    monkeypatch.setattr("core.billing.enforcement.check_metric", _sin_cuota)
+    async def _no_se_consulta(*_a, **_k) -> bool:  # type: ignore[no-untyped-def]
+        raise AssertionError("la media no consulta cuotas")
+
+    monkeypatch.setattr("core.billing.enforcement.check_metric", _no_se_consulta)
+    monkeypatch.setattr("core.billing.enforcement.quota_decision", _no_se_consulta)
 
     aceptado = await inbound_mod.publish_inbound(
         tenant_id=uuid.uuid4(),
         connection_external_id="waweb:1",
         sender="573001112233",
         text="",
-        wamid="W-CUOTA",
-        media=[{"type": "audio/ogg", "data": b"voz"}],
+        wamid=wamid,
+        media=[{"type": mime, "data": b"bytes"}],
     )
 
-    assert aceptado is False
-    assert redis_falso.xadds == []
+    assert aceptado is True
+    assert len(redis_falso.xadds) == 1
+    assert json.loads(redis_falso.xadds[0][1]["media"])[0]["type"] == mime

@@ -123,8 +123,9 @@ class ResultadoConexion:
 
 # ------------------------------------------------------------------ plan
 def plan_incluye_canal(plan_id: str | None, canal: str) -> bool:
-    """¿El plan incluye el canal? (`features.canales`, decisión del dueño 2026-10-23: Messenger e Instagram en
-    todos los planes de pago)."""
+    """¿El plan incluye el canal? (`features.canales`). Desde los planes v3 (D-79, ADR-0208 §9) Messenger e
+    Instagram son de Premium y Empresarial: Basic ya no los da de alta. Solo lo exigen las altas de Messenger e
+    Instagram; generalizarlo a las demás altas de conexión es HU-BILL-19."""
     from core.billing.plans import get_plan
 
     plan = get_plan(plan_id) if plan_id else None

@@ -111,7 +111,7 @@ async def _pedido_de_plan(
     tid: uuid.UUID,
     *,
     plan: str | None = "premium",
-    precio: int = 600_000,
+    precio: int = 299_000,
     datos_alta: dict[str, Any] | None = None,
     customer_id: uuid.UUID | None = None,
     pagado: bool = True,
@@ -321,7 +321,7 @@ async def test_alta_automatica_premium_con_preset_e_invitacion(vendedores, corre
     assert timedelta(days=27) < sub.period_end - datetime.now(UTC) <= timedelta(days=31)
     assert sub.provider_reference == f"plat-{negocio.slug}-{sub.period_start:%Y%m}"
     [pago] = await _pagos(negocio.id)
-    assert (pago.status, pago.plan_id, int(pago.amount_cop)) == ("aprobado", "premium", 600_000)
+    assert (pago.status, pago.plan_id, int(pago.amount_cop)) == ("aprobado", "premium", 299_000)
     assert pago.provider_reference == sub.provider_reference == pago.periodo
 
     assert negocio.settings["preset"]["id"] == "restaurante"
@@ -569,7 +569,7 @@ async def test_cambio_de_plan_no_crea_otro_negocio(vendedores, correos) -> None:
     async with tenant_scope(vendedor):
         async with get_session() as s:
             sub_id = (await s.execute(select(Subscription.id).where(Subscription.numero_publico == free))).scalar_one()
-    premium = await plan_del_catalogo(vendedor, plan="premium", precio=600_000)
+    premium = await plan_del_catalogo(vendedor, plan="premium", precio=299_000)
     await inscribir_y_pagar(vendedor, cliente, sub_id, premium)  # el cambio sale con la misma referencia de la suscripción
     [alta, evento] = sorted(await _eventos(vendedor, free), key=lambda e: e.payload["cambio_de_plan"])
     assert evento.payload["cambio_de_plan"] is True and evento.payload["subscription_id"] == str(sub_id)

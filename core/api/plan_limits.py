@@ -1,9 +1,9 @@
 """Error de la API para los topes estructurales del plan (D-35, ADR-0142).
 
-Mismo contrato que `plan_limit_plugins` (P0 de pruebas 2026-10-17): 409 con
-`error.code = plan_limit_<métrica>` y `error.details = {metric, used, limit}`, para que el panel
-explique el límite y ofrezca mejorar el plan sin adivinar el estado. Una sola función para
-todas las entradas que pueden levantar `QuotaExceeded` de `agentes` o `colaboradores`.
+409 con `error.code = plan_limit_<métrica>` y `error.details = {metric, used, limit}` (contrato
+nacido con el tope de habilidades del P0 de pruebas 2026-10-17, retirado en HU-BILL-18), para que
+el panel explique el límite y ofrezca mejorar el plan sin adivinar el estado. Una sola función
+para todas las entradas que pueden levantar `QuotaExceeded` de un tope estructural o del crédito.
 """
 
 from __future__ import annotations

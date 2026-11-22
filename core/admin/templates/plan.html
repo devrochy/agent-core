@@ -83,7 +83,8 @@
           {% if p.is_free %}Gratis{% else %}${{ '{:,.0f}'.format(p.price_cop) }}<span class="fs-6 text-muted">/mes</span>{% endif %}
         </div>
         <ul class="list-unstyled small text-muted flex-grow-1">
-          {% for key, label in [('clientes','Clientes'),('conversaciones','Conversaciones'),('conversaciones_audio','Audios'),('conversaciones_ocr','Imágenes OCR'),('plugins','Plugins')] %}
+          {% if p.monthly_credits is not none %}<li>Créditos al mes: {{ '{:,.0f}'.format(p.monthly_credits) }}</li>{% endif %}
+          {% for key, label in [('clientes','Clientes'),('agentes','Agentes'),('colaboradores','Colaboradores')] %}
           {% set limit = p.limits.get(key) %}
           <li>{{ label }}: {% if limit is none %}ilimitado{% else %}{{ limit }}{% endif %}</li>
           {% endfor %}

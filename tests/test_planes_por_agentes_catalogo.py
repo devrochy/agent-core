@@ -1,33 +1,17 @@
-"""HU-BILL-05 · catálogo de planes por agentes y contrato del 409 (D-35, ADR-0142). Sin base de datos."""
+"""HU-BILL-05 · métricas por agentes y contrato del 409 (D-35, ADR-0142). Sin base de datos."""
 
 from __future__ import annotations
 
 import pytest
 
 
-def test_catalogo_v2_con_las_cifras_del_modelo_de_precios() -> None:
-    from core.billing.plans import PLANS_BY_ID
-
-    # modelo-de-precios.md §5: agentes, colaboradores y crédito mensual por plan.
-    esperado = {
-        "free": (1, 2, 2_500),
-        "basic": (2, 5, 20_000),
-        "premium": (5, 15, 75_000),
-        "empresarial": (None, 50, 240_000),
-    }
-    for plan_id, (agentes, colaboradores, credito) in esperado.items():
-        plan = PLANS_BY_ID[plan_id]
-        assert plan.limits["agentes"] == agentes
-        assert plan.limits["colaboradores"] == colaboradores
-        assert plan.monthly_credits == credito
-        # «Habilidades activas» deja de ser tope (la métrica sigue definida para lecturas).
-        assert "plugins" not in plan.limits
-
-
 def test_metricas_nuevas_registradas() -> None:
     from core.billing.metrics import METRIC_KEYS, get_metric
 
-    assert {"agentes", "colaboradores", "plugins"} <= METRIC_KEYS
+    assert {"agentes", "colaboradores"} <= METRIC_KEYS
+    # `plugins` salió del registro con los planes v3 (ADR-0208 §1); el catálogo v3 está en
+    # `tests/test_planes_v3_catalogo.py`.
+    assert "plugins" not in METRIC_KEYS
     agentes = get_metric("agentes")
     assert agentes is not None and agentes.scope == "lifetime"
 
@@ -37,7 +21,7 @@ def test_el_credito_se_espeja_en_features_sin_tocar_el_catalogo() -> None:
 
     plan = PLANS_BY_ID["basic"]
     espejo = _features_espejadas(plan)
-    assert espejo["credito_mensual"] == 20_000
+    assert espejo["credito_mensual"] == 12_000
     assert "credito_mensual" not in plan.features
 
 

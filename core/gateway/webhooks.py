@@ -42,7 +42,7 @@ from core.gateway.webhook_secrets import CacheDeSecretos
 from core.gateway.webhook_verify import constant_time_equal
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
-from core.shared.tenant import get_current_tenant_id, tenant_scope
+from core.shared.tenant import tenant_scope
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -761,11 +761,11 @@ async def publish_inbound_message(
     tenant_id: uuid.UUID, message: Any, *, connection_id: uuid.UUID | None = None
 ) -> str:
     """Publica un mensaje entrante ya verificado en el stream del core (capa 2 de idempotencia incluida).
-    Devuelve `"enqueued"`, `"duplicate"` (ya visto: Meta o Twilio reintentan) o `"dropped"` (cuota de medios
-    agotada, ADR-0045). Lo usan el webhook de Meta y el de Twilio (ADR-0186). `connection_id` es la conexión que el
-    webhook ya validó (Twilio): viaja en el stream para que el consumer no la vuelva a buscar por número.
+    Devuelve `"enqueued"` o `"duplicate"` (ya visto: Meta o Twilio reintentan). Lo usan el webhook de Meta y el
+    de Twilio (ADR-0186). `connection_id` es la conexión que el webhook ya validó (Twilio): viaja en el stream para
+    que el consumer no la vuelva a buscar por número.
 
-    Si algo falla después del claim (cuota, Redis), el claim se libera: el reintento del proveedor no llega como
+    Si algo falla después del claim (Redis), el claim se libera: el reintento del proveedor no llega como
     duplicado y el mensaje no se pierde."""
     from core.gateway.idempotency import release_message_claim
 
@@ -779,13 +779,8 @@ async def publish_inbound_message(
 
 
 async def _publicar(tenant_id: uuid.UUID, message: Any, connection_id: uuid.UUID | None) -> str:
-    if message.media:
-        processed = await _try_process_media(message)
-        if processed is None:
-            # Cuota de audio/OCR agotada: se descarta el mensaje (ADR-0045).
-            return "dropped"
-        message = processed
-
+    # La media entra siempre (ADR-0208 §1): el consumer la descarga, guarda y entiende (SPEC-04,
+    # ADR-0151) y el crédito del mes la cobra; ya no hay tope de audios ni de imágenes.
     await get_redis().xadd(
         INBOUND_STREAM,
         {
@@ -918,38 +913,6 @@ async def webhook_events_existentes(
             )
         )
         return {str(fila[0]) for fila in filas}
-
-
-def _media_metric(message: Any) -> str | None:
-    """Métrica de cuota que consume un mensaje multimedia (audio u OCR)."""
-    for item in getattr(message, "media", []) or []:
-        mime = str(item.get("type", ""))
-        if mime.startswith("audio"):
-            return "conversaciones_audio"
-        if mime.startswith("image"):
-            return "conversaciones_ocr"
-    return None
-
-
-async def _try_process_media(message: Any) -> Any:
-    """Cuota de media en el webhook; el procesamiento real vive en el consumer.
-
-    Descargar/transcribir aquí expondría el webhook a los timeouts de Meta. Esta
-    función solo aplica el bloqueo duro de cuota (ADR-0045) y deja el mensaje
-    intacto; el consumer lo descarga, guarda y entiende (SPEC-04, ADR-0151).
-
-    Devuelve None si la cuota de audio/OCR del plan está agotada: el mensaje se
-    descarta y no se encola.
-    """
-    metric = _media_metric(message)
-    tenant_id = get_current_tenant_id()
-    if metric is not None and tenant_id is not None:
-        from core.billing.enforcement import check_metric
-
-        if not await check_metric(tenant_id, metric):
-            log.warning("media_quota_exceeded", tenant_id=str(tenant_id), metric=metric)
-            return None
-    return message
 
 
 # ---------------------------------------------------------------- webhook de billing (ADR-0046)

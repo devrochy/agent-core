@@ -39,7 +39,7 @@ async def _onboard(slug: str) -> uuid.UUID:
 
 
 # Monto firmado del webhook: el del link (ADR-0123 lo compara con el del pago).
-_CENTAVOS_POR_PLAN = {"basic": 20_000_000, "premium": 60_000_000}
+_CENTAVOS_POR_PLAN = {"basic": 12_900_000, "premium": 29_900_000}
 
 
 class _FakeProvider:
@@ -89,9 +89,9 @@ async def test_start_subscription_crea_pago_y_link(monkeypatch):
             ).scalar_one()
     assert url and url.startswith("https://checkout.test/")
     assert payment.status == "pendiente"
-    assert float(payment.amount_cop) == 200_000
+    assert float(payment.amount_cop) == 129_000
     assert payment.checkout_url == url
-    assert fake.created and fake.created[0]["amount_cop"] == 200_000
+    assert fake.created and fake.created[0]["amount_cop"] == 129_000
 
 
 async def test_apply_payment_aprobado_activa(monkeypatch):
@@ -211,7 +211,7 @@ async def test_payment_aislado_entre_tenants(monkeypatch):
 
 
 def _signed_wompi_payload(
-    payment_link_id: str, status: str, secret: str, amount_in_cents: int = 20_000_000
+    payment_link_id: str, status: str, secret: str, amount_in_cents: int = 12_900_000
 ) -> dict:
     """Como Wompi: la firma cubre el estado y el monto (ADR-0123 exige el monto firmado)."""
     timestamp = 1700000000

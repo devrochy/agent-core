@@ -76,9 +76,10 @@ async def conversacion_bloqueada(conversation: Any, customer: Any) -> bool:
 
 async def politicas_del_turno(conversation: Any, spec: Any) -> Bloqueo | None:
     """Cuota del período y presupuesto de la conversación, antes de gastar LLM."""
-    # Cuota de turno (ADR-0045): si el período agotó `mensajes` o
-    # `costo_llm_usd`, se corta el turno antes de gastar LLM. El bloqueo por
-    # clientes/conversaciones/audio/OCR ocurre en el consumer/webhook (acción).
+    # Crédito del mes (D-79, ADR-0208 §2-3, HU-BILL-18): el crédito es el único tope de consumo.
+    # Si el negocio ya consumió el crédito del mes del ciclo, se corta el turno antes de gastar
+    # LLM y se responde `quota_exhausted`. Colchón, avisos y escalación llegan en HU-BILL-20. El
+    # tope de clientes (estructural) se aplica en el alta del consumer.
     tenant_id = get_current_tenant_id()
     if tenant_id is not None:
         from core.billing.enforcement import turn_quota_metric

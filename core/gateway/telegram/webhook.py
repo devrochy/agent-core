@@ -296,7 +296,7 @@ async def _recibir(request: Request, public_id: str) -> tuple[str, Response]:
         try:
             for mensaje in mensajes:
                 publicado = await publish_inbound_message(tenant_id, mensaje, connection_id=connection_id)
-                resultado = {"duplicate": "duplicado", "dropped": "descartado"}.get(publicado, "aceptado")
+                resultado = "duplicado" if publicado == "duplicate" else "aceptado"
         except Exception:
             # Redis caído u otro fallo al publicar: el claim ya se liberó. 503 para que Telegram reintente.
             log.exception("telegram.webhook.publicacion_fallida", tenant_id=str(tenant_id))

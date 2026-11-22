@@ -4,8 +4,9 @@ Dos niveles, ambos deterministas y calculados en vivo:
 
 - **Tenant no operacional**: suscripción vencida/cancelada/past_due o con el
   período/trial vencido. El webhook y el consumer cortan todo el procesamiento.
-- **Cuota alcanzada**: se bloquea la nueva unidad de la métrica (crear cliente,
-  abrir conversación, procesar audio/imagen, activar pack, iniciar turno).
+- **Cuota alcanzada**: se bloquea la nueva unidad de un tope estructural (crear cliente,
+  publicar agente, invitar colaborador, subir documento) o, con el crédito del mes agotado,
+  el turno (D-79, ADR-0208, HU-BILL-18: el crédito es el único tope de consumo).
 
 Un tenant SIN suscripción se considera operacional (grandfathered): el gate
 solo bloquea ante evidencia positiva de impago, para no cortar datos legados o
@@ -32,11 +33,6 @@ from core.tenants import cargar_tenant_activo
 log = get_logger(__name__)
 
 BLOCKING_STATUSES = ("expired", "canceled", "past_due")
-
-# Métricas que se evalúan en la cabecera del turno (no tienen un "alta" de
-# entidad donde bloquear la unidad; cortar el turno es el punto natural).
-TURN_METRICS = ("mensajes", "costo_llm_usd")
-
 
 class QuotaExceeded(Exception):
     """La acción excede una cuota del plan. Recuperable: el caller decide qué hacer."""
@@ -195,16 +191,19 @@ async def enforce_pack_growth(
         raise QuotaExceeded(key, math.ceil(usado), limite)
 
 
-async def can_activate_plugin(tenant_id: uuid.UUID) -> bool:
-    return await check_metric(tenant_id, "plugins")
-
-
 async def turn_quota_metric(tenant_id: uuid.UUID) -> str | None:
-    """Primera métrica de turno (`mensajes`/`costo_llm_usd`) agotada, o None."""
-    for key in TURN_METRICS:
-        if not await check_metric(tenant_id, key):
-            return key
-    return None
+    """`"creditos"` si el negocio ya consumió el crédito del mes del ciclo, o None (HU-BILL-18).
+
+    Bloqueo básico entre HU-BILL-18 y HU-BILL-20 (ADR-0208 §2-3): sin colchón, sin avisos y sin
+    escalar. El cálculo es el de `creditos.alcanza` sin el lock (`creditos.credito_agotado`); con
+    `BILLING_BLOQUEAR_POR_CREDITOS` apagado nunca bloquea."""
+    from core.billing.creditos import credito_agotado
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            return "creditos" if await credito_agotado(session, tenant_id) else None
 
 
 @dataclass(frozen=True)

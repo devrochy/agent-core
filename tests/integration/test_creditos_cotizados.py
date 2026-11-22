@@ -28,7 +28,7 @@ pytestmark = [
     ),
 ]
 
-LIMITE_FREE = 2_500
+LIMITE_FREE = 1_500
 
 
 async def _negocio(plan: str = "free") -> uuid.UUID:
@@ -89,36 +89,36 @@ async def test_bloquea_cuando_el_gasto_no_cabe_en_el_credito_del_mes() -> None:
     from core.billing.enforcement import QuotaExceeded
 
     tid = await _negocio()
-    await _filas(tid, _fila(tid, credits="2495.0"))
+    await _filas(tid, _fila(tid, credits="1495.0"))
 
-    saldo = await _alcanza(tid, 5)  # 2495 + 5 = 2500: justo cabe
+    saldo = await _alcanza(tid, 5)  # 1495 + 5 = 1500: justo cabe
     assert saldo.limite == LIMITE_FREE
-    assert saldo.usado == Decimal("2495.0")
+    assert saldo.usado == Decimal("1495.0")
     assert saldo.disponible == Decimal("5.0")
 
     with pytest.raises(QuotaExceeded) as exc:
         await _alcanza(tid, 6)
-    assert (exc.value.metric, exc.value.used, exc.value.limit) == ("creditos", 2495, LIMITE_FREE)
+    assert (exc.value.metric, exc.value.used, exc.value.limit) == ("creditos", 1495, LIMITE_FREE)
     error = plan_limit_error(exc.value)
     assert (error.status_code, error.code) == (409, "plan_limit_creditos")
-    assert error.details == {"metric": "creditos", "used": 2495, "limit": LIMITE_FREE}
+    assert error.details == {"metric": "creditos", "used": 1495, "limit": LIMITE_FREE}
 
 
 async def test_con_el_interruptor_apagado_no_bloquea(monkeypatch: pytest.MonkeyPatch) -> None:
     from core.config import get_settings
 
     tid = await _negocio()
-    await _filas(tid, _fila(tid, credits="2500.0"))
+    await _filas(tid, _fila(tid, credits="1500.0"))
     monkeypatch.setattr(get_settings(), "billing_bloquear_por_creditos", False)
 
     saldo = await _alcanza(tid, 50)
-    assert saldo.usado == Decimal("2500.0")
+    assert saldo.usado == Decimal("1500.0")
     assert saldo.disponible == Decimal(0)
 
 
 async def test_lo_de_otro_negocio_no_cuenta_ni_bloquea() -> None:
     otro = await _negocio()
-    await _filas(otro, _fila(otro, credits="2500.0"))
+    await _filas(otro, _fila(otro, credits="1500.0"))
     tid = await _negocio()
 
     saldo = await _alcanza(tid, 10)
@@ -186,3 +186,35 @@ async def test_fuera_del_scope_del_negocio_no_mide_en_silencio() -> None:
                 await alcanza(session, tid, 1)
             with pytest.raises(RuntimeError):
                 await imagen_ya_cobrada(session, tid, "t/x.jpg")
+
+
+# ------------------------------------------------------------------ el turno (HU-BILL-18, ADR-0208 §2-3)
+async def test_el_turno_se_corta_con_el_credito_del_mes_agotado() -> None:
+    """Sin topes de volumen, el turno solo se corta por crédito: con saldo pasa, al llegar al tope corta."""
+    from core.billing.enforcement import turn_quota_metric
+
+    tid = await _negocio()
+    await _filas(tid, _fila(tid, credits="1499.0"))
+    assert await turn_quota_metric(tid) is None
+    await _filas(tid, _fila(tid, credits="1.0"))
+    assert await turn_quota_metric(tid) == "creditos"
+
+
+async def test_el_turno_no_se_corta_con_el_interruptor_apagado(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.billing.enforcement import turn_quota_metric
+    from core.config import get_settings
+
+    tid = await _negocio()
+    await _filas(tid, _fila(tid, credits="5000.0"))
+    monkeypatch.setattr(get_settings(), "billing_bloquear_por_creditos", False)
+    assert await turn_quota_metric(tid) is None
+
+
+async def test_el_credito_agotado_de_otro_negocio_no_corta_el_turno() -> None:
+    from core.billing.enforcement import turn_quota_metric
+
+    otro = await _negocio()
+    await _filas(otro, _fila(otro, credits="5000.0"))
+    tid = await _negocio()
+    assert await turn_quota_metric(otro) == "creditos"
+    assert await turn_quota_metric(tid) is None

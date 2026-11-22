@@ -6,12 +6,16 @@ panel y las FKs lo consulten. Mismo patrón que `plugin_manager.sync_registry()`
 
 `limits` usa las claves de `core.billing.metrics.METRIC_KEYS`. `None` = ilimitado.
 
-Planes v2 por agentes (D-35, HU-BILL-05, ADR-0142): las cifras de `agentes`, `colaboradores`
-y `monthly_credits` salen de `modelo-de-precios.md §5` (docs). «Habilidades activas»
-(`plugins`) y «Asistentes por negocio» ya no son topes: `plugins` sale de `limits` (la métrica
-sigue definida para lecturas). Las métricas de volumen (`conversaciones`, `mensajes`, audio,
-OCR, `costo_llm_usd`) se quedan hasta que el crédito tenga ledger y enforcement
-(HU-BILL-04/06): retirarlas antes dejaría el costo sin tope.
+Planes v3 por créditos (D-79, SPEC-51, ADR-0208, HU-BILL-18): mismos `plan_id`, precios y
+créditos nuevos. El crédito mensual (`monthly_credits`) es el único tope de consumo: los topes de
+volumen de v1 (`conversaciones`, audio, OCR, `mensajes`, `costo_llm_usd`) y `plugins` salieron del
+registro de métricas. Lo que queda en `limits` son topes estructurales, que solo bloquean un alta
+(clientes, agentes, colaboradores y, en el pack de conocimiento, documentos y MB).
+
+`features` (ADR-0208 §9, ADR-0209): `canales` lista con el vocabulario de
+`ChannelConnection.channel` todos los canales conversacionales del plan; `nivel_ia`, `byok`,
+`acumulable_meses`, `descuento_recarga` (`None` = el plan no compra recargas), `marca_propia`,
+`historial_dias` (`None` = ilimitado), `campanas` y `soporte`.
 """
 
 from __future__ import annotations
@@ -36,8 +40,9 @@ class Plan:
     interval_days: int = 30
     sort_order: int = 0
     is_public: bool = True
-    # Crédito mensual de uso (D-35; 1 crédito = COP 10). Informativo hasta HU-BILL-04/06: el
-    # core todavía no mide consumo en créditos. `None` = sin crédito definido.
+    # Crédito mensual de uso (1 crédito = COP 10, ADR-0144): el único tope de consumo (D-79,
+    # ADR-0208). El turno lo consulta (`enforcement.turn_quota_metric`) y las acciones cotizadas
+    # lo verifican con `creditos.alcanza`. `None` = sin crédito definido (no se limita).
     monthly_credits: int | None = None
     currency: str = "COP"
 
@@ -62,7 +67,8 @@ def _validate_limits(limits: dict[str, int | None]) -> None:
 
 
 # Fuente única del catálogo: `sync_plans()` lo espeja a la tabla `plans` al arrancar (la
-# migración `0034` solo sembró la versión inicial).
+# migración `0034` solo sembró la versión inicial; `upsert_plan` sobrescribe precio, límites y
+# features por `plan_id`, así que un catálogo nuevo no necesita migración de datos).
 PLANS: tuple[Plan, ...] = (
     Plan(
         id="free",
@@ -70,84 +76,101 @@ PLANS: tuple[Plan, ...] = (
         price_cop=0,
         trial_days=30,
         sort_order=0,
-        monthly_credits=2_500,
+        monthly_credits=1_500,
         limits={
             "clientes": 100,
-            "conversaciones": 500,
-            "conversaciones_audio": 50,
-            "conversaciones_ocr": 20,
             "agentes": 1,
             "colaboradores": 2,
-            "mensajes": 2000,
-            "costo_llm_usd": 5,
             # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
             "documentos": 3,
             "conocimiento_mb": 10,
         },
-        features={"soporte": "comunidad", "canales": ["whatsapp"]},
+        features={
+            "canales": ["whatsapp", "web"],
+            "nivel_ia": "estandar",
+            "byok": False,
+            "acumulable_meses": 0,
+            "descuento_recarga": None,
+            "marca_propia": False,
+            "historial_dias": 30,
+            "campanas": "ninguna",
+            "soporte": "comunidad",
+        },
     ),
     Plan(
         id="basic",
         name="Basic",
-        price_cop=200_000,
+        price_cop=129_000,
         sort_order=1,
-        monthly_credits=20_000,
+        monthly_credits=12_000,
         limits={
-            "clientes": 500,
-            "conversaciones": 3000,
-            "conversaciones_audio": 300,
-            "conversaciones_ocr": 150,
+            "clientes": 1_000,
             "agentes": 2,
             "colaboradores": 5,
-            "mensajes": 15000,
-            "costo_llm_usd": 50,
-            # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
             "documentos": 20,
             "conocimiento_mb": 100,
         },
-        features={"soporte": "email", "canales": ["whatsapp", "messenger", "instagram"]},
+        features={
+            "canales": ["whatsapp", "web", "telegram"],
+            "nivel_ia": "estandar",
+            "byok": False,
+            "acumulable_meses": 0,
+            "descuento_recarga": 0,
+            "marca_propia": False,
+            "historial_dias": 90,
+            "campanas": "recordatorios",
+            "soporte": "email",
+        },
     ),
     Plan(
         id="premium",
         name="Premium",
-        price_cop=600_000,
+        price_cop=299_000,
         sort_order=2,
-        monthly_credits=75_000,
+        monthly_credits=40_000,
         limits={
-            "clientes": 2000,
-            "conversaciones": 15000,
-            "conversaciones_audio": 1500,
-            "conversaciones_ocr": 800,
+            "clientes": 5_000,
             "agentes": 5,
             "colaboradores": 15,
-            "mensajes": 80000,
-            "costo_llm_usd": 200,
-            # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
             "documentos": 100,
             "conocimiento_mb": 500,
         },
-        features={"soporte": "prioritario", "canales": ["whatsapp", "messenger", "instagram"]},
+        features={
+            "canales": ["whatsapp", "web", "telegram", "instagram", "messenger"],
+            "nivel_ia": "avanzado",
+            "byok": False,
+            "acumulable_meses": 1,
+            "descuento_recarga": 15,
+            "marca_propia": True,
+            "historial_dias": 365,
+            "campanas": "completas",
+            "soporte": "prioritario",
+        },
     ),
     Plan(
         id="empresarial",
         name="Empresarial",
-        price_cop=1_800_000,
+        price_cop=799_000,
         sort_order=3,
-        monthly_credits=240_000,
+        monthly_credits=120_000,
         limits={
             "clientes": None,
-            "conversaciones": None,
-            "conversaciones_audio": None,
-            "conversaciones_ocr": None,
             "agentes": None,
             "colaboradores": 50,
-            "mensajes": None,
-            "costo_llm_usd": None,
-            # Pack de conocimiento (ADR-0145 §2): documentos vivos y MB subidos.
             "documentos": 500,
             "conocimiento_mb": 2_000,
         },
-        features={"soporte": "dedicado", "canales": ["whatsapp", "messenger", "instagram", "web"]},
+        features={
+            "canales": ["whatsapp", "web", "telegram", "instagram", "messenger"],
+            "nivel_ia": "avanzado",
+            "byok": True,
+            "acumulable_meses": 2,
+            "descuento_recarga": 25,
+            "marca_propia": True,
+            "historial_dias": None,
+            "campanas": "completas",
+            "soporte": "dedicado",
+        },
     ),
 )
 

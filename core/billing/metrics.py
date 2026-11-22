@@ -1,9 +1,13 @@
 """Medición de cuotas por tenant (ADR-0045).
 
 Las métricas se **derivan** de la tabla que ya es su fuente de verdad (no hay
-un contador paralelo): `customers`, `conversations`, `messages`, `usage_ledger` y, desde
+un contador paralelo): `customers`, `usage_ledger`/`messages` (créditos, ADR-0144) y, desde
 HU-BILL-05 (D-35, ADR-0142), `agents`/`agent_instances` y `tenant_user`/`tenant_invitations`.
 Cada métrica se declara una sola vez acá; el panel y el enforcement la consumen.
+
+Desde los planes v3 (D-79, ADR-0208 §1, HU-BILL-18) el crédito es el único tope de consumo: los
+topes de volumen (`conversaciones`, `conversaciones_audio`, `conversaciones_ocr`, `mensajes`,
+`costo_llm_usd`) y `plugins` salieron del registro con sus conteos.
 
 `count_metric()` corre dentro de `tenant_scope(tenant_id)` (RLS), así que sirve
 tanto desde el webhook/consumer (que ya están en contexto) como desde el panel.
@@ -18,21 +22,18 @@ from typing import Literal
 
 from sqlalchemy import func, select
 
-from core.billing.tipos_de_uso import EVAL
 from core.db.models import (
     Admin,
     AgentInstanceRecord,
     AgentRecord,
     ChannelConnection,
-    Conversation,
     Customer,
-    Message,
     TenantInvitation,
     TenantUser,
 )
 from core.db.session import get_session
 from core.shared.tenant import tenant_scope
-from core.shared.test_mode import TEST_CHANNEL, no_es_prueba
+from core.shared.test_mode import TEST_CHANNEL
 
 MetricScope = Literal["period", "lifetime"]
 
@@ -55,27 +56,6 @@ METRICS: tuple[Metric, ...] = (
         description="Clientes activos del tenant (total histórico).",
     ),
     Metric(
-        key="conversaciones",
-        label="Conversaciones",
-        unit="conversaciones",
-        scope="period",
-        description="Conversaciones iniciadas en el período.",
-    ),
-    Metric(
-        key="conversaciones_audio",
-        label="Conversaciones por audio",
-        unit="audios",
-        scope="period",
-        description="Audios entrantes procesados en el período.",
-    ),
-    Metric(
-        key="conversaciones_ocr",
-        label="Conversaciones por imagen (OCR)",
-        unit="imágenes",
-        scope="period",
-        description="Imágenes entrantes procesadas (OCR/visión) en el período.",
-    ),
-    Metric(
         key="agentes",
         label="Agentes publicados",
         unit="agentes",
@@ -93,20 +73,6 @@ METRICS: tuple[Metric, ...] = (
         description="Cuentas activas con acceso al negocio sin el propietario, más invitaciones pendientes.",
     ),
     Metric(
-        key="plugins",
-        label="Plugins",
-        unit="packs",
-        scope="lifetime",
-        description="Packs habilitados para el tenant.",
-    ),
-    Metric(
-        key="mensajes",
-        label="Mensajes",
-        unit="mensajes",
-        scope="period",
-        description="Mensajes salientes enviados en el período.",
-    ),
-    Metric(
         key="creditos",
         label="Crédito mensual",
         unit="créditos",
@@ -115,13 +81,6 @@ METRICS: tuple[Metric, ...] = (
             "Créditos consumidos en el mes del ciclo (1 crédito = COP 10, ADR-0144): IA del "
             "usage_ledger más el fee de notas de voz, imágenes y plantillas."
         ),
-    ),
-    Metric(
-        key="costo_llm_usd",
-        label="Costo LLM",
-        unit="USD",
-        scope="period",
-        description="Gasto LLM del período (usage_ledger, ADR-0008).",
     ),
 )
 
@@ -164,21 +123,12 @@ async def count_metric(
     if session is not None:
         return await _count_metric_in_session(session, tenant_id, key, period_start)
 
-    if key == "plugins":
-        return await _count_plugins(tenant_id)
-
     async with tenant_scope(tenant_id):
         async with get_session() as session:
-            if key == "costo_llm_usd":
-                return await _count_cost(session, tenant_id, period_start)
             return await _count_metric_in_session(session, tenant_id, key, period_start)
 
 
 async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, period_start) -> int:
-    if key == "plugins":
-        # `plugins` no se cuenta desde una sesión ajena: depende del AgentSpec del
-        # tenant (otra sesión). Se resuelve fuera, con `count_metric` sin `session`.
-        raise ValueError("plugins no se puede medir con una sesión compartida")
     if key == "clientes":
         return int(
             (
@@ -194,36 +144,6 @@ async def _count_metric_in_session(session, tenant_id: uuid.UUID, key: str, peri
             ).scalar()
             or 0
         )
-    if key == "conversaciones":
-        query = select(func.count(Conversation.id)).where(
-            Conversation.tenant_id == tenant_id,
-            Conversation.deleted_at.is_(None),
-            # La conversación de prueba del panel no cuenta para la cuota (ADR-0045).
-            Conversation.channel != TEST_CHANNEL,
-        )
-        if period_start is not None:
-            query = query.where(Conversation.started_at >= period_start)
-        return int((await session.execute(query)).scalar() or 0)
-    if key == "conversaciones_audio":
-        return await _count_media(session, tenant_id, "audio/%", period_start)
-    if key == "conversaciones_ocr":
-        return await _count_media(session, tenant_id, "image/%", period_start)
-    if key == "mensajes":
-        # Las respuestas del playground (conversación `test`) no consumen la cuota.
-        de_prueba = select(Conversation.id).where(
-            Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
-        )
-        query = select(func.count(Message.id)).where(
-            Message.tenant_id == tenant_id,
-            Message.direction == "outbound",
-            Message.deleted_at.is_(None),
-            ~Message.conversation_id.in_(de_prueba),
-        )
-        if period_start is not None:
-            query = query.where(Message.created_at >= period_start)
-        return int((await session.execute(query)).scalar() or 0)
-    if key == "costo_llm_usd":
-        return await _count_cost(session, tenant_id, period_start)
     if key == "creditos":
         # El llamador pasa el inicio del MES de consumo (`periodos.ventana_mensual`), no el
         # `period_start` crudo de la suscripción (ADR-0144). Décimas de crédito: float.
@@ -305,61 +225,6 @@ async def _count_collaborators(session, tenant_id: uuid.UUID) -> int:
         )
     ).scalar() or 0
     return int(vinculados) + int(pendientes)
-
-
-async def _count_cost(session, tenant_id: uuid.UUID, period_start) -> float:
-    from decimal import Decimal
-
-    from sqlalchemy import or_
-
-    from core.db.models import UsageLedger
-
-    # El gate de pass^k lo paga la plataforma (HU-AOS-21): no consume la cuota del cliente.
-    query = select(func.coalesce(func.sum(UsageLedger.cost_usd), 0)).where(
-        UsageLedger.tenant_id == tenant_id, UsageLedger.kind != EVAL
-    )
-    # El playground gasta tokens reales, pero es una prueba del panel: no debe
-    # consumir la cuota de costo del cliente. Se excluyen las filas atadas a una
-    # conversación de prueba; las filas sin `conversation_id` se conservan
-    # (`NOT IN` con NULL descartaría filas legítimas).
-    test_conversations = select(Conversation.id).where(
-        Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
-    )
-    query = query.where(
-        or_(
-            UsageLedger.conversation_id.is_(None),
-            ~UsageLedger.conversation_id.in_(test_conversations),
-        )
-    )
-    if period_start is not None:
-        query = query.where(UsageLedger.created_at >= period_start)
-    total = (await session.execute(query)).scalar() or Decimal(0)
-    return float(total)
-
-
-async def _count_media(session, tenant_id: uuid.UUID, prefix: str, period_start: datetime | None) -> int:
-    query = select(func.count(Message.id)).where(
-        Message.tenant_id == tenant_id,
-        Message.direction == "inbound",
-        Message.media_type.like(prefix),
-        Message.deleted_at.is_(None),
-        no_es_prueba(tenant_id, Message.conversation_id),
-    )
-    if period_start is not None:
-        query = query.where(Message.created_at >= period_start)
-    return int((await session.execute(query)).scalar() or 0)
-
-
-async def _count_plugins(tenant_id: uuid.UUID) -> int:
-    """Packs de NEGOCIO habilitados del tenant (sin el core, ADR-0045).
-
-    El core es plomería del framework y no consume cuota. Fuente única del
-    conteo: `packs_del_negocio` (ADR-0206 §5), el mismo valor que el KPI del panel.
-    """
-    from core.agents.instalaciones_agente import packs_del_negocio
-
-    async with tenant_scope(tenant_id):
-        return len(await packs_del_negocio(tenant_id, con_core=False))
 
 
 async def usage_snapshot(

@@ -427,9 +427,9 @@ async def test_aislamiento_entre_negocios_y_plan_en_la_api(app_client) -> None:
     assert (uso["colaboradores"]["used"], uso["colaboradores"]["limit"]) == (2, 2)
     assert "plugins" not in uso
     # Crédito medido (ADR-0144): el negocio no ha gastado nada en el mes.
-    assert (cuerpo["credit"]["limit"], cuerpo["credit"]["used"], cuerpo["credit"]["percent"]) == (2500, 0.0, 0.0)
+    assert (cuerpo["credit"]["limit"], cuerpo["credit"]["used"], cuerpo["credit"]["percent"]) == (1500, 0.0, 0.0)
     catalogo = {p["id"]: p for p in cuerpo["plans"]}
-    assert catalogo["premium"]["monthly_credits"] == 75000
+    assert catalogo["premium"]["monthly_credits"] == 40000
     assert catalogo["empresarial"]["limits"]["agentes"] is None
 
 

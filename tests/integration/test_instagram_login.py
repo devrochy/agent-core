@@ -28,7 +28,7 @@ APP_IG = "ig-app-test"
 
 
 # ------------------------------------------------------------------ helpers
-async def _new_tenant(prefix: str, *, plan: str = "basic") -> uuid.UUID:
+async def _new_tenant(prefix: str, *, plan: str = "premium") -> uuid.UUID:
     from _habilidades import onboard_tenant
 
     from core.db.session import get_session

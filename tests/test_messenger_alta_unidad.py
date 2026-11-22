@@ -17,18 +17,20 @@ from core.gateway.meta_messenger_alta import (
 )
 
 
-# ------------------------------------------------------------------ plan (decisión del dueño, 2026-10-23)
-@pytest.mark.parametrize("plan_id", ["basic", "premium", "empresarial"])
-def test_todos_los_planes_de_pago_incluyen_messenger_e_instagram(plan_id):
+# ------------------------------------------------------------------ plan (D-79, ADR-0208 §9: catálogo v3)
+@pytest.mark.parametrize("plan_id", ["premium", "empresarial"])
+def test_premium_y_empresarial_incluyen_messenger_e_instagram(plan_id):
     assert plan_incluye_messenger(plan_id)
     plan = next(p for p in PLANS if p.id == plan_id)
     assert {"whatsapp", "messenger", "instagram"} <= set(plan.features["canales"])
 
 
-def test_el_plan_gratuito_no_incluye_messenger_ni_instagram():
-    assert not plan_incluye_messenger("free")
-    free = next(p for p in PLANS if p.id == "free")
-    assert free.features["canales"] == ["whatsapp"]
+@pytest.mark.parametrize("plan_id", ["free", "basic"])
+def test_free_y_basic_no_incluyen_messenger_ni_instagram(plan_id):
+    from core.gateway.meta_instagram_alta import plan_incluye_instagram
+
+    assert not plan_incluye_messenger(plan_id)
+    assert not plan_incluye_instagram(plan_id)
 
 
 @pytest.mark.parametrize("plan_id", [None, "", "no-existe"])

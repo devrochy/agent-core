@@ -83,7 +83,7 @@ _SEQ_PLANES = itertools.count(1)
 
 
 async def plan_del_catalogo(
-    tid: uuid.UUID, *, plan: str | None = "premium", precio: int = 600_000, periodicidad: str = "mensual"
+    tid: uuid.UUID, *, plan: str | None = "premium", precio: int = 299_000, periodicidad: str = "mensual"
 ) -> uuid.UUID:
     """Plan del catálogo de `pack_subscriptions` que vende un plan de la plataforma (SPEC-43).
 
@@ -114,7 +114,7 @@ async def suscripcion_de_plan(
     tid: uuid.UUID,
     *,
     plan: str | None = "premium",
-    precio: int = 600_000,
+    precio: int = 299_000,
     datos_alta: dict[str, Any] | None = None,
     customer_id: uuid.UUID | None = None,
     pagado: bool = True,

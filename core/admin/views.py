@@ -1501,22 +1501,12 @@ async def plugin_config_save(request: Request, plugin_id: str):
     try:
         values = parse_form_values(module.config_schema, form_data, previous)
         await configure_plugin_for_tenant(plugin_id, values)
-    except QuotaExceeded as exc:
-        return _quota_redirect(exc)
     except Exception as exc:
         log.exception("plugin_config_save_failed", plugin=plugin_id)
         return RedirectResponse(
             f"/admin/plugins?flash=Error: {str(exc)[:120]}&flash_type=danger", status_code=303
         )
     return RedirectResponse("/admin/plugins?flash=Plugin configurado y activado", status_code=303)
-
-
-def _quota_redirect(exc: QuotaExceeded) -> RedirectResponse:
-    return RedirectResponse(
-        f"/admin/plugins?flash=Tu plan no permite habilitar más plugins "
-        f"({exc.used}/{exc.limit}). Mejorá tu plan en /admin/plan.&flash_type=danger",
-        status_code=303,
-    )
 
 
 @router.post("/plugins/{plugin_id}/activar")
@@ -2523,6 +2513,7 @@ def _renderable_plans(current_plan_id: str | None) -> list[dict]:
                 "current": plan.id == current_plan_id,
                 "limits": plan.limits,
                 "features": plan.features,
+                "monthly_credits": plan.monthly_credits,
             }
         )
     return result
