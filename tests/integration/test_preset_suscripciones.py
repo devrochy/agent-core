@@ -44,7 +44,7 @@ async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> N
     """Gherkin «Reproducible»: packs del preset y proveedor `pack_subscriptions`."""
     from _habilidades import onboard_tenant
 
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
     from core.subscriptions import proveedor_configurado
@@ -53,12 +53,10 @@ async def test_preset_suscripciones_deja_el_proveedor_y_la_agenda_interna() -> N
         name="Agencia", slug=uniq("susc"), packs=[], preset="suscripciones", plan="premium"
     )
     async with tenant_scope(tid):
-        spec = await load_active_spec()
+        packs = await packs_del_negocio(tid, con_core=False)
         agenda = await plugin_manager.load_config("pack_calendar")
-    packs = enabled_packs(spec)
-    assert {"pack_commerce", "pack_calendar", "pack_subscriptions"} <= packs
-    # Pagos necesita las llaves de Wompi del negocio: queda pendiente, no inventada.
-    assert "pack_payments" not in packs
+    # El preset solo siembra configuración (HU-AOS-91): las habilidades llegan con los agentes que cree el dueño.
+    assert packs == set()
     assert agenda is not None and agenda.source == "interno"
     assert await proveedor_configurado(tid) == "pack_subscriptions"
 

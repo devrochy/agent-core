@@ -78,7 +78,7 @@ async def test_spec_enablement_y_escalacion_por_tenant(moto_setup) -> None:
     t1, moto = moto_setup
     from sqlalchemy import select
 
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.db.models import AppSettings
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -92,12 +92,12 @@ async def test_spec_enablement_y_escalacion_por_tenant(moto_setup) -> None:
             settings_moto.escalation_config = {"keywords": ["asesor", "compatibilidad"]}
     try:
         async with tenant_scope(moto):
-            spec = await load_active_spec()
+            packs = await packs_del_negocio(moto)
             async with get_session() as session:
                 settings_moto = (
                     await session.execute(select(AppSettings).where(AppSettings.tenant_id == moto))
                 ).scalar_one()
-        assert "pack_commerce" in enabled_packs(spec), "el tenant de ejemplo tiene el pack habilitado"
+        assert "pack_commerce" in packs, "el tenant de ejemplo tiene el pack habilitado"
         assert "compatibilidad" in settings_moto.escalation_config.get("keywords", [])
 
         # t1 no debe haberse contagiado la palabra específica del otro tenant

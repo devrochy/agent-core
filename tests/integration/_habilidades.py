@@ -15,8 +15,11 @@ from typing import Any
 KEY_DE_PRUEBA = "habilidades_de_prueba"
 
 
-async def dar_habilidades(tenant_id: uuid.UUID, packs: Iterable[str], *, key: str = KEY_DE_PRUEBA) -> uuid.UUID:
-    """Activa `packs` en el negocio y los instala en el especialista de prueba (lo crea si no existe). Devuelve su id."""
+async def dar_habilidades(
+    tenant_id: uuid.UUID, packs: Iterable[str], *, key: str = KEY_DE_PRUEBA, chequear: bool = True
+) -> uuid.UUID:
+    """Activa `packs` en el negocio y los instala en el especialista de prueba (lo crea si no existe). Devuelve su id.
+    `chequear=False` instala sin el chequeo previo (cuota y activación): para medir la cuota misma."""
     from sqlalchemy import select
 
     from core.agents import versiones
@@ -40,10 +43,11 @@ async def dar_habilidades(tenant_id: uuid.UUID, packs: Iterable[str], *, key: st
             agent_id = (
                 await versiones.crear_agente(tenant_id, key=key, kind="specialist", name="Habilidades de prueba")
             ).id
-        if pedidos:
+        if pedidos and chequear:
             await asegurar_habilidades(tenant_id, pedidos, actor=None)
         for pack in pedidos:
-            await instalar_en_agente(tenant_id, agent_id, pack, requiere_config=pack == "pack_payments")
+            # Activa, también Pagos: es lo que daba la habilitación del negocio de antes.
+            await instalar_en_agente(tenant_id, agent_id, pack)
     return agent_id
 
 
@@ -62,7 +66,7 @@ async def quitar_habilidades(tenant_id: uuid.UUID, packs: Iterable[str], *, key:
     """Quita `packs` del especialista de prueba: dejan de ser del negocio si ningún otro agente activo los tiene."""
     from sqlalchemy import select
 
-    from core.agents.instalaciones_agente import desinstalar_de_agente
+    from core.agents.instalaciones_agente import InstalacionNoEncontrada, desinstalar_de_agente
     from core.db.models import AgentRecord
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
@@ -79,4 +83,7 @@ async def quitar_habilidades(tenant_id: uuid.UUID, packs: Iterable[str], *, key:
         if agent_id is None:
             return
         for pack in sorted(set(packs)):
-            await desinstalar_de_agente(tenant_id, agent_id, pack)
+            try:
+                await desinstalar_de_agente(tenant_id, agent_id, pack)
+            except InstalacionNoEncontrada:  # ya no estaba: quitar es idempotente
+                pass

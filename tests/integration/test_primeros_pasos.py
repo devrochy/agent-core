@@ -258,8 +258,7 @@ async def test_un_whatsapp_sin_verificar_o_con_problemas_queda_en_curso(app_clie
 async def test_una_habilidad_pendiente_de_configurar_aparece_como_paso(app_client) -> None:
     """El preset `comercio` en Basic deja `pack_payments` pendiente (faltan las llaves de Wompi,
     ADR-0110): aparece como paso con la guía de la habilidad y se cumple al habilitarla."""
-    from core.agents.spec import load_active_spec, save_spec_if_changed
-    from core.shared.tenant import tenant_scope
+    from _habilidades import dar_habilidades
 
     tenant_id, email = await _negocio(plan="basic", preset="comercio", sembrar_ejemplos=False)
 
@@ -275,15 +274,11 @@ async def test_una_habilidad_pendiente_de_configurar_aparece_como_paso(app_clien
     assert "Wompi" in pagos["explicacion"]
     assert pagos["puede_actuar"] is True
     assert respuesta["total"] == 6
-    # El preset habilitó comercio: el catálogo ya apunta a cargar productos.
-    assert (pasos["catalogo"]["motivo"], pasos["catalogo"]["pack"]) == ("sin_contenido", "pack_commerce")
+    # El preset no habilita comercio (HU-AOS-91): el catálogo espera al agente que la instale.
+    assert pasos["catalogo"]["motivo"] == "sin_habilidad"
 
-    # El dueño carga sus llaves y la habilidad queda habilitada: el paso se marca solo.
-    async with tenant_scope(tenant_id):
-        spec = await load_active_spec()
-        datos = spec.model_dump(mode="json")
-        datos["packs"] = sorted({*datos["packs"], "pack_payments"})
-        await save_spec_if_changed(spec, datos, tenant_id)
+    # La habilidad queda en un agente del negocio: el paso se marca solo.
+    await dar_habilidades(tenant_id, ["pack_payments"])
     pagos = _por_clave(await _pasos(app_client, tenant_id, email))["configurar_pack_payments"]
     assert (pagos["estado"], pagos["motivo"]) == ("completo", None)
 

@@ -9,7 +9,7 @@
   - `onboard_tenant` no recibe `packs`, `agent-core tenant create` no tiene `--packs`, `POST /platform/tenants` ignora `packs` y el wizard SSR no los pide.
   - El preset solo siembra configuración, datos y persona: no habilita packs ni escribe el spec.
 - Al crear un agente desde una plantilla, sus habilidades se instalan en ese agente. `asegurar_habilidades` es el chequeo previo: que el despliegue traiga el pack, la cuota y la activación del código. Los presets v2 cuentan los packs de su manifiesto, porque los instala el agente que crean.
-- El negocio de prueba del tester suma el agente de Cobranza: sin él, Cobranza no sería del negocio. El escenario de suscripciones crea el agente de Suscripciones desde su plantilla.
+- Negocio de prueba del tester: Cobranza queda apagada, con sus datos sembrados, hasta que el tester cree su agente desde el editor. El escenario de suscripciones crea el agente de Suscripciones desde su plantilla.
 - `/settings` filtra guardrails y tools por las habilidades del negocio.
-- Los journeys instalan las habilidades de la corrida en el agente `atencion`. Mantienen los mismos playbooks y en el mismo orden.
+- Los journeys instalan las habilidades de la corrida en un agente sin versión (`habilidades_corrida`). El agente `atencion` mantiene los mismos playbooks, en el mismo orden.
 - Antes de desplegar, correr `agent-core db packs-sin-instalacion --todos` en cada entorno y resolver lo que quede habilitado sin agente.

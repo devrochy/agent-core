@@ -26,7 +26,6 @@ PASSWORD = "clave-segura-123"
 
 async def _tenant_id() -> uuid.UUID:
     """Primer tenant del admin de test (el que el middleware resuelve sin cookie)."""
-    from sqlalchemy import select
 
     from core.db.models import Admin
     from core.db.session import get_session
@@ -57,31 +56,13 @@ async def _switch(app_client, session: str, tenant_id: uuid.UUID) -> str:
 
 
 async def _set_pack(tenant_id: uuid.UUID, pack: str, enabled: bool) -> None:
-    from core.agents.spec import load_active_spec
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
+    """La habilidad es del negocio si algún agente activo la tiene instalada (HU-AOS-91)."""
+    from _habilidades import dar_habilidades, quitar_habilidades
 
-    async with tenant_scope(tenant_id):
-        await load_active_spec()
-        async with get_session() as session:
-            row = (
-                await session.execute(
-                    select(AgentSpecRecord)
-                    .where(
-                        AgentSpecRecord.tenant_id == tenant_id,
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                    .order_by(AgentSpecRecord.created_at.desc())
-                    .limit(1)
-                )
-            ).scalar_one()
-            data = dict(row.spec)
-            packs = set(data.get("packs", []))
-            packs.add(pack) if enabled else packs.discard(pack)
-            data["packs"] = sorted(packs)
-            row.spec = data
+    if enabled:
+        await dar_habilidades(tenant_id, [pack])
+    else:
+        await quitar_habilidades(tenant_id, [pack])
 
 
 async def test_tab_pagos_solo_con_pack_habilitado(app_client) -> None:

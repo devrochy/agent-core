@@ -294,12 +294,17 @@ async def test_dry_run_no_escribe_y_reporta() -> None:
     assert await _foto(tid) == antes
 
 
-async def test_habilidad_sin_habilitar_omite_la_plantilla() -> None:
-    """`cobranza` exige pack_cobranza, que el negocio no tiene: no se crea nada."""
+async def test_habilidad_del_preset_se_instala_en_el_agente_que_crea() -> None:
+    """`cobranza` exige pack_cobranza, que el negocio no tiene: como el preset la trae, el agente se crea y la
+    habilidad queda instalada en él, y desde ahí es del negocio (HU-AOS-91)."""
+    from core.agents.instalaciones_agente import packs_del_negocio
+    from core.shared.tenant import tenant_scope
+
     tid, _cid = await _negocio()
     reporte = await _aplicar(tid, "cobranza")
-    assert [(a.key, a.estado) for a in reporte.agentes] == [("cobranza", "sin_habilidades")]
-    assert reporte.reglas_nuevas == [] and reporte.releases == {}
+    assert [(a.key, a.estado) for a in reporte.agentes] == [("cobranza", "creado")]
+    async with tenant_scope(tid):
+        assert "pack_cobranza" in await packs_del_negocio(tid)
 
 
 async def test_backfill_cli_y_aislamiento() -> None:
@@ -427,7 +432,7 @@ async def test_backfill_de_varios_negocios_no_mezcla_y_un_lock_por_negocio() -> 
     reportes = await backfill_presets_v2(tenant_ids=[tid_a, tid_b], aplicar=True, modules=_modules())
     por_negocio = {r.tenant_id: r for r in reportes}
     assert por_negocio[tid_b].preset == "cobranza"
-    assert [(a.key, a.estado) for a in por_negocio[tid_b].agentes] == [("cobranza", "sin_habilidades")]
+    assert [(a.key, a.estado) for a in por_negocio[tid_b].agentes] == [("cobranza", "creado")]
     assert (await _foto(tid_b))["versiones"].get("ventas") is None
 
 

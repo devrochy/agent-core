@@ -24,15 +24,8 @@ async def test_load_active_spec_desde_bd(moto_setup) -> None:
         spec = await load_active_spec()
     assert spec.tenantId == str(t2)
     assert spec.persona.tone == "cercano"
-    # el spec sembrado referencia los playbooks default + los del pack habilitado
-    assert {p.name for p in spec.playbooks} == {
-        "identidad",
-        "tono",
-        "reglas-operacion",
-        "respuestas",
-        "ventas",
-        "seguimiento",
-    }
+    # el spec sembrado referencia solo los playbooks default: el alta ya no elige packs (HU-AOS-91)
+    assert {p.name for p in spec.playbooks} == {"identidad", "tono", "reglas-operacion", "respuestas"}
 
 
 async def test_spec_aislado_por_tenant(tenant_setup) -> None:
@@ -57,16 +50,14 @@ async def test_enablement_packs_por_tenant(moto_setup, tenant_setup) -> None:
     """ADR-0019: un tenant con pack lo tiene habilitado; el core siempre; otro sin packs no."""
     _t1, moto = moto_setup
     _a, t2 = tenant_setup
-    from core.agents.spec import enabled_packs, load_active_spec
+    from core.agents.instalaciones_agente import packs_del_negocio
     from core.shared.tenant import tenant_scope
 
+    # Las habilidades del negocio son las de sus agentes activos (HU-AOS-91).
     async with tenant_scope(moto):
-        spec_moto = await load_active_spec()
+        packs_moto = await packs_del_negocio(moto)
     async with tenant_scope(t2):
-        spec_t2 = await load_active_spec()
-
-    packs_moto = enabled_packs(spec_moto)
-    packs_t2 = enabled_packs(spec_t2)
+        packs_t2 = await packs_del_negocio(t2)
     assert "core" in packs_moto and "core" in packs_t2
     assert "pack_commerce" in packs_moto, "el tenant con el pack lo debe tener habilitado"
     assert "pack_commerce" not in packs_t2, "un tenant sin packs no debe tener el CRM"

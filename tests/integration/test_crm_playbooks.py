@@ -15,22 +15,35 @@ pytestmark = [
 ]
 
 
+async def _spec_con_commerce():  # type: ignore[no-untyped-def]
+    """El spec v2 del negocio con los playbooks de pack_commerce: desde HU-AOS-91 el alta ya no los agrega (la
+    habilidad se instala en el agente), y esta es la ruta v2 de la allowlist que borra la parte D."""
+    from core.agents.spec import load_active_spec
+    from core.onboarding import _pack_playbook_refs
+
+    spec = await load_active_spec()
+    presentes = {p.name for p in spec.playbooks}
+    extra = [r for r in _pack_playbook_refs(["pack_commerce"]) if r["name"] not in presentes]
+    return spec.model_validate({**spec.model_dump(mode="json"), "playbooks": [*spec.model_dump(mode="json")["playbooks"], *extra]})
+
+
 async def test_playbooks_pack_cargados_por_allowlist(moto_setup) -> None:
     _t1, t2 = moto_setup
     from core.agents.playbooks import load_playbook
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(t2):
-        ventas = await load_playbook(t2, "ventas")
+        spec = await _spec_con_commerce()
+        ventas = await load_playbook(spec, "ventas")
         assert ventas is not None
         assert "Proceso de venta" in ventas
         assert not ventas.lstrip().startswith("---"), "el frontmatter no debe filtrarse"
 
-        seguimiento = await load_playbook(t2, "seguimiento")
+        seguimiento = await load_playbook(spec, "seguimiento")
         assert seguimiento is not None and "reenganche" in seguimiento
 
         # fuera del índice del tenant: rechazado
-        assert await load_playbook(t2, "no-existe") is None
+        assert await load_playbook(spec, "no-existe") is None
 
 
 async def test_playbook_override_por_tenant_gana_y_no_deja_residuo(moto_setup) -> None:
@@ -49,7 +62,7 @@ async def test_playbook_override_por_tenant_gana_y_no_deja_residuo(moto_setup) -
     override_path.write_text("Guion de ventas a medida de tenant-moto.", encoding="utf-8")
     try:
         async with tenant_scope(moto):
-            content = await load_playbook(moto, "ventas")
+            content = await load_playbook(await _spec_con_commerce(), "ventas")
         assert content == "Guion de ventas a medida de tenant-moto."
     finally:
         override_path.unlink()
@@ -57,7 +70,7 @@ async def test_playbook_override_por_tenant_gana_y_no_deja_residuo(moto_setup) -
 
     # Sin override propio: vuelve a ver el default del pack, no algo cacheado.
     async with tenant_scope(moto):
-        default_content = await load_playbook(moto, "ventas")
+        default_content = await load_playbook(await _spec_con_commerce(), "ventas")
     assert default_content is not None
     assert "Proceso de venta" in default_content
     assert "a medida de tenant-moto" not in default_content
@@ -65,12 +78,11 @@ async def test_playbook_override_por_tenant_gana_y_no_deja_residuo(moto_setup) -
 
 async def test_playbook_ventas_entra_al_ensamblador(moto_setup) -> None:
     _t1, t2 = moto_setup
-    from core.agents.spec import load_active_spec
     from core.llm.prompt_builder import PromptContext, build_system_blocks
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(t2):
-        spec = await load_active_spec()
+        spec = await _spec_con_commerce()
         blocks = await build_system_blocks(
             spec,
             PromptContext(assistant_name="Tenant", business_description="Tienda"),

@@ -117,19 +117,6 @@ def _playbook_refs(packs: list[str], nombres: list[str]) -> list[dict[str, str]]
     return refs
 
 
-async def _actualizar_playbooks(manifest: PresetManifest, configurados: list[str], tenant_id: uuid.UUID) -> bool:
-    """Los playbooks de los packs del preset van a los valores por defecto de los agentes (`agent_defaults`,
-    ADR-0206 §6): los recibe cada agente nuevo. No habilita nada: las habilidades se instalan en el agente que
-    las usa (HU-AOS-91). Devuelve si agregó alguno."""
-    actuales = await defaults_negocio.leer(tenant_id)
-    existentes = {p.name for p in actuales.playbooks}
-    nuevos = [r for r in _playbook_refs(configurados, manifest.playbooks) if r["name"] not in existentes]
-    if not nuevos:
-        return False
-    await defaults_negocio.guardar(tenant_id, {"playbooks": [*(p.model_dump() for p in actuales.playbooks), *nuevos]})
-    return True
-
-
 async def _actualizar_persona(manifest: PresetManifest, tenant_id: uuid.UUID) -> None:
     """La persona del preset va a los valores por defecto de los agentes del negocio (`agent_defaults`, ADR-0206 §6),
     clave por clave y solo si el negocio no la cambió (sigue en el por defecto)."""
@@ -241,7 +228,6 @@ async def apply_preset(tenant_id: uuid.UUID, preset_id: str, *, sembrar_ejemplos
                 resultado.pendientes.append({"pack": pack_id, "paso": f"configurar_{pack_id}", "detalle": detalle})
                 resultado.pasos.append(f"{pack_id} pendiente de configurar ({detalle})")
 
-        await _actualizar_playbooks(manifest, resultado.habilitados, tenant_id)
         await _actualizar_persona(manifest, tenant_id)
         await _actualizar_app_settings(manifest, tenant_id)
         if manifest.proveedor_suscripciones in resultado.habilitados:

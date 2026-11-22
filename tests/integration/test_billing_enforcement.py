@@ -144,25 +144,11 @@ async def test_quota_decision_ilimitado_no_bloquea():
 
 
 async def _set_packs(tenant_id, packs: list[str]) -> None:
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
+    """Las habilidades del negocio son las instaladas en sus agentes (HU-AOS-91): sin el chequeo de cuota, que es
+    justo lo que se mide."""
+    from _habilidades import dar_habilidades
 
-    async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tenant_id,
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one()
-            spec = dict(row.spec)
-            spec["packs"] = packs
-            row.spec = spec
-            await session.commit()
+    await dar_habilidades(tenant_id, packs, chequear=False)
 
 
 def _plan_con_tope_de_habilidades(monkeypatch) -> None:
@@ -179,7 +165,7 @@ async def test_cuota_plugins_cuenta_packs_de_negocio_no_el_core(monkeypatch):
     """Con un plan con `plugins: 1` (desde ADR-0142 ningún plan del catálogo lo define: el
     mecanismo se prueba con un plan de prueba): el primer pack de negocio entra; el segundo se bloquea.
 
-    El gate se evalúa ANTES de agregar (`_enable_pack_for_tenant`), así que
+    El gate se evalúa ANTES de instalar (`asegurar_habilidades`), así que
     `used=0` con límite 1 permite el primero, y `used=1` bloquea el segundo.
     Antes del fix, `enabled_packs()` sumaba el core y un tenant recién creado ya
     veía `used=1` (2/1 si tenía un pack) → bloqueado sin poder habilitar nada.

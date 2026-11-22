@@ -230,11 +230,15 @@ def _como_vendedor(tenant_id: uuid.UUID) -> None:
 # los lleva igual que antes de HU-AOS-91 para que las grabaciones midan lo mismo.
 _PLAYBOOKS_DE_LA_CORRIDA: dict[uuid.UUID, list[dict[str, str]]] = {}
 KEY_ATENCION = "atencion"
+# Las habilidades de la corrida van en un agente propio, sin versión: no entra en ninguna release (y no choca con el
+# `atencion` de la foto que importa el gate) y `atencion` queda como antes, sin habilidades propias, con las del
+# negocio.
+KEY_HABILIDADES = "habilidades_corrida"
 
 
 async def _habilidades_de_la_corrida(tenant_id: uuid.UUID, definicion: dict[str, Any]) -> None:
     """Las habilidades de la corrida (los `packs` del set, los del preset y los que trae `config`) quedan instaladas en
-    el especialista `atencion`, que `agentes_nativos` publica: el alta no las elige (ADR-0206, HU-AOS-91)."""
+    el agente `habilidades_corrida`: el alta no las elige (ADR-0206, HU-AOS-91)."""
     from core.agents import versiones
     from core.agents.habilitacion import asegurar_habilidades
     from core.agents.instalaciones_agente import instalar_en_agente
@@ -256,9 +260,11 @@ async def _habilidades_de_la_corrida(tenant_id: uuid.UUID, definicion: dict[str,
     if not packs:
         return
     await asegurar_habilidades(tenant_id, packs, actor=None)
-    agente = await versiones.crear_agente(tenant_id, key=KEY_ATENCION, kind="specialist", name="Atención")
-    # Activas, también Pagos: el agente de la corrida tenía todas las habilidades del negocio y la config de Pagos
-    # del set es del negocio.
+    agente = await versiones.crear_agente(
+        tenant_id, key=KEY_HABILIDADES, kind="specialist", name="Habilidades de la corrida"
+    )
+    # Activas, también Pagos: el negocio de la corrida las tenía todas habilitadas y la config de Pagos del set es del
+    # negocio.
     for pack in packs:
         await instalar_en_agente(tenant_id, agente.id, pack)
 
@@ -399,8 +405,7 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
                     )
                 )
             ).scalar_one_or_none()
-        # `_habilidades_de_la_corrida` lo deja creado sin versión, con sus habilidades instaladas.
-        if existente is not None and await versiones.listar_versiones(tenant_id, existente):
+        if existente is not None:
             try:  # idempotente: negocios de prueba que se reusan entre módulos
                 await agregar_instancia(tenant_id, conexion, existente, is_default=True)
             except ConflictoInstancia as exc:
@@ -431,11 +436,7 @@ async def agentes_nativos(tenant_id: uuid.UUID, conexion: uuid.UUID, modulos: li
             and (nombre not in ACCIONES_CAPTAR_LEADS or "pack_commerce" in habilitados)
         ]
         contenido["procedures"] = declarados(procedimientos_publicados(habilitados), set())
-        agente = (
-            await versiones.obtener_agente(tenant_id, existente)
-            if existente is not None
-            else await versiones.crear_agente(tenant_id, key=KEY_ATENCION, kind="specialist", name="Atención")
-        )
+        agente = await versiones.crear_agente(tenant_id, key=KEY_ATENCION, kind="specialist", name="Atención")
         await versiones.publicar(
             tenant_id, agente.id, catalogo=catalogo, contenido=contenido, notes="Agente de la corrida de journeys."
         )

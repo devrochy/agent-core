@@ -43,7 +43,7 @@ async def _estado(tid):
             skus = set((await s.execute(select(ProductVariant.sku).where(ProductVariant.tenant_id == tid))).scalars())
             versiones = (await s.execute(select(func.count()).select_from(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tid))).scalar_one()
             tenant = await s.get(Tenant, tid)
-        config = await plugin_manager.load_config("pack_commerce") if "pack_commerce" in spec.packs else None
+        config = await plugin_manager.load_config("pack_commerce")
     return spec, productos, skus, versiones, (tenant.settings or {}).get("preset"), config
 
 
@@ -53,16 +53,14 @@ async def test_alta_con_preset_restaurante() -> None:
     tid, pasos = await _alta("restaurante", "basic")
     spec, productos, skus, versiones, preset, config = await _estado(tid)
 
-    assert "pack_commerce" in spec.packs
+    # El preset solo siembra configuración (HU-AOS-91): no habilita packs ni escribe el spec.
+    assert spec.packs == [] and versiones == 1
     # pack_payments exige claves de Wompi: queda pendiente y el alta no falla.
-    assert "pack_payments" not in spec.packs
     assert [p["pack"] for p in preset["pendientes"]] == ["pack_payments"]
     assert preset["id"] == "restaurante" and preset["version"] == 2
     # Catálogo de ejemplo desde `seed_data` del pack y config del fragmento.
     assert {"MENU-PLATO-DIA", "MENU-LIMONADA"} <= skus and productos == 2
     assert config.order_prefix == "PED"
-    assert versiones >= 2  # versión nueva del AgentSpec
-    assert "ventas" in {p["name"] if isinstance(p, dict) else p.name for p in spec.playbooks}
     assert any("pendiente de configurar" in p for p in pasos)
 
 

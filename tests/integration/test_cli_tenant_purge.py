@@ -104,7 +104,7 @@ async def test_cli_create_y_purge_por_cli() -> None:
     slug = f"cli-alta-{uuid.uuid4().hex[:6]}"
     res = await asyncio.to_thread(
         _invoke_cli,
-        ["tenant", "create", "-y", "--name", f"Alta CLI {slug}", "--slug", slug, "--packs", "pack_commerce"],
+        ["tenant", "create", "-y", "--name", f"Alta CLI {slug}", "--slug", slug],
     )
     assert res.exit_code == 0, res.output
     assert "Seed de packs completado" in res.output
