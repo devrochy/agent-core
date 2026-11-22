@@ -236,6 +236,16 @@ KEY_ATENCION = "atencion"
 KEY_HABILIDADES = "habilidades_corrida"
 
 
+async def _pendientes_del_preset(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
+    from core.db.models import Tenant
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        tenant = await session.get(Tenant, tenant_id)
+    registro = ((tenant.settings or {}).get("preset") or {}) if tenant is not None else {}
+    return [p for p in registro.get("pendientes") or [] if isinstance(p, dict)]
+
+
 async def _habilidades_de_la_corrida(tenant_id: uuid.UUID, definicion: dict[str, Any]) -> None:
     """Las habilidades de la corrida (los `packs` del set, los del preset y los que trae `config`) quedan instaladas en
     el agente `habilidades_corrida`: el alta no las elige (ADR-0206, HU-AOS-91)."""
@@ -251,7 +261,9 @@ async def _habilidades_de_la_corrida(tenant_id: uuid.UUID, definicion: dict[str,
     if definicion.get("preset"):
         manifest = load_preset(definicion["preset"])
         packs += [p for p in manifest.packs if p not in packs]
-        refs += _playbook_refs(list(manifest.packs), list(manifest.playbooks))
+        # Como el spec v2 de antes: los playbooks de los packs que el preset dejó configurados, no los pendientes.
+        pendientes = {p.get("pack") for p in await _pendientes_del_preset(tenant_id)}
+        refs += _playbook_refs([p for p in manifest.packs if p not in pendientes], list(manifest.playbooks))
     packs += [p for p in (definicion.get("config") or {}) if p not in packs]
     unicos: dict[str, dict[str, str]] = {}
     for ref in refs:
