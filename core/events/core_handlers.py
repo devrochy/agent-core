@@ -13,7 +13,6 @@ from typing import Any
 
 from sqlalchemy import select
 
-from core.billing.campanas_del_plan import MOTIVO as MOTIVO_PLAN_NO_INCLUYE
 from core.billing.canales import on_platform_period_paid, on_subscription_charge_paid
 from core.billing.renovacion import on_platform_renewal_due
 from core.db.models import Conversation, Customer
@@ -93,11 +92,6 @@ def notice_key_for(topic: str, payload: dict[str, Any]) -> str:
     return f"sub_charge:{cargo}"
 
 
-# Motivos con los que el emisor puede marcar un aviso que no sale (`payload["frenado"]`). Solo estos: el payload no
-# decide un `error_reason` arbitrario.
-_FRENADOS_ACEPTADOS = frozenset({MOTIVO_PLAN_NO_INCLUYE})
-
-
 async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
     """Aviso al cliente de un evento de suscripción o de cita (plantilla o texto según la ventana).
 
@@ -156,7 +150,9 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
     }
     # Recordatorio de cita en un plan sin recordatorios (HU-BILL-26): lo marca el cron del pack; no sale y queda
     # `failed` con el motivo bajo el id del aviso (al subir de plan no se reenvía).
-    frenado = payload.get("frenado") if payload.get("frenado") in _FRENADOS_ACEPTADOS else None
+    from core.gateway.event_notices import MOTIVOS_FRENADO
+
+    frenado = payload.get("frenado") if payload.get("frenado") in MOTIVOS_FRENADO else None
     result = await send_event_notice(
         conversation.id,
         topic,

@@ -127,12 +127,19 @@ async def test_basic_el_envio_a_segmento_es_409_y_no_sale_nada(app_client, _sin_
     r = await app_client.post(f"{ACC}/vista-previa", json=_cuerpo(ids_premium), headers=h_premium)
     assert r.status_code == 200, r.text
     vista = r.json()
+    # El borrador de Premium, confirmado con las credenciales de Basic: ni el plan ni el envío se cruzan.
+    r = await app_client.post(
+        f"{ACC}/{vista['envio_id']}/confirmar", headers={**h_basic, "Idempotency-Key": uniq("clave-x")}
+    )
+    assert r.status_code in (404, 409), r.text
+    assert await _eventos(premium, "crm.segment_send.batch") == []
     r = await app_client.post(
         f"{ACC}/{vista['envio_id']}/confirmar", headers={**h_premium, "Idempotency-Key": uniq("clave-p")}
     )
     assert r.status_code == 202, r.text
     assert len(await _eventos(premium, "crm.segment_send.batch")) == 1
     assert await _eventos(basic, "crm.segment_send.batch") == []
+
 
 
 async def test_un_borrador_armado_antes_de_bajar_a_basic_no_se_confirma(app_client, _sin_guarda_de_test) -> None:

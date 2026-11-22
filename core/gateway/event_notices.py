@@ -239,6 +239,11 @@ async def _registrar_sin_plantilla(
     )
 
 
+# Motivos con los que quien emite un aviso puede frenarlo (`frenado`). Solo estos: el payload de un evento no decide
+# un `error_reason` cualquiera.
+MOTIVOS_FRENADO = frozenset({"plan_feature_not_included"})  # = core.billing.campanas_del_plan.MOTIVO (HU-BILL-26)
+
+
 async def _registrar_frenado(conversation: Conversation, event_key: str, notice_key: str, motivo: str) -> NoticeResult:
     """Deja el aviso `failed` con el motivo bajo su id estable (no se reintenta ni se reenvía) y devuelve el resultado."""
     async with get_session() as session:
@@ -317,7 +322,7 @@ async def send_event_notice(
     if conversation is None or conversation.tenant_id != get_current_tenant_id():
         return NoticeResult("no_enviado", "conversación inexistente")
 
-    if frenado:
+    if frenado in MOTIVOS_FRENADO:  # un motivo desconocido no se escribe como `error_reason`
         return await _registrar_frenado(conversation, event_key, notice_key, frenado)
 
     # Conexión pausada o eliminada (ADR-0122, enmienda a ADR-0108): el aviso no se

@@ -247,6 +247,12 @@ async def test_el_aviso_frenado_queda_failed_con_el_motivo_y_no_sale(monkeypatch
     assert fila.tenant_id == TID
 
 
+def test_los_motivos_de_freno_son_los_del_plan() -> None:
+    from core.gateway.event_notices import MOTIVOS_FRENADO
+
+    assert campanas.MOTIVO in MOTIVOS_FRENADO
+
+
 # ---------------------------------------------------------------- seguimiento de leads
 
 
