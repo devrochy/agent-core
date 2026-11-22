@@ -72,33 +72,9 @@ def activate(
     version: str = typer.Argument(..., help="Versión a activar (publicar)"),
     ref: str = typer.Argument("tenant-1", help="Tenant (slug o UUID)"),
 ) -> None:
-    """Activa una versión del AgentSpec (publicar). Rollback = activar otra versión."""
-
-    async def _run() -> None:
-        from core.db.models import AgentSpecRecord
-        from core.db.session import get_session
-        from core.shared.tenant import tenant_scope
-
-        tid = await _resolve_tenant(ref)
-        async with tenant_scope(tid):
-            async with get_session() as session:
-                rows = (
-                    await session.execute(
-                        select(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tid)
-                    )
-                ).scalars().all()
-                target = next((r for r in rows if r.version == version), None)
-                if target is None:
-                    raise typer.BadParameter(f"Versión no existe: {version}")
-                # Dos fases: primero ninguna activa, luego la target (el índice único
-                # permite una sola activa por tenant).
-                for r in rows:
-                    r.is_active = False
-                await session.flush()
-                target.is_active = True
-        console.print(f"✓ Versión {version} activada para {ref}")
-
-    asyncio.run(_run())
+    """Retirado: el AgentSpec v2 ya no se lee (ADR-0206, HU-AOS-91). Publica y revierte versiones de cada agente."""
+    console.print("[red]Retirado con el AgentSpec v2: las versiones son de cada agente (panel → Agentes).[/red]")
+    raise typer.Exit(2)
 
 
 @app.command()
@@ -106,46 +82,10 @@ def rollback(
     ref: str = typer.Argument("tenant-1", help="Tenant (slug o UUID)"),
     version: str | None = typer.Option(None, "--version", "-v", help="Versión exacta a revertir"),
 ) -> None:
-    """Revierte a la versión anterior (o a --version). Rollback en un paso."""
-
-    async def _run() -> None:
-        from core.db.models import AgentSpecRecord
-        from core.db.session import get_session
-        from core.shared.tenant import tenant_scope
-
-        tid = await _resolve_tenant(ref)
-        async with tenant_scope(tid):
-            async with get_session() as session:
-                rows = sorted(
-                    (
-                        await session.execute(
-                            select(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tid)
-                        )
-                    ).scalars().all(),
-                    key=lambda r: r.created_at,
-                )
-                if not rows:
-                    raise typer.BadParameter(f"Sin AgentSpec para {ref}")
-                current = next((r for r in rows if r.is_active), rows[-1])
-                target_version = version
-                if target_version is None:
-                    previous = next(
-                        (r for r in reversed(rows) if r.created_at < current.created_at), None
-                    )
-                    if previous is None:
-                        raise typer.BadParameter("No hay versión anterior para revertir")
-                    target_version = previous.version
-                target = next((r for r in rows if r.version == target_version), None)
-                if target is None:
-                    raise typer.BadParameter(f"Versión no existe: {target_version}")
-                # Dos fases (índice único: una activa por tenant)
-                for r in rows:
-                    r.is_active = False
-                await session.flush()
-                target.is_active = True
-        console.print(f"✓ {ref} revirtió de {current.version} a {target_version}")
-
-    asyncio.run(_run())
+    """Retirado: el AgentSpec v2 ya no se lee (ADR-0206, HU-AOS-91). La release de cada conexión se revierte desde
+    el panel."""
+    console.print("[red]Retirado con el AgentSpec v2: revierte la release de la conexión (panel → Conexiones).[/red]")
+    raise typer.Exit(2)
 
 def _leer_spec(path: Path) -> tuple[object | None, str | None]:
     from core.agents.contrato_v3 import MAX_SPEC_BYTES

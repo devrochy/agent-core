@@ -13,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from agentcore_contracts import AgentSpec
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -97,14 +96,11 @@ from core.admin.waweb_service import (
 )
 from core.agents import defaults_negocio
 from core.agents.habilitacion import configure_plugin_for_tenant
-from core.agents.habilitacion import ensure_pack_activated as _ensure_pack_activated
 from core.agents.instalaciones_agente import packs_del_negocio
 from core.agents.spec import (
     CORE_PACK_ID,
-    activate_spec_version,
     load_active_spec,
     next_spec_version,
-    save_spec_version,
 )
 from core.billing.enforcement import QuotaExceeded
 from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD, NO_SON_TURNOS
@@ -1102,16 +1098,14 @@ async def _next_spec_version() -> str:
     return await next_spec_version(tid)
 
 
+_V2_RETIRADO_SSR = "Retirado con el AgentSpec v2: los guardrails y las tools se configuran en cada agente."
+
+
 @router.get("/spec")
 async def spec_editor() -> RedirectResponse:
     """El editor de AgentSpec vive ahora en la tab "Avanzado" de Configuración
     (ADR-0050). Se conserva la ruta por compatibilidad con enlaces/docs."""
     return RedirectResponse("/admin/configuracion?tab=avanzado", status_code=307)
-
-
-async def _save_spec_version(new_spec: AgentSpec) -> str | None:
-    """Delegación a `core.agents.spec.save_spec_version` (fuente única)."""
-    return await save_spec_version(new_spec)
 
 
 async def _save_defaults_from_spec_form(form: Any) -> RedirectResponse:
@@ -1166,64 +1160,10 @@ async def _save_defaults_from_form(cambios: dict[str, Any], tab: str) -> Redirec
 
 @router.post("/spec")
 async def spec_save(request: Request):
-    admin = await current_admin(request)
-    if admin is None:
+    """Retirado con el AgentSpec v2 (ADR-0206, HU-AOS-91): el turno ya no lo lee."""
+    if await current_admin(request) is None:
         return _login_redirect()
-    form = await request.form()
-    raw_json = str(form.get("raw_json", ""))
-    if not raw_json.strip():
-        return await _save_defaults_from_spec_form(form)
-
-    current = await load_active_spec()
-    try:
-        # fallback de poder: JSON completo validado por el contrato congelado (persona, modelo, memoria y
-        # políticas del JSON quedan en el v2; los que usa Configuración están en `agent_defaults`)
-        data = json.loads(raw_json)
-        new_spec = AgentSpec.model_validate(data)
-        # Las tools declarativas pasan por el mismo validador que su editor (HU-AOS-12):
-        # sin literales sensibles nuevos ni secretos fuera de sus dominios.
-        from core.agents.declarativas import tools_del_editor_crudo
-
-        data = new_spec.model_dump(mode="json")
-        ext = dict(data.get("extensions") or {})
-        tools = await tools_del_editor_crudo(
-            get_current_tenant_id(), ext.get("tools"), (current.extensions or {}).get("tools")
-        )
-        if tools is None:
-            ext.pop("tools", None)
-        else:
-            ext["tools"] = tools
-        data["extensions"] = ext
-        new_spec = AgentSpec.model_validate(data)
-    except Exception as exc:
-        return RedirectResponse(
-            f"/admin/configuracion?tab=avanzado&flash=spec_invalido: {exc}&flash_type=danger", status_code=303
-        )
-
-    # `raw_json` es el único camino que puede seguir tocando `packs` (fallback
-    # de poder); si agrega alguno nuevo, se activa igual que desde Plugins.
-    activation_errors = [
-        err
-        for pack in set(new_spec.packs) - set(current.packs)
-        if (err := await _ensure_pack_activated(pack)) is not None
-    ]
-
-    version = await _save_spec_version(new_spec)
-    if version is None:
-        return RedirectResponse(
-            "/admin/configuracion?tab=avanzado&flash=hubo una edición concurrente, reintenta&flash_type=danger",
-            status_code=303,
-        )
-    if activation_errors:
-        return RedirectResponse(
-            f"/admin/configuracion?tab=avanzado&flash=spec guardado (v{version}), pero no se pudo activar: "
-            f"{'; '.join(activation_errors)}&flash_type=danger",
-            status_code=303,
-        )
-    return RedirectResponse(
-        f"/admin/configuracion?tab=avanzado&flash=spec guardado y activado (v{version})&flash_type=success",
-        status_code=303,
-    )
+    return HTMLResponse(_V2_RETIRADO_SSR, status_code=410)
 
 
 # ------------------------------------------------------------------ dashboard
@@ -2132,7 +2072,6 @@ async def meta_connection_plantillas_page(request: Request, connection_id: str):
 def _build_template_components(form: dict[str, str]) -> list[dict[str, Any]]:
     """Arma `components` a partir de los campos planos del formulario --
     permite validar param_name<->texto ANTES de serializar nada."""
-    import json
 
     components: list[dict[str, Any]] = []
     parameter_format = form.get("parameter_format") or None
@@ -2768,137 +2707,10 @@ async def settings_memory_save(
 
 @router.post("/configuracion/habilidades")
 async def settings_skills_save(request: Request):
-    """Tools on/off + límites por tool (ADR-0050): edita `spec.tools`."""
+    """Retirado con el AgentSpec v2 (ADR-0206, HU-AOS-91): el turno ya no lo lee."""
     if await current_admin(request) is None:
         return _login_redirect()
-    form = await request.form()
-    current = await load_active_spec()
-    data = current.model_dump(mode="json")
-    enabled = await packs_del_negocio()
-
-    # Solo se editan tools de packs HABILITADOS (mismo criterio que el GET): así
-    # no se pisan los bindings de packs deshabilitados ni se persiste basura.
-    editable = {t.name for t in mcp_host.get_tools() if t.plugin_id in enabled}
-    bindings_by_tool = {b["tool"]: dict(b) for b in data.get("tools", [])}
-    for tool_name in editable:
-        max_calls_raw = str(form.get(f"tool_maxcalls:{tool_name}", "") or "").strip()
-        try:
-            max_calls = int(max_calls_raw)
-        except ValueError:
-            max_calls = 0
-        binding = bindings_by_tool.get(tool_name, {"tool": tool_name, "scopes": []})
-        binding["enabled"] = form.get(f"tool_enabled:{tool_name}") is not None
-        binding["maxCallsPerConversation"] = max_calls if max_calls > 0 else None
-        binding["requiresConfirmation"] = form.get(f"tool_requires:{tool_name}") is not None
-        bindings_by_tool[tool_name] = binding
-    data["tools"] = list(bindings_by_tool.values())
-    # Guardrails propios del tenant (ADR-0051): DSL seguro en extensions["guardrails"].
-    if form.get("guardrails_text") is not None:
-        from core.orchestrator.guardrails import validate_custom_rules
-
-        extensions = dict(data.get("extensions") or {})
-        extensions["guardrails"] = validate_custom_rules(
-            _parse_custom_guardrails(str(form.get("guardrails_text") or ""))
-        )
-        data["extensions"] = extensions
-    # Tools declarativas del tenant (ADR-0052): JSON en extensions["tools"].
-    if form.get("declarative_tools_json") is not None:
-        import json as _json
-        from urllib.parse import quote
-
-        from core.agents.declarativas import preparar
-        from core.agents.secretos import guardar_secretos_declarativos, secretos_configurados
-        from core.kernel.procedures import catalogo_de_acciones
-        from core.mcp.declarative import rejected_domains
-        from core.plugin_manager import plugin_manager
-
-        extensions = dict(data.get("extensions") or {})
-        raw = str(form.get("declarative_tools_json") or "").strip()
-        parsed: object = []
-        if raw:
-            try:
-                parsed = _json.loads(raw)
-            except _json.JSONDecodeError as exc:
-                return RedirectResponse(
-                    f"/admin/configuracion?tab=habilidades&flash=JSON de tools inválido: {str(exc)[:120]}&flash_type=danger",
-                    status_code=303,
-                )
-        rejected = rejected_domains(parsed)
-        if rejected:
-            # Anti-SSRF (ADR-0052): solo dominios públicos con punto; ni IPs ni
-            # nombres internos (`redis`, `localhost`, `*.internal`).
-            msg = f"allowed_domains no permitidos (usa dominios públicos): {', '.join(rejected)[:160]}"
-            return RedirectResponse(
-                f"/admin/configuracion?tab=habilidades&flash={quote(msg)}&flash_type=danger",
-                status_code=303,
-            )
-        # Mismo validador que `/api/v1` (HU-AOS-12): sin literales en headers sensibles (los
-        # enmascarados se migran a la instalación `core`). Los secretos nuevos se cargan desde
-        # el panel nuevo: el SSR no tiene campo para valores.
-        tenant_id = get_current_tenant_id()
-        if tenant_id is None:
-            return _login_redirect()
-        preparadas = preparar(
-            parsed,
-            extensions.get("tools"),
-            {},
-            await secretos_configurados(tenant_id),
-            set(catalogo_de_acciones(plugin_manager.list_modules())),
-        )
-        if preparadas.errores:
-            ruta, msg = next(iter(preparadas.errores.items()))
-            return RedirectResponse(
-                f"/admin/configuracion?tab=habilidades&flash={quote(f'{ruta}: {msg}'[:200])}&flash_type=danger",
-                status_code=303,
-            )
-        if preparadas.secretos:
-            from core.agents.secretos import SecretoInvalido
-
-            try:
-                await guardar_secretos_declarativos(tenant_id, preparadas.secretos)
-            except SecretoInvalido as exc:
-                return RedirectResponse(
-                    f"/admin/configuracion?tab=habilidades&flash={quote(str(exc)[:200])}&flash_type=danger",
-                    status_code=303,
-                )
-        extensions["tools"] = preparadas.tools
-        data["extensions"] = extensions
-    return await _save_spec_from_form(request, data, "habilidades")
-
-
-def _parse_custom_guardrails(text: str) -> list[dict[str, Any]]:
-    """Parsea guardrails propios, una regla por línea:
-
-    `forbidden_phrase | frase1, frase2 | retry|escalate`
-    `required_tool | frase1, frase2 | tool_name | retry|escalate`
-    `max_length | 500 | retry|escalate`
-    """
-    rules: list[dict[str, Any]] = []
-    for line in (text or "").splitlines():
-        parts = [p.strip() for p in line.split("|")]
-        if len(parts) < 2:
-            continue
-        kind = parts[0]
-        if kind == "max_length":
-            try:
-                value = int(parts[1])
-            except ValueError:
-                continue
-            action = parts[2] if len(parts) > 2 else "retry"
-            rules.append({"kind": kind, "value": value, "action": action})
-        elif kind == "required_tool":
-            if len(parts) < 3:
-                continue
-            phrases = [p.strip() for p in parts[1].split(",") if p.strip()]
-            action = parts[3] if len(parts) > 3 else "retry"
-            rules.append(
-                {"kind": kind, "phrases": phrases, "tool": parts[2], "action": action}
-            )
-        elif kind == "forbidden_phrase":
-            phrases = [p.strip() for p in parts[1].split(",") if p.strip()]
-            action = parts[2] if len(parts) > 2 else "retry"
-            rules.append({"kind": kind, "phrases": phrases, "action": action})
-    return rules
+    return HTMLResponse(_V2_RETIRADO_SSR, status_code=410)
 
 
 def _format_custom_guardrails(rules: list[dict[str, Any]]) -> str:
@@ -2914,27 +2726,6 @@ def _format_custom_guardrails(rules: list[dict[str, Any]]) -> str:
             phrases = ", ".join(r.get("phrases") or [])
             lines.append(f"forbidden_phrase | {phrases} | {r.get('action', 'retry')}")
     return "\n".join(lines)
-
-
-async def _save_spec_from_form(request: Request, data: dict, tab: str) -> RedirectResponse:
-    """Valida y guarda una versión nueva del spec; redirige a la tab de origen."""
-    try:
-        new_spec = AgentSpec.model_validate(data)
-    except Exception as exc:
-        return RedirectResponse(
-            f"/admin/configuracion?flash=spec_invalido: {str(exc)[:140]}&flash_type=danger",
-            status_code=303,
-        )
-    version = await _save_spec_version(new_spec)
-    if version is None:
-        return RedirectResponse(
-            "/admin/configuracion?flash=hubo una edición concurrente, reintenta&flash_type=danger",
-            status_code=303,
-        )
-    return RedirectResponse(
-        f"/admin/configuracion?flash={tab} guardado (v{version})&flash_type=success",
-        status_code=303,
-    )
 
 
 @router.post("/configuracion/asistente")
@@ -3040,29 +2831,11 @@ async def settings_save(
 
 
 @router.post("/configuracion/spec/activar")
-async def spec_activate(request: Request, record_id: str = Form(...)):
-    """Activa una versión concreta del AgentSpec (rollback, ADR-0051)."""
-    me = await current_admin(request)
-    if me is None:
+async def spec_activate(request: Request):
+    """Retirado con el AgentSpec v2 (ADR-0206, HU-AOS-91): el turno ya no lo lee."""
+    if await current_admin(request) is None:
         return _login_redirect()
-    tid = get_current_tenant_id()
-    if tid is None:
-        return RedirectResponse(
-            "/admin/configuracion?tab=avanzado&flash=sin tenant activo&flash_type=danger",
-            status_code=303,
-        )
-    try:
-        version = await activate_spec_version(tid, record_id=uuid.UUID(record_id))
-    except ValueError as exc:
-        return RedirectResponse(
-            f"/admin/configuracion?tab=avanzado&flash=No se pudo activar: {str(exc)[:120]}&flash_type=danger",
-            status_code=303,
-        )
-    _audit("spec_activate", me.email, str(tid), version=version)
-    return RedirectResponse(
-        f"/admin/configuracion?tab=avanzado&flash=versión {version} activada&flash_type=success",
-        status_code=303,
-    )
+    return HTMLResponse(_V2_RETIRADO_SSR, status_code=410)
 
 
 @router.post("/configuracion/toggle-bot")

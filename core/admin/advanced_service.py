@@ -8,6 +8,7 @@ flow de atención (lectura, ADR-0054) y últimas corridas de evals.
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
@@ -219,17 +220,23 @@ async def save_custom_guardrails(
 
 
 # ------------------------------------------------------------------ flow y evals (lectura)
-async def read_flow(spec) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+@dataclass(frozen=True)
+class _PacksDelNegocio:
+    """Lo único que `resolve_flow` lee del spec: los packs cuyos flujos compone (los del negocio, ADR-0206 §5)."""
+
+    packs: tuple[str, ...]
+
+
+async def read_flow() -> dict[str, Any]:
+    """El flujo del negocio con las habilidades del negocio (`packs_del_negocio`). Sin declarativas: eran del
+    AgentSpec v2 (HU-AOS-91)."""
     from core.agents.flow import resolve_flow
-    from core.agents.instalaciones_agente import packs_del_negocio
-    from core.mcp.declarative import tools_for_spec
+    from core.agents.instalaciones_agente import CORE_PACK_ID, packs_del_negocio
     from core.mcp.host import mcp_host
 
     enabled = await packs_del_negocio()
-    available = {
-        t.name for t in mcp_host.get_tools() if t.plugin_id in enabled
-    } | {t.name for t in tools_for_spec(spec)}
-    resolved = await resolve_flow(spec, available=available)
+    available = {t.name for t in mcp_host.get_tools() if t.plugin_id in enabled}
+    resolved = await resolve_flow(_PacksDelNegocio(tuple(sorted(enabled - {CORE_PACK_ID}))), available=available)
     return {
         "source": resolved.source if resolved else "",
         "sections": [

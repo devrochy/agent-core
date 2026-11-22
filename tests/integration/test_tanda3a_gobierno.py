@@ -54,50 +54,18 @@ async def _switch(app_client, session: str, tenant_id: uuid.UUID) -> str:
 
 
 # ---------------------------------------------------------------- 3A.1 rollback
-async def test_rollback_activa_version_anterior(app_client) -> None:
-    from core.admin.views import _save_spec_version  # reusado: crea versión nueva
-    from core.agents.spec import load_active_spec
-    from core.shared.tenant import tenant_scope
-
+async def test_lo_del_spec_v2_en_el_panel_ssr_esta_retirado(app_client) -> None:
+    """HU-AOS-91: activar una versión del spec y guardar guardrails o declarativas del negocio responden 410. El
+    anti-SSRF de las declarativas sigue probado en `tests/test_scoped_http_ssrf.py`."""
     tid = await _tenant_id()
     session = await _login(app_client)
     headers = {"Cookie": await _switch(app_client, session, tid)}
 
-    async with tenant_scope(tid):
-        current = await load_active_spec()
-        v1 = current.version
-        changed = current.model_dump(mode="json")
-        changed["model"]["temperature"] = round((changed["model"]["temperature"] or 0.3) + 0.1, 2)
-        from agentcore_contracts import AgentSpec
+    r = await app_client.post("/admin/configuracion/spec/activar", headers=headers, data={"record_id": str(tid)})
+    assert r.status_code == 410
+    r = await app_client.post("/admin/configuracion/habilidades", headers=headers, data={"guardrails_text": "max_length | 300"})
+    assert r.status_code == 410
 
-        new_version = await _save_spec_version(AgentSpec.model_validate(changed))
-        assert new_version is not None
-
-    # Encontrar el record_id de la versión vieja vía el panel.
-    r = await app_client.get("/admin/configuracion?tab=avanzado", headers=headers)
-    assert r.status_code == 200
-
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
-
-    async with tenant_scope(tid):
-        async with get_session() as s:
-            old = (
-                await s.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tid, AgentSpecRecord.version == v1
-                    )
-                )
-            ).scalar_one()
-            old_id = str(old.id)
-
-    r = await app_client.post(
-        "/admin/configuracion/spec/activar", headers=headers, data={"record_id": old_id}
-    )
-    assert r.status_code == 303
-
-    async with tenant_scope(tid):
-        assert (await load_active_spec()).version == v1
 
 
 # ---------------------------------------------------------------- 3A.2 horarios
@@ -196,68 +164,6 @@ def test_eval_custom_rules() -> None:
     req = [{"kind": "required_tool", "phrases": ["ya confirmé"], "tool": "crear_pedido"}]
     assert _eval_custom_rules("Ya confirmé tu pedido", [], req) is not None
     assert _eval_custom_rules("Ya confirmé tu pedido", [{TOOL_NAME_KEY: "crear_pedido"}], req) is None
-
-
-async def test_guardrails_propios_persisten_en_spec(app_client) -> None:
-    from core.agents.spec import load_active_spec
-    from core.shared.tenant import tenant_scope
-
-    tid = await _tenant_id()
-    session = await _login(app_client)
-    headers = {"Cookie": await _switch(app_client, session, tid)}
-
-    r = await app_client.post(
-        "/admin/configuracion/habilidades",
-        headers=headers,
-        data={"guardrails_text": "forbidden_phrase | garantizado, 100% seguro | retry\nmax_length | 300"},
-    )
-    assert r.status_code == 303
-
-    async with tenant_scope(tid):
-        spec = await load_active_spec()
-    rules = (spec.extensions or {}).get("guardrails") or []
-    assert {r["kind"] for r in rules} == {"forbidden_phrase", "max_length"}
-
-
-async def test_tools_declarativas_rechazan_dominios_internos(app_client) -> None:
-    """Anti-SSRF (ADR-0052): `allowed_domains` solo acepta FQDN públicos."""
-    import json
-    from urllib.parse import unquote
-
-    from core.agents.spec import load_active_spec
-    from core.shared.tenant import tenant_scope
-
-    tid = await _tenant_id()
-    session = await _login(app_client)
-    headers = {"Cookie": await _switch(app_client, session, tid)}
-
-    def _tools(domains: list[str]) -> str:
-        return json.dumps(
-            [{"name": "consulta", "url": "https://api.negocio.com/x", "allowed_domains": domains}]
-        )
-
-    r = await app_client.post(
-        "/admin/configuracion/habilidades",
-        headers=headers,
-        data={"declarative_tools_json": _tools(["api.negocio.com", "redis", "127.1"])},
-    )
-    assert r.status_code == 303
-    location = unquote(r.headers["location"])
-    assert "flash_type=danger" in location and "redis, 127.1" in location
-    async with tenant_scope(tid):
-        spec = await load_active_spec()
-    assert not any(t["name"] == "consulta" for t in (spec.extensions or {}).get("tools") or [])
-
-    r = await app_client.post(
-        "/admin/configuracion/habilidades",
-        headers=headers,
-        data={"declarative_tools_json": _tools(["API.negocio.com."])},
-    )
-    assert r.status_code == 303 and "flash_type=success" in r.headers["location"]
-    async with tenant_scope(tid):
-        spec = await load_active_spec()
-    [tool] = [t for t in (spec.extensions or {}).get("tools") or [] if t["name"] == "consulta"]
-    assert tool["allowed_domains"] == ["api.negocio.com"]
 
 
 # ---------------------------------------------------------------- 3A.4 evals

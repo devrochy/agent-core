@@ -2,8 +2,8 @@
 
 Gherkin «Tools declarativas sin secretos»: el literal v2 de `Authorization` pasa cifrado a la
 instalación `core` del negocio y la tool queda con `{"secret": ...}` ANTES de crear la primera
-`agent_version`; un literal nuevo en un header sensible se rechaza al guardar. Más: el editor en
-`/api/v1`, el resolver al ejecutar (atado a los dominios del secreto) y el aislamiento.
+`agent_version`. Más: el resolver al ejecutar (atado a los dominios del secreto) y el aislamiento. El editor del
+negocio en `/api/v1` se retiró con el AgentSpec v2 (HU-AOS-91): su 410 lo prueba `test_spec_editor.py`.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import uuid
 from typing import Any
 
 import pytest
-from _api_helpers import api_headers, uniq
+from _api_helpers import uniq
 from sqlalchemy import text
 
 pytestmark = [
@@ -123,75 +123,6 @@ async def test_secretos_cifrados_con_aad_y_atados_a_dominios() -> None:
 
 
 # ------------------------------------------------------------------ editor /api/v1
-async def test_editor_api_sin_literales(app_client) -> None:
-    tid = await _negocio([_tool({"Authorization": SECRETO})])
-    h = await api_headers(app_client, tid)
-    url = "/api/v1/admin/settings/declarative-tools"
-
-    r = await app_client.get(url, headers=h)
-    assert r.status_code == 200, r.text
-    assert SECRETO not in r.text
-    assert r.json()["literals_to_migrate"] == ["consultar_envio.Authorization"]
-    mascara = r.json()["tools"][0]["headers"]["Authorization"]
-
-    # Un literal nuevo en un header sensible se rechaza.
-    r = await app_client.put(url, headers=h, json={"tools": [_tool({"X-Api-Key": "literal-nuevo"})]})
-    assert r.status_code == 422 and "tools[0].headers.X-Api-Key" in r.json()["error"]["fields"]
-    assert "literal-nuevo" not in r.text
-
-    # Con la máscara, el literal guardado se migra a un secreto.
-    r = await app_client.put(url, headers=h, json={"tools": [_tool({"Authorization": mascara})]})
-    assert r.status_code == 200, r.text
-    assert r.json()["literals_to_migrate"] == []
-    assert r.json()["tools"][0]["headers"]["Authorization"] == {"secret": "consultar_envio_authorization"}
-    assert r.json()["secrets"] == [{"name": "consultar_envio_authorization", "domains": [DOMINIO]}]
-
-    # Referencia a un secreto que no existe, o que no puede viajar a un dominio nuevo → 422.
-    r = await app_client.put(url, headers=h, json={"tools": [_tool({"Authorization": {"secret": "no_existe"}})]})
-    assert r.status_code == 422
-    otra = _tool({"Authorization": {"secret": "consultar_envio_authorization"}}, [DOMINIO, "evil.example.com"])
-    r = await app_client.put(url, headers=h, json={"tools": [otra]})
-    assert r.status_code == 422 and "vuelve a escribirlo" in r.text
-
-    # Secreto nuevo por referencia, con su valor de solo escritura.
-    nueva = _tool({"Cookie": {"secret": "sesion_proveedor"}}, nombre="consultar_saldo")
-    r = await app_client.put(
-        url,
-        headers=h,
-        json={
-            "tools": [_tool({"Authorization": {"secret": "consultar_envio_authorization"}}), nueva],
-            "secrets": {"sesion_proveedor": "sid=abc"},
-        },
-    )
-    assert r.status_code == 200, r.text
-    assert "sid=abc" not in r.text
-    assert {s["name"] for s in r.json()["secrets"]} == {"consultar_envio_authorization", "sesion_proveedor"}
-
-    # El spec v2 activo (lo que lee el loop) ya no tiene literales.
-    from core.agents.spec import load_active_spec
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        spec = await load_active_spec()
-    assert SECRETO not in json.dumps(spec.model_dump(mode="json"))
-
-
-async def test_editor_no_toca_otro_negocio(app_client) -> None:
-    a = await _negocio()
-    b = await _negocio()
-    ha = await api_headers(app_client, a)
-    r = await app_client.put(
-        "/api/v1/admin/settings/declarative-tools",
-        headers=ha,
-        json={"tools": [_tool({"Authorization": {"secret": "token_a"}})], "secrets": {"token_a": "Bearer A"}},
-    )
-    assert r.status_code == 200, r.text
-    hb = await api_headers(app_client, b)
-    r = await app_client.get("/api/v1/admin/settings/declarative-tools", headers=hb)
-    assert r.json() == {"tools": [], "secrets": [], "literals_to_migrate": []}
-    assert await _fila_core(b) is None
-
-
 # ------------------------------------------------------------------ ejecución
 class _HttpEspia:
     def __init__(self) -> None:
@@ -234,29 +165,6 @@ async def test_la_tool_resuelve_el_secreto_al_ejecutar_y_solo_hacia_su_dominio()
         assert espia.llamadas[-1]["headers"] == {"Authorization": SECRETO, "X-Cliente": "demo"}
         r = await build_tool(mala).handler({}, ctx)
         assert "credenciales" in r["error"] and len(espia.llamadas) == 1
-
-
-async def test_editor_crudo_del_spec_no_es_otra_puerta(app_client) -> None:
-    tid = await _negocio([_tool({"Authorization": SECRETO})])
-    h = await api_headers(app_client, tid)
-    for url in ("/api/v1/admin/settings/advanced", "/api/v1/admin/settings/advanced/spec"):
-        r = await app_client.get(url, headers=h)
-        assert r.status_code == 200 and SECRETO not in r.text
-    spec = (await app_client.get("/api/v1/admin/settings/advanced/spec", headers=h)).json()["spec"]
-    # Ida y vuelta sin cambios: se conserva lo guardado (no se pierde el literal).
-    r = await app_client.put("/api/v1/admin/settings/advanced/spec", headers=h, json={"spec": spec})
-    assert r.status_code == 200, r.text
-    # Reapuntar la tool con el literal a otro dominio → 422.
-    mala = json.loads(json.dumps(spec))
-    mala["extensions"]["tools"][0]["url"] = "https://evil.example.com/x"
-    mala["extensions"]["tools"][0]["allowed_domains"] = ["evil.example.com"]
-    r = await app_client.put("/api/v1/admin/settings/advanced/spec", headers=h, json={"spec": mala})
-    assert r.status_code == 422, r.text
-    # Un literal nuevo en un header sensible → 422.
-    mala = json.loads(json.dumps(spec))
-    mala["extensions"]["tools"][0]["headers"] = {"X-Api-Key": "nuevo-literal"}
-    r = await app_client.put("/api/v1/admin/settings/advanced/spec", headers=h, json={"spec": mala})
-    assert r.status_code == 422 and "nuevo-literal" not in r.text
 
 
 async def test_secreto_nunca_por_http_al_ejecutar() -> None:

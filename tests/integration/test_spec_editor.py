@@ -1,7 +1,8 @@
-"""Editor de AgentSpec del panel (C4, Sprint 4): guardar crea una versión nueva
-y la activa; un valor fuera del contrato se rechaza sin tocar la BD.
+"""Editor del AgentSpec v2 en el panel: retirado (ADR-0206, HU-AOS-91).
 
-Opera sobre un tenant de ejemplo genérico para no ensuciar el spec de t1.
+El turno no lee el AgentSpec v2 desde HU-AOS-90. Guardarlo desde el SSR (`POST /admin/spec`) o desde la API
+(`/api/v1/admin/settings/advanced/spec`, versiones, guardrails, tools del negocio y declarativas) responde 410
+`v2_retirado`, sin tocar la BD.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from _api_helpers import api_headers
 
 pytestmark = [
     pytest.mark.asyncio(loop_scope="session"),
@@ -19,91 +21,59 @@ pytestmark = [
 ]
 
 
-async def _cookies(app_client, tenant_id) -> tuple[str, str]:
-    """Login + switch a un tenant. Devuelve (session_cookie, ac_tenant_cookie)."""
-    r = await app_client.post("/admin/login", data={"email": "admin@local", "password": "admin123"})
-    assert r.status_code == 303
-    session = r.headers["set-cookie"].split(";")[0]
-    headers = {"Cookie": session}
-    r2 = await app_client.post(
-        "/admin/switch-tenant", headers=headers, data={"tenant_id": str(tenant_id)}
-    )
-    tenant_cookie = [c.split(";")[0] for c in r2.headers.get_list("set-cookie") if "ac_tenant" in c]
-    return session, tenant_cookie[0]
-
-
-def _payload(**overrides) -> dict[str, str]:
-    base = {
-        "packs": "pack_commerce",
-        "persona_role": "asistente de ventas",
-        "persona_tone": "cercano",
-        "persona_warmth": "3",
-        "persona_emojis": "sparse",
-        "persona_max_length": "500",
-        "model_primary": "deepseek-chat",
-        "model_temperature": "0.3",
-        "policy_budget": "0.5",
-        "policy_max_tool_calls": "10",
-    }
-    base.update(overrides)
-    return base
-
-
-async def _active_versions(tenant_id) -> list[str]:
-    from sqlalchemy import select
+async def _versiones(tenant_id) -> int:  # type: ignore[no-untyped-def]
+    from sqlalchemy import func, select
 
     from core.db.models import AgentSpecRecord
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            rows = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tenant_id,
-                        AgentSpecRecord.deleted_at.is_(None),
+        async with get_session() as s:
+            return int(
+                (
+                    await s.execute(
+                        select(func.count()).select_from(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tenant_id)
                     )
-                )
-            ).scalars().all()
-    return [r.version for r in rows if r.is_active]
+                ).scalar_one()
+            )
 
 
-async def test_editor_crea_version_nueva_y_activa(app_client, moto_setup) -> None:
-    _t1, t2 = moto_setup
-    session, ac_tenant = await _cookies(app_client, t2)
-    headers = {"Cookie": f"{session}; {ac_tenant}"}
+async def test_el_editor_ssr_del_spec_esta_retirado(app_client, moto_setup) -> None:  # type: ignore[no-untyped-def]
+    _t1, moto = moto_setup
+    r = await app_client.post("/admin/login", data={"email": "admin@local", "password": "admin123"})
+    sesion = r.headers["set-cookie"].split(";")[0]
+    r = await app_client.post("/admin/switch-tenant", headers={"Cookie": sesion}, data={"tenant_id": str(moto)})
+    tenant = next(c.split(";")[0] for c in r.headers.get_list("set-cookie") if "ac_tenant" in c)
+    antes = await _versiones(moto)
 
-    # El editor vive ahora en la tab "Avanzado" de Configuración (ADR-0050); la
-    # ruta /admin/spec redirige allí.
-    r = await app_client.get("/admin/spec", headers=headers, follow_redirects=False)
-    assert r.status_code == 307
-    assert "tab=avanzado" in r.headers["location"]
-
-    r = await app_client.get("/admin/configuracion?tab=avanzado", headers=headers)
-    assert r.status_code == 200
-    assert "AgentSpec" in r.text
-    assert "Versiones del AgentSpec" in r.text
-
-    antes = await _active_versions(t2)
-    r = await app_client.post("/admin/spec", headers=headers, data=_payload())
-    assert r.status_code == 303
-    # Desde ADR-0206 §6 el formulario guarda los valores por defecto de los agentes (`agent_defaults`), no una
-    # versión de `agent_specs`.
-    assert "guardado" in r.headers["location"]
-    assert (await _active_versions(t2)) == antes
+    r = await app_client.post("/admin/spec", headers={"Cookie": f"{sesion}; {tenant}"}, data={"raw_json": "{}"})
+    assert r.status_code == 410
+    assert await _versiones(moto) == antes
 
 
-async def test_editor_rechaza_valor_fuera_del_contrato(app_client, moto_setup) -> None:
-    """El contrato congelado es rey: un tono inválido no guarda ninguna versión."""
-    _t1, t2 = moto_setup
-    session, ac_tenant = await _cookies(app_client, t2)
-    headers = {"Cookie": f"{session}; {ac_tenant}"}
+async def test_la_api_del_spec_v2_responde_410(app_client, moto_setup) -> None:  # type: ignore[no-untyped-def]
+    _t1, moto = moto_setup
+    h = await api_headers(app_client, moto)
+    antes = await _versiones(moto)
+    base = "/api/v1/admin/settings"
+    llamadas = [
+        ("GET", f"{base}/advanced/spec", None),
+        ("PUT", f"{base}/advanced/spec", {"spec": {}}),
+        ("POST", f"{base}/advanced/versions/x/activate", None),
+        ("PUT", f"{base}/advanced/guardrails", {"guardrails_text": "max_length | 300"}),
+        ("PUT", f"{base}/skills", {"tools": []}),
+        ("GET", f"{base}/declarative-tools", None),
+        ("PUT", f"{base}/declarative-tools", {"tools": [], "secrets": {}}),
+    ]
+    for metodo, url, cuerpo in llamadas:
+        r = await app_client.request(metodo, url, headers=h, json=cuerpo)
+        assert r.status_code == 410, (metodo, url, r.text)
+        assert r.json()["error"]["code"] == "v2_retirado"
+    assert await _versiones(moto) == antes
 
-    antes = await _active_versions(t2)
-    r = await app_client.post(
-        "/admin/spec", headers=headers, data=_payload(persona_tone="amable")
-    )
-    assert r.status_code == 303
-    assert "inv%C3%A1lido" in r.headers["location"], "tono inválido → flash de error"
-    assert (await _active_versions(t2)) == antes, "no debe crearse versión con un spec inválido"
+    # Lo que no era del spec sigue: el LLM propio, el flujo y las corridas de evals; lo del v2 viene vacío.
+    avanzado = (await app_client.get(f"{base}/advanced", headers=h)).json()
+    assert avanzado["versions"] == [] and avanzado["guardrails_text"] == "" and avanzado["spec"] == {}
+    assert "llm" in avanzado and "flow" in avanzado and "eval_runs" in avanzado
+    assert (await app_client.get(base, headers=h)).json()["skills"] == []
