@@ -42,6 +42,7 @@ pytestmark = [
 PACK = "pack_prueba_motor"
 PROC_ID = f"{PACK}.compra"
 LLAMADAS: list[str] = []
+ARGUMENTOS: list[dict[str, Any]] = []  # los que recibió cada ejecución, en orden
 
 PROCEDIMIENTO = {
     "id": PROC_ID,
@@ -100,6 +101,7 @@ def _herramienta(nombre: str, resultado: dict[str, Any], params: dict[str, Any] 
 
     async def handler(args: dict[str, Any], ctx: Any) -> dict[str, Any]:
         LLAMADAS.append(nombre)
+        ARGUMENTOS.append(dict(args))
         return dict(resultado)
 
     return MCPTool(
@@ -160,6 +162,7 @@ def _habilitar(pack_de_prueba: Any, monkeypatch) -> None:  # type: ignore[no-unt
 
     instalar(monkeypatch)
     LLAMADAS.clear()
+    ARGUMENTOS.clear()
 
 
 @pytest.fixture(scope="module")
@@ -431,11 +434,15 @@ async def test_confirmacion_de_accion_atada_a_sus_argumentos_y_avance(negocios: 
     assert "aceptar_m" not in LLAMADAS and "confirmation_required" in _resultado_de_tool(guion, 1)
     await _entrada(conv, {"interactive_id": await _boton(conv, task)})
 
-    # Confirmó A; el modelo intenta B → vuelve a pedir confirmación. Luego A → se ejecuta y avanza.
+    # Confirmó A; el modelo intenta B → corre A, lo que confirmó el cliente (adenda 2026-11-22 de
+    # ADR-0113; antes se volvía a pedir confirmación), y el resultado se lo avisa al modelo. B nunca
+    # se ejecuta. Su segundo intento con A ya no es de la etapa; el pedido sí.
     guion = _Guion([("aceptar_m", {"cotizacion": "B"}), ("aceptar_m", {"cotizacion": "A"}), ("crear_pedido_m", {}), "Listo."])
     await _turno(conv, guion, monkeypatch)
-    assert "confirmation_required" in _resultado_de_tool(guion, 1)
+    assert "confirmation_required" not in _resultado_de_tool(guion, 1)
+    assert "ya había confirmado aceptar_m" in _resultado_de_tool(guion, 1)
     assert LLAMADAS == ["aceptar_m", "crear_pedido_m"]
+    assert ARGUMENTOS[0] == {"cotizacion": "A"}
     assert "crear_pedido_m" not in guion.tools[0] and "crear_pedido_m" in guion.tools[2]  # acciones de la etapa nueva
     p = await _proyeccion(conv, task)
     assert p.stage == "esperar" and p.status == "active"  # espera el evento de pago

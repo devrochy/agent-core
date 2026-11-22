@@ -119,6 +119,20 @@ def test_confirmacion_atada_a_los_argumentos_y_se_consume() -> None:
     assert not motor.accion_confirmada(eventos, "confirmar_cotizacion", h_a)  # ya se usó
 
 
+def test_hash_confirmado_es_el_del_confirmed_vigente() -> None:
+    """El hash que confirmó el cliente, aunque el modelo vuelva a llamar con otros args; nada si ya
+    se ejecutó o si la etapa cambió (Estudio Aurora 2026-11-19)."""
+    h = motor.hash_args({"title": "Limpieza facial profunda"})
+    objetivo = {"kind": "action", "name": "create_calendar_event"}
+    eventos = [ev(2, "confirmation_requested", target=objetivo, args_hash=h), ev(3, "confirmed", target=objetivo, args_hash=h)]
+    assert motor.hash_confirmado(eventos, "create_calendar_event") == h
+    assert motor.hash_confirmado(eventos, "otra_accion") is None
+    assert motor.hash_confirmado([*eventos, ev(4, "action_requested", action="create_calendar_event", args_hash=h)],
+                                 "create_calendar_event") is None
+    assert motor.hash_confirmado([*eventos, ev(4, "stage_entered", from_stage="a", to_stage="b")],
+                                 "create_calendar_event") is None
+
+
 def test_boton_de_confirmar_firmado_ida_y_vuelta() -> None:
     tid, negocio = "8f14e45f-ceea-467a-9b3f-1c2d3e4f5a6b", "e46e57e7-b3c5-4f5a-9112-0382b2365518"
     payload = motor.payload_boton_confirmar("secreto", negocio, tid, 7, "h1")

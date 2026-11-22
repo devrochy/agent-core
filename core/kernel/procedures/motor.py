@@ -598,6 +598,21 @@ def accion_confirmada(eventos: Sequence[Evento], accion: str, h: str) -> bool:
     return False
 
 
+def hash_confirmado(eventos: Sequence[Evento], accion: str) -> str | None:
+    """El hash de args del `confirmed` de esa acción que ninguna ejecución consumió en la visita
+    vigente a la etapa (el mismo recorrido que `accion_confirmada`), o None."""
+    for e in reversed(eventos):
+        if e.type in ("started", "stage_entered", "revalidated"):
+            return None
+        if e.data.get("action") == accion and e.type in ("action_requested", "action_succeeded", "action_failed"):
+            return None
+        objetivo = e.data.get("target") or {}
+        if e.type == "confirmed" and objetivo.get("kind") == "action" and objetivo.get("name") == accion:
+            h = e.data.get("args_hash")
+            return str(h) if h else None
+    return None
+
+
 def huella_pedida(eventos: Sequence[Evento], accion: str, h: str) -> str | None:
     """La huella del resumen que vio el cliente en la última petición de confirmación de esa
     acción con esos args (`confirmation_requested.data.resumen`), o None si no la tiene."""

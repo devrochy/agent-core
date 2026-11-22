@@ -47,6 +47,8 @@ MENSAJES = {
     "confirmacion_repedida": (),
     # Smoke de test 2026-10-20: correo con el dominio mal escrito.
     "correo_dudoso": ("dato", "sugerido"),
+    # Adenda 2026-11-22 de ADR-0113: la acción confirmada corre con los args que vio el cliente.
+    "accion_con_lo_confirmado": ("accion",),
 }
 _SECCION = re.compile(r"^## ([a-z_]+)$")
 _MAX_ERROR_RESOLVER = 300
