@@ -100,14 +100,13 @@ async def cerrar_ciclo(
         filas.append({"tipo": abono.tipo, "creditos": queda, "origen": abono.origen, "vence_en": abono.vence_en})
     sobrante = creditos_que_quedan(reparto.queda_mes)
     if acumulable_meses > 0 and sobrante > 0:
-        filas.append(
-            {
-                "tipo": "acumulado",
-                "creditos": sobrante,
-                "origen": origen_del_ciclo(inicio),
-                "vence_en": vencimiento_del_acumulado(hasta, acumulable_meses, dia_ancla),
-            }
-        )
+        vence_en = vencimiento_del_acumulado(hasta, acumulable_meses, dia_ancla)
+        # Misma regla que lo acumulado que se arrastra: si vence antes de terminar el ciclo siguiente no
+        # llega a contar (p. ej. un período reiniciado que empieza más adelante).
+        if vence_en >= siguiente_fin:
+            filas.append(
+                {"tipo": "acumulado", "creditos": sobrante, "origen": origen_del_ciclo(inicio), "vence_en": vence_en}
+            )
     if not filas:
         return CierreDeCiclo(medido=True)
 

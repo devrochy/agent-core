@@ -18,8 +18,9 @@ TRUNCATE, y `app_runtime` solo con SELECT e INSERT (patrón de 0069). Sin `delet
 borra; la única excepción es `purge_tenant` (0072), que descubre las tablas por la columna `tenant_id`
 y apaga los triggers con `session_replication_role`.
 
-Aditiva: tabla nueva y vacía, sin locks sobre tablas existentes. El downgrade la borra solo si está
-vacía: con abonos aborta, porque perdería créditos pagados.
+Aditiva: tabla nueva y vacía, sin locks sobre tablas existentes. El downgrade la borra con sus abonos (como
+0143 con `tenant_cron_runs`; el test de 0096 baja por encima de ella): solo para revertir un despliegue recién
+hecho, antes de que HU-BILL-23 venda recargas.
 
 **Numeración:** 0154 con `down_revision = "0152"`; la 0153 la usan otras ramas en curso (HU-BILL-21,
 `0153_usage_kind_tts`). Se renumera al integrar, para que quede después de la 0153 (ADR-0209 §6).
@@ -96,17 +97,6 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
-    # Las recargas son créditos pagados y `origen` no tiene FK: no se borran en silencio.
-    op.execute(
-        """
-        DO $do$
-        BEGIN
-            IF EXISTS (SELECT 1 FROM credit_grants) THEN
-                RAISE EXCEPTION 'credit_grants tiene abonos: el downgrade de 0154 los perdería';
-            END IF;
-        END $do$;
-        """
-    )
     op.execute("DROP TRIGGER IF EXISTS credit_grants_sin_vaciar ON credit_grants")
     op.execute("DROP TRIGGER IF EXISTS credit_grants_inmutable ON credit_grants")
     op.execute("DROP POLICY IF EXISTS credit_grants_tenant_isolation ON credit_grants")
