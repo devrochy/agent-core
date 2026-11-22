@@ -266,11 +266,13 @@ async def aplicar_pago_de_periodo(
     propio.paid_at = now
     await session.flush()
     # Otros intentos del mismo período (un link del panel sin pagar, el cobro de la
-    # renovación) ya no sirven: si alguien igual paga uno, quedará `duplicado`.
+    # renovación) ya no sirven: si alguien igual paga uno, quedará `duplicado`. Solo pagos del
+    # plan: una recarga no tiene período y su link sigue valiendo (ADR-0209 §4).
     await session.execute(
         update(SubscriptionPayment)
         .where(
             SubscriptionPayment.tenant_id == tenant_id,
+            SubscriptionPayment.concepto == "plan",
             SubscriptionPayment.periodo == referencia,
             SubscriptionPayment.status == "pendiente",
             SubscriptionPayment.id != propio.id,
@@ -312,11 +314,13 @@ async def aplicar_pago_de_periodo(
     )
     if sub.plan_id != plan_previo:
         # El plan cambió: los links pendientes de otro plan dejan de servir. Si alguien paga
-        # uno igual, queda como pago doble y no devuelve el negocio al plan viejo.
+        # uno igual, queda como pago doble y no devuelve el negocio al plan viejo. Un link de
+        # recarga pendiente sigue valiendo con el plan nuevo (ADR-0209 §4): solo `concepto = 'plan'`.
         await session.execute(
             update(SubscriptionPayment)
             .where(
                 SubscriptionPayment.tenant_id == tenant_id,
+                SubscriptionPayment.concepto == "plan",
                 SubscriptionPayment.status == "pendiente",
                 SubscriptionPayment.plan_id != sub.plan_id,
                 SubscriptionPayment.deleted_at.is_(None),

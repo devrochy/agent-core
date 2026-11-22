@@ -26,6 +26,15 @@ class BillingRequestRejected(Exception):
     mensaje accionable, nunca apaga nada."""
 
 
+class MontoBajoElMinimo(BillingRequestRejected):
+    """El monto es menor que el mínimo de Wompi del ambiente (`core.payments.wompi_minimo`): se
+    rechaza antes de la red. En el sandbox (150.000 COP) deja fuera a los paquetes de recarga."""
+
+    def __init__(self, mensaje: str, *, minimo_cop: int) -> None:
+        self.minimo_cop = minimo_cop
+        super().__init__(mensaje)
+
+
 @dataclass
 class PaymentLink:
     provider_reference: str
@@ -46,12 +55,14 @@ class BaseBillingProvider(ABC):
     @abstractmethod
     async def create_payment_link(
         self, *, reference: str, amount_cop: float, expires_in_hours: int = 24,
-        plan_name: str = "",
+        plan_name: str = "", concepto: str = "plan", descripcion: str | None = None,
     ) -> PaymentLink:
         """Crea un link de pago de un solo uso, correlacionado con `reference`.
 
         `plan_name` se usa en la descripción visible al cliente (nunca un nombre
-        técnico como "agent-core", HU-REP-04).
+        técnico como "agent-core", HU-REP-04). `concepto` es `plan` (suscripción) o
+        `recarga` (paquete de créditos, ADR-0209 §4); `descripcion`, si viene, reemplaza
+        la descripción por defecto del concepto (la arma el servidor, nunca el cliente).
         """
 
     @abstractmethod

@@ -109,7 +109,8 @@ async def credito_del_mes(
 
 
 async def billing_payments(tenant_id: uuid.UUID, limit: int = 20) -> list[dict[str, Any]]:
-    """Historial de pagos del plan (más recientes primero)."""
+    """Historial de pagos de la plataforma, más recientes primero: los del plan y las recargas de créditos
+    (`concepto`, con sus `creditos`; ADR-0209 §5), para que una recarga no se lea como pago del plan."""
     from core.db.models import SubscriptionPayment
 
     try:
@@ -139,9 +140,52 @@ async def billing_payments(tenant_id: uuid.UUID, limit: int = 20) -> list[dict[s
             "paid_at": p.paid_at,
             "checkout_url": p.checkout_url,
             "periodo": p.periodo,
+            "concepto": p.concepto or "plan",
+            "creditos": float(p.creditos) if p.creditos is not None else None,
         }
         for p in rows
     ]
+
+
+async def paquetes_de_recarga(tenant_id: uuid.UUID) -> list[dict[str, Any]]:
+    """Paquetes de recarga con el precio del plan vigente (ADR-0209 §5), o [] si el negocio no puede
+    comprar (sin suscripción activa o en Free) o no se pudo leer la suscripción."""
+    from core.billing.checkout import recarga_disponible
+    from core.billing.plans import PAQUETES_DE_RECARGA, descuento_de_recarga, precio_de_recarga
+    from core.db.models import TenantSubscription
+
+    try:
+        async with tenant_scope(tenant_id):
+            async with get_session() as session:
+                sub = (
+                    await session.execute(
+                        select(TenantSubscription).where(
+                            TenantSubscription.tenant_id == tenant_id, TenantSubscription.deleted_at.is_(None)
+                        )
+                    )
+                ).scalar_one_or_none()
+    except Exception as exc:  # no tumbar el panel
+        log.warning("billing_recargas_failed", tenant_id=str(tenant_id), error=type(exc).__name__)
+        return []
+    plan = recarga_disponible(sub)
+    if plan is None:
+        return []
+    descuento = descuento_de_recarga(plan) or 0
+    paquetes: list[dict[str, Any]] = []
+    for paquete in PAQUETES_DE_RECARGA:
+        precio = precio_de_recarga(paquete, plan)
+        if precio is None:
+            continue
+        paquetes.append(
+            {
+                "id": paquete.id,
+                "creditos": paquete.creditos,
+                "precio_lista_cop": paquete.precio_cop,
+                "descuento_pct": descuento,
+                "precio_cop": precio,
+            }
+        )
+    return paquetes
 
 
 async def cobro_del_periodo(tenant_id: uuid.UUID) -> tuple[dict[str, Any] | None, bool]:

@@ -28,6 +28,7 @@ from core.billing.providers.base import (
     BaseBillingProvider,
     BillingRequestRejected,
     BillingWebhookEvent,
+    MontoBajoElMinimo,
     PaymentLink,
 )
 from core.payments.wompi_minimo import min_amount_cop
@@ -66,23 +67,36 @@ class WompiBillingProvider(BaseBillingProvider):
 
     async def create_payment_link(
         self, *, reference: str, amount_cop: float, expires_in_hours: int = 24,
-        plan_name: str = "",
+        plan_name: str = "", concepto: str = "plan", descripcion: str | None = None,
     ) -> PaymentLink:
         if amount_cop < self.min_amount_cop:
             # Chequeo ANTES de la red: Wompi va a rechazar esto. Mensaje
             # accionable en vez de un 422 crudo.
-            raise BillingRequestRejected(
-                f"El plan cuesta menos que el mínimo de Wompi (${self.min_amount_cop:,.0f} COP). "
-                "Cobrá trimestral o anual, o ajustá el precio del plan."
-            )
+            if concepto == "recarga":
+                mensaje = (
+                    f"La recarga cuesta menos que el mínimo de Wompi en este ambiente "
+                    f"(${self.min_amount_cop:,.0f} COP): no se puede pagar aquí."
+                )
+            else:
+                mensaje = (
+                    f"El plan cuesta menos que el mínimo de Wompi (${self.min_amount_cop:,.0f} COP). "
+                    "Cobrá trimestral o anual, o ajustá el precio del plan."
+                )
+            raise MontoBajoElMinimo(mensaje, minimo_cop=self.min_amount_cop)
         amount_in_cents = round(amount_cop * 100)
         expires_at = (datetime.now(UTC) + timedelta(hours=expires_in_hours)).isoformat()
         # Nombre visible al cliente: el plan y "SolversHub", NUNCA un nombre
         # técnico (HU-REP-04).
         visible_plan = plan_name.strip() or "plan"
+        if concepto == "recarga":
+            nombre = "Recarga de créditos · SolversHub"
+            descripcion_visible = (descripcion or "").strip() or "Recarga de créditos — SolversHub"
+        else:
+            nombre = f"{visible_plan} · SolversHub"
+            descripcion_visible = (descripcion or "").strip() or f"Suscripción a SolversHub — plan {visible_plan}"
         body = {
-            "name": f"{visible_plan} · SolversHub",
-            "description": f"Suscripción a SolversHub — plan {visible_plan}",
+            "name": nombre,
+            "description": descripcion_visible,
             "single_use": True,
             "collect_shipping": False,  # Wompi lo exige (422 real si falta)
             "currency": "COP",

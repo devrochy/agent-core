@@ -47461,6 +47461,83 @@
           }
         }
       }
+    },
+    "/api/v1/admin/plan/recargas": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plan"
+        ],
+        "summary": "Comprar Recarga",
+        "description": "Link de pago de un paquete de recarga de créditos (ADR-0209 §4, HU-BILL-23). Mismo permiso que\n`POST /subscribe`. El precio lo arma el servidor con el descuento del plan vigente.\n\n400 `unknown_package`: paquete desconocido.\n409 `recarga_no_disponible`: sin suscripción activa o en Free.\n409 `recarga_bajo_minimo`: el precio queda bajo el mínimo de Wompi del ambiente (sandbox: 150.000 COP).",
+        "operationId": "comprar_recarga_api_v1_admin_plan_recargas_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopUpRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscribeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -71522,6 +71599,14 @@
             "type": "boolean",
             "title": "Plan Por El Asistente",
             "default": false
+          },
+          "recargas": {
+            "items": {
+              "$ref": "#/components/schemas/TopUpPackage"
+            },
+            "type": "array",
+            "title": "Recargas",
+            "default": []
           }
         },
         "type": "object",
@@ -84929,6 +85014,22 @@
               }
             ],
             "title": "Periodo"
+          },
+          "concepto": {
+            "type": "string",
+            "title": "Concepto",
+            "default": "plan"
+          },
+          "creditos": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creditos"
           }
         },
         "type": "object",
@@ -85570,6 +85671,53 @@
         ],
         "title": "CreditBalance",
         "description": "Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22): el crédito del mes del plan más lo\nacumulado (sobrante de ciclos anteriores, en Premium y Empresarial) y las recargas. Se gasta en ese\norden: mes, acumulado (el que vence antes primero) y recargas. `over_balance` es lo consumido por\nencima del saldo (colchón de las conversaciones abiertas, lo absorbe la plataforma). En créditos con\ndécimas (1 crédito = COP 10)."
+      },
+      "TopUpPackage": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "creditos": {
+            "type": "integer",
+            "title": "Creditos"
+          },
+          "precio_lista_cop": {
+            "type": "integer",
+            "title": "Precio Lista Cop"
+          },
+          "descuento_pct": {
+            "type": "integer",
+            "title": "Descuento Pct"
+          },
+          "precio_cop": {
+            "type": "integer",
+            "title": "Precio Cop"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "creditos",
+          "precio_lista_cop",
+          "descuento_pct",
+          "precio_cop"
+        ],
+        "title": "TopUpPackage",
+        "description": "Paquete de recarga de créditos con el precio del plan vigente (ADR-0209 §4, D-79): el de lista\nmenos `features.descuento_recarga` del plan, en pesos enteros."
+      },
+      "TopUpRequest": {
+        "properties": {
+          "paquete": {
+            "type": "string",
+            "title": "Paquete"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paquete"
+        ],
+        "title": "TopUpRequest"
       }
     }
   }

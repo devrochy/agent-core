@@ -22,6 +22,7 @@ conversaciones, HU-BILL-25), `campanas` y `soporte`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from core.billing.metrics import METRIC_KEYS
@@ -199,6 +200,49 @@ def get_plan(plan_id: str) -> Plan | None:
     return PLANS_BY_ID.get(plan_id)
 
 
+# ------------------------------------------------------------------ recargas (ADR-0209 §4, D-79)
+@dataclass(frozen=True)
+class PaqueteDeRecarga:
+    """Paquete de créditos que un negocio con plan pago compra por Wompi (HU-BILL-23). `precio_cop` es el
+    de lista: el que paga cada negocio sale de `precio_de_recarga` con el descuento de su plan."""
+
+    id: str
+    creditos: int
+    precio_cop: int
+
+
+PAQUETES_DE_RECARGA: tuple[PaqueteDeRecarga, ...] = (
+    PaqueteDeRecarga(id="recarga_5000", creditos=5_000, precio_cop=55_000),
+    PaqueteDeRecarga(id="recarga_20000", creditos=20_000, precio_cop=199_000),
+)
+PAQUETES_DE_RECARGA_POR_ID: dict[str, PaqueteDeRecarga] = {p.id: p for p in PAQUETES_DE_RECARGA}
+
+
+def get_paquete_de_recarga(paquete_id: str) -> PaqueteDeRecarga | None:
+    return PAQUETES_DE_RECARGA_POR_ID.get(paquete_id)
+
+
+def descuento_de_recarga(plan: Plan | None) -> int | None:
+    """Porcentaje de descuento de las recargas del plan (`features.descuento_recarga`), o None si el plan
+    no compra recargas (Free, un plan desconocido o un valor fuera de 0-100)."""
+    if plan is None or plan.is_free:
+        return None
+    valor = plan.features.get("descuento_recarga")
+    if isinstance(valor, bool) or not isinstance(valor, int) or not 0 <= valor < 100:
+        return None
+    return valor
+
+
+def precio_de_recarga(paquete: PaqueteDeRecarga, plan: Plan) -> int | None:
+    """Precio en pesos enteros del paquete para el plan: el de lista menos `descuento_recarga`, redondeado
+    a la unidad (mitades hacia arriba). None si el plan no compra recargas."""
+    descuento = descuento_de_recarga(plan)
+    if descuento is None:
+        return None
+    precio = Decimal(paquete.precio_cop) * (Decimal(100) - Decimal(descuento)) / Decimal(100)
+    return int(precio.quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
 def plan_alcanza(plan_actual: str | None, plan_minimo: str | None) -> bool:
     """¿El plan `plan_actual` cubre a `plan_minimo`? Orden del catálogo (`sort_order`): free < basic <
     premium < empresarial. Un `plan_minimo` vacío o desconocido no exige nada; un `plan_actual`
@@ -275,12 +319,17 @@ async def sync_plans() -> int:
 
 __all__ = [
     "FREE_PLAN_ID",
+    "PAQUETES_DE_RECARGA",
     "PLANS",
     "PLANS_BY_ID",
+    "PaqueteDeRecarga",
     "Plan",
+    "descuento_de_recarga",
+    "get_paquete_de_recarga",
     "get_plan",
     "plan_alcanza",
     "plan_limits",
+    "precio_de_recarga",
     "public_plans",
     "sync_plans",
 ]

@@ -9,21 +9,33 @@ Es el **canal panel** del cobro de la plataforma (HU-SH-04, ADR-0123):
   billing. Al aprobar, aplica el período con `aplicar_pago_de_periodo` (la misma puerta que
   usa el asistente) y avisa por el outbox para la sincronización inversa
   (`platform.period_paid`): el cargo del mismo período en el canal asistente queda pagado.
+- `start_recarga(paquete_id)` (ADR-0209 §4, HU-BILL-23): el link de un paquete de créditos con el
+  descuento del plan vigente. Es otra fila de `subscription_payments` (`concepto = 'recarga'`, sin
+  período): entra por el mismo webhook y `apply_payment` la acredita como `credit_grant` del ciclo
+  actual, sin tocar el período, el plan ni el estado de la suscripción.
 """
 
 from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from core.billing.periodos import Periodo, periodo_a_cobrar, referencia_del_periodo
-from core.billing.plans import get_plan
+from core.billing.periodos import Periodo, periodo_a_cobrar, referencia_del_periodo, ventana_mensual
+from core.billing.plans import (
+    Plan,
+    descuento_de_recarga,
+    get_paquete_de_recarga,
+    get_plan,
+    precio_de_recarga,
+)
 from core.billing.providers import get_billing_provider
-from core.billing.providers.base import BillingRequestRejected
+from core.billing.providers.base import BillingRequestRejected, MontoBajoElMinimo
 from core.config import get_settings
-from core.db.models import SubscriptionPayment, Tenant, TenantSubscription, utcnow
+from core.db.models import CreditGrant, SubscriptionPayment, Tenant, TenantSubscription, utcnow
 from core.db.session import get_owned, get_session
 from core.shared.logger import get_logger
 from core.shared.tenant import get_current_tenant_id, tenant_scope
@@ -70,6 +82,37 @@ class CambioDePlanEnElAsistente(BillingRequestRejected):
         super().__init__(
             "Tu plan se gestiona con el asistente de SolversHub: para cambiarlo, escríbele por "
             "WhatsApp. Desde aquí puedes pagar el período de tu plan actual."
+        )
+
+
+def _miles(valor: int) -> str:
+    return f"{valor:,}".replace(",", ".")
+
+
+class RecargaNoDisponible(BillingRequestRejected):
+    """El negocio no puede comprar recargas (ADR-0209 §4): sin suscripción activa o en Free."""
+
+    code = "recarga_no_disponible"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Las recargas de créditos son para negocios con un plan pago activo. "
+            "Elige o paga un plan para poder recargar."
+        )
+
+
+class RecargaBajoElMinimo(BillingRequestRejected):
+    """El precio del paquete es menor que el mínimo de Wompi del ambiente: en el sandbox (150.000 COP)
+    casi ningún paquete se puede pagar. Se rechaza antes de crear el link (no queda fila pendiente)."""
+
+    code = "recarga_bajo_minimo"
+
+    def __init__(self, precio_cop: int, minimo_cop: int) -> None:
+        self.precio_cop = precio_cop
+        self.minimo_cop = minimo_cop
+        super().__init__(
+            f"Esta recarga cuesta ${_miles(precio_cop)} COP y en este ambiente la pasarela solo acepta pagos "
+            f"desde ${_miles(minimo_cop)} COP, así que no se puede pagar aquí."
         )
 
 
@@ -236,6 +279,147 @@ async def start_subscription(plan_id: str) -> str | None:
     return link.url
 
 
+def recarga_disponible(sub: TenantSubscription | None) -> Plan | None:
+    """El plan con el que el negocio compra recargas, o None si no puede (ADR-0209 §4): hace falta una
+    suscripción `active` en un plan pago que defina `descuento_recarga` (Free no compra). Un negocio en
+    `past_due`, vencido o cancelado primero paga su plan."""
+    if sub is None or sub.deleted_at is not None or sub.status != "active":
+        return None
+    plan = get_plan(sub.plan_id or "")
+    if plan is None or plan.is_free:
+        return None
+    return plan if descuento_de_recarga(plan) is not None else None
+
+
+async def start_recarga(paquete_id: str) -> str | None:
+    """Link de pago de un paquete de recarga (ADR-0209 §4, HU-BILL-23). Devuelve la URL o None (sin pasarela).
+
+    El precio lo arma el servidor: el de lista del catálogo menos `features.descuento_recarga` del plan
+    vigente. Lanza `RecargaNoDisponible` sin suscripción activa o en Free, y `RecargaBajoElMinimo` si el
+    precio queda bajo el mínimo de Wompi del ambiente (sandbox). Los negocios que pagan el plan por el
+    asistente también recargan por aquí. Un pedido repetido del mismo paquete en menos de 20 h devuelve
+    el mismo link."""
+    paquete = get_paquete_de_recarga(paquete_id)
+    if paquete is None:
+        raise BillingRequestRejected(f"Paquete de recarga desconocido: {paquete_id}")
+    provider = get_billing_provider()
+    if provider is None:
+        return None
+    tenant_id = get_current_tenant_id()
+    if tenant_id is None:
+        raise BillingNotConfigured("Sin tenant en contexto")
+
+    now = datetime.now(UTC)
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            sub = (
+                await session.execute(
+                    select(TenantSubscription).where(
+                        TenantSubscription.tenant_id == tenant_id,
+                        TenantSubscription.deleted_at.is_(None),
+                    )
+                )
+            ).scalar_one_or_none()
+            plan = recarga_disponible(sub)
+            precio = precio_de_recarga(paquete, plan) if plan is not None else None
+            if sub is None or plan is None or precio is None:
+                raise RecargaNoDisponible()
+            creditos = Decimal(paquete.creditos)
+            vigente = (
+                await session.execute(
+                    select(SubscriptionPayment)
+                    .where(
+                        SubscriptionPayment.tenant_id == tenant_id,
+                        SubscriptionPayment.concepto == "recarga",
+                        SubscriptionPayment.status == "pendiente",
+                        SubscriptionPayment.creditos == creditos,
+                        SubscriptionPayment.amount_cop == precio,
+                        SubscriptionPayment.plan_id == plan.id,
+                        SubscriptionPayment.provider == provider.provider_name,
+                        SubscriptionPayment.checkout_url.isnot(None),
+                        SubscriptionPayment.updated_at > now - _REUSO_DEL_LINK,
+                        SubscriptionPayment.deleted_at.is_(None),
+                    )
+                    .order_by(SubscriptionPayment.updated_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if vigente is not None:
+                log.info("recarga_checkout_reusado", tenant_id=str(tenant_id), paquete=paquete.id)
+                return vigente.checkout_url
+            sub_id = sub.id
+
+    reference = f"rec-{tenant_id.hex[:8]}-{uuid.uuid4().hex[:10]}"
+    # Como en `start_subscription`: el link se crea ANTES de persistir el pago (sin filas huérfanas si la
+    # red falla); el mínimo de Wompi se revisa antes de la red.
+    try:
+        link = await provider.create_payment_link(
+            reference=reference,
+            amount_cop=precio,
+            plan_name=plan.name,
+            concepto="recarga",
+            descripcion=f"Recarga de {_miles(paquete.creditos)} créditos — SolversHub",
+        )
+    except MontoBajoElMinimo as exc:
+        raise RecargaBajoElMinimo(precio, exc.minimo_cop) from exc
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            session.add(
+                SubscriptionPayment(
+                    tenant_id=tenant_id,
+                    subscription_id=sub_id,
+                    status="pendiente",
+                    concepto="recarga",
+                    creditos=creditos,
+                    plan_id=plan.id,
+                    amount_cop=precio,
+                    currency=plan.currency,
+                    provider=provider.provider_name,
+                    provider_reference=link.provider_reference,
+                    checkout_url=link.url,
+                    periodo=None,
+                    updated_at=utcnow(),
+                )
+            )
+            await session.commit()
+    log.info(
+        "recarga_checkout_started",
+        tenant_id=str(tenant_id),
+        paquete=paquete.id,
+        plan=plan.id,
+        precio_cop=precio,
+    )
+    return link.url
+
+
+async def _acreditar_recarga(session, tid: uuid.UUID, payment: SubscriptionPayment, sub: TenantSubscription) -> str:  # type: ignore[no-untyped-def]
+    """Inserta el `credit_grant` de una recarga aprobada en el ciclo actual (ADR-0209 §4), una sola vez:
+    `origen` = id del pago y `ON CONFLICT DO NOTHING` sobre `(tenant_id, ciclo, tipo, origen)`. No toca el
+    período, el plan ni el estado de la suscripción. Devuelve `acreditada`, `ya_acreditada` (el abono ya
+    estaba) o `sin_abono` (sin ciclo o sin créditos: se alerta)."""
+    now = datetime.now(UTC)
+    creditos = Decimal(str(payment.creditos)) if payment.creditos is not None else Decimal(0)
+    if creditos <= 0 or sub.period_start is None:
+        log.error("recarga_sin_acreditar", tenant_id=str(tid), pago=str(payment.id))
+        return "sin_abono"
+    ciclo, _ = ventana_mensual(sub.period_start, sub.dia_ancla, now)
+    resultado = await session.execute(
+        pg_insert(CreditGrant)
+        .values(
+            id=uuid.uuid4(),
+            tenant_id=tid,
+            ciclo=ciclo,
+            tipo="recarga",
+            creditos=creditos,
+            vence_en=None,
+            origen=str(payment.id),
+        )
+        .on_conflict_do_nothing(index_elements=["tenant_id", "ciclo", "tipo", "origen"])
+    )
+    return "acreditada" if resultado.rowcount else "ya_acreditada"
+
+
 async def apply_payment(
     *,
     provider_reference: str,
@@ -269,11 +453,12 @@ async def apply_payment(
         anulado_pagado: str | None = None
         monto_distinto: tuple[str | None, int | None] | None = None
         periodo: Periodo | None = None
+        recarga: str | None = None
         async with tenant_scope(tid):
             async with get_session() as session:
                 # Mismo orden de candados que el canal asistente (`aplicar_pago_de_periodo`):
                 # primero la suscripción, después el pago. Al revés, los dos podían trabarse.
-                await _suscripcion_bloqueada(session, tid, datetime.now(UTC))
+                sub_bloqueada = await _suscripcion_bloqueada(session, tid, datetime.now(UTC))
                 payment = (
                     await session.execute(
                         select(SubscriptionPayment)
@@ -311,6 +496,13 @@ async def apply_payment(
                     payment.status = DUPLICADO
                     payment.paid_at = datetime.now(UTC)
                     anulado_pagado = payment.periodo or provider_reference
+                elif payment.concepto == "recarga":
+                    # Recarga de créditos (ADR-0209 §4): va por aquí ANTES de la rama de los pagos de plan
+                    # sin período. Solo inserta su abono del ciclo actual; no toca período, plan ni estado.
+                    payment.status = "aprobado"
+                    payment.paid_at = datetime.now(UTC)
+                    payment.updated_at = utcnow()
+                    recarga = await _acreditar_recarga(session, tid, payment, sub_bloqueada)
                 else:
                     if payment.periodo and payment.period_start and payment.period_end:
                         periodo = Periodo(payment.period_start, payment.period_end, payment.periodo)
@@ -362,6 +554,18 @@ async def apply_payment(
                 severity="critical",
             )
             return False
+        if recarga is not None:
+            if recarga == "sin_abono":
+                from core.shared.alerts import send_alert
+
+                await send_alert(
+                    "Recarga pagada sin acreditar",
+                    f"Negocio {tid}, pago {provider_reference}: la recarga se aprobó pero no se pudo insertar su "
+                    "abono (sin ciclo o sin créditos). Revisarlo a mano.",
+                    severity="critical",
+                )
+            log.info("recarga_aplicada", tenant_id=str(tid), resultado=recarga)
+            return True
         if anulado_pagado is not None:
             from core.billing.canales import CANAL_PANEL, alertar_pago_duplicado, vinculo_asistente
 

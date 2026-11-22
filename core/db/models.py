@@ -1592,6 +1592,11 @@ class SubscriptionPayment(Base):
     provider: Mapped[str] = mapped_column(Text)
     provider_reference: Mapped[str] = mapped_column(Text)
     periodo: Mapped[str | None] = mapped_column(Text, default=None)
+    # ADR-0209 §4 (HU-BILL-23): `plan` (pago del plan) | `recarga` (paquete de créditos). Una recarga lleva
+    # `periodo` null, `plan_id` = el plan vigente al comprar y `creditos` > 0; un pago del plan, `creditos`
+    # null (CHECK `ck_subscription_payments_creditos`).
+    concepto: Mapped[str] = mapped_column(Text, nullable=False, default="plan", server_default="plan")
+    creditos: Mapped[Decimal | None] = mapped_column(Numeric(12, 1), default=None)
     checkout_url: Mapped[str | None] = mapped_column(Text)
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
