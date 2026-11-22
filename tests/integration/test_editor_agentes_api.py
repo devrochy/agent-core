@@ -249,8 +249,9 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
 
 
 async def test_catalogo_de_modelos_con_costo_estimado_del_consumo_real(app_client) -> None:
+    """El catálogo de modelos es del master (ADR-0210 §5): el gestor lo recibe vacío."""
     tid, _cid = await _negocio()
-    h = await _dueno(app_client, tid)
+    h = await api_headers(app_client, tid)  # master
 
     r = await app_client.get("/api/v1/admin/agent-models", headers=h)
     assert r.status_code == 200, r.text
@@ -290,8 +291,10 @@ async def test_catalogo_de_modelos_con_costo_estimado_del_consumo_real(app_clien
         "/api/v1/admin/agent-models", headers=await api_headers(app_client, tid, email=email, password=PASSWORD)
     )).json()
     assert (lector["sample_turns"], lector["avg_input_tokens"]) == (0, None)
-    assert all(m["estimated_usd_per_1000_turns"] is None for m in lector["items"])
-    assert next(m for m in lector["items"] if m["model"] == "deepseek-flash")["input_usd_per_mtok"] == 0.14
+    # El gestor no ve modelos ni proveedor.
+    assert lector["items"] == [] and lector["provider"] == "" and lector["business_model"] == ""
+    dueno = (await app_client.get("/api/v1/admin/agent-models", headers=await _dueno(app_client, tid))).json()
+    assert dueno["items"] == [] and dueno["sample_turns"] == 2  # con la sección Costos ve el consumo
 
     # El otro negocio no ve este consumo.
     otro, _ = await _negocio()
@@ -309,51 +312,77 @@ async def _poner_modelo(app_client, h: dict[str, str], aid: str, modelo: str) ->
     assert r.status_code == 200, r.text
 
 
+async def _llave_propia(tid: uuid.UUID, modelo: str | None = None) -> None:
+    """BYOK del negocio: proveedor y llave en `app_settings` (y, si se pide, el modelo que fija)."""
+    from core.shared.crypto import get_secret_box
+
+    await _sql(
+        tid,
+        "update app_settings set llm_provider = 'deepseek', llm_api_key_encrypted = :k, llm_model = :m where tenant_id = :t",
+        k=get_secret_box().encrypt("sk-test-no-real"), m=modelo, t=tid,
+    )
+
+
 async def test_modelo_que_no_sirve_usa_el_del_negocio(app_client) -> None:
-    """HU-AOS-79: el dueño ya no elige modelo. Uno de otro proveedor o retirado no bloquea la
-    publicación: la versión usa el del negocio y lo anota; uno válido se respeta."""
+    """HU-AOS-79 con llave propia: el dueño ya no elige modelo. Uno de otro proveedor o retirado no bloquea la
+    publicación: la versión usa el del negocio y lo anota sin nombrarlo (ADR-0210 §5); uno válido se respeta.
+    Con la llave de la plataforma manda el nivel de IA (ADR-0210 §3)."""
+    from core.agents.editor import NOTA_MODELO_DEL_NEGOCIO
+
     tid, cid = await _negocio()
-    h = await _dueno(app_client, tid)
+    h, master = await _dueno(app_client, tid), await api_headers(app_client, tid)
     r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
 
-    del_negocio = (await app_client.get("/api/v1/admin/agent-models", headers=h)).json()["business_model"]
-    assert del_negocio  # sin BYOK: el del despliegue, que el proveedor del negocio sirve
-
-    # Modelo de otro proveedor: el catálogo dice que atenderá con el del negocio.
+    # Llave de la plataforma: un modelo de otro proveedor no se anota; la versión lleva el del nivel.
     await _poner_modelo(app_client, h, aid, "claude-haiku-4-5")
-    catalogo = (await app_client.get(f"/api/v1/admin/agent-models?agent_id={aid}", headers=h)).json()
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 200, r.text
+    assert NOTA_MODELO_DEL_NEGOCIO not in r.json()["warnings"]
+    [(contenido,)] = await _sql(
+        tid, "select content from agent_versions where id = :v", v=uuid.UUID(r.json()["version"]["id"])
+    )
+    assert (contenido["model"]["primary"], contenido["model"]["router"]) == ("deepseek-flash", "deepseek-flash")
+
+    await _llave_propia(tid)
+    del_negocio = (await app_client.get("/api/v1/admin/agent-models", headers=master)).json()["business_model"]
+    assert del_negocio  # sin modelo fijado: el del despliegue, que el proveedor del negocio sirve
+
+    # Modelo de otro proveedor: el catálogo (del master) dice que atenderá con el del negocio.
+    catalogo = (await app_client.get(f"/api/v1/admin/agent-models?agent_id={aid}", headers=master)).json()
     assert (catalogo["effective_model"], catalogo["effective_source"]) == (del_negocio, "negocio")
 
-    # Publicar no falla: la versión lleva el del negocio, con la nota; el borrador no cambia.
+    # Publicar no falla: la versión lleva el del negocio, con la nota sin el nombre; el borrador no cambia.
+    await _poner_modelo(app_client, h, aid, "claude-haiku-4-5")
     r = await app_client.post(
         f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)], "notes": "Primera"}
     )
     assert r.status_code == 200, r.text
     pub = r.json()
-    nota = f"Se usó el modelo de tu negocio: {del_negocio}."
-    assert nota in pub["warnings"]
+    assert NOTA_MODELO_DEL_NEGOCIO in pub["warnings"]
+    assert del_negocio not in r.text
     [(contenido, notas)] = await _sql(
         tid, "select content, notes from agent_versions where id = :v", v=uuid.UUID(pub["version"]["id"])
     )
-    assert contenido["model"]["primary"] == del_negocio and notas == f"Primera\n{nota}"
+    assert contenido["model"]["primary"] == del_negocio and notas == f"Primera\n{NOTA_MODELO_DEL_NEGOCIO}"
     borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
     assert borrador["content"]["model"]["primary"] == "claude-haiku-4-5"
 
     # Retirado: igual.
     await _poner_modelo(app_client, h, aid, "deepseek-chat")
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
-    assert r.status_code == 200 and nota in r.json()["warnings"], r.text
+    assert r.status_code == 200 and NOTA_MODELO_DEL_NEGOCIO in r.json()["warnings"], r.text
 
-    # Un modelo válido distinto (lo fija un master en el JSON) se respeta, sin aviso.
+    # Un modelo válido distinto (lo fija un master en el JSON) se respeta con llave propia, sin aviso.
+    catalogo = (await app_client.get("/api/v1/admin/agent-models", headers=master)).json()
     propio = next(m for m in catalogo["items"] if m["selectable"] and m["model"] != del_negocio)["model"]
     await _poner_modelo(app_client, h, aid, propio)
-    catalogo = (await app_client.get(f"/api/v1/admin/agent-models?agent_id={aid}", headers=h)).json()
+    catalogo = (await app_client.get(f"/api/v1/admin/agent-models?agent_id={aid}", headers=master)).json()
     assert (catalogo["effective_model"], catalogo["effective_source"]) == (propio, "agente")
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
     assert r.status_code == 200, r.text
-    assert not any("modelo de tu negocio" in w for w in r.json()["warnings"])
+    assert NOTA_MODELO_DEL_NEGOCIO not in r.json()["warnings"]
     [(contenido,)] = await _sql(
         tid, "select content from agent_versions where id = :v", v=uuid.UUID(r.json()["version"]["id"])
     )
@@ -366,15 +395,18 @@ async def test_modelo_que_no_sirve_usa_el_del_negocio(app_client) -> None:
 
 
 async def test_cada_negocio_usa_su_modelo_por_defecto(app_client) -> None:
-    """HU-AOS-79 · aislamiento: dos negocios con modelos por defecto distintos. Cada agente con un
-    modelo que no sirve publica con el de SU negocio y el catálogo de cada uno dice el suyo."""
+    """HU-AOS-79 · aislamiento, con llave propia: dos negocios con modelos por defecto distintos. Cada agente con un
+    modelo que no sirve publica con el de SU negocio y el catálogo (del master) de cada uno dice el suyo."""
+    from core.agents.editor import AVISO_LLAVE_PROPIA, NOTA_MODELO_DEL_NEGOCIO
+
     a, cid_a = await _negocio()
     b, cid_b = await _negocio()
-    await _sql(a, "update app_settings set llm_model = 'deepseek-v4-pro' where tenant_id = :t", t=a)
+    await _llave_propia(a, "deepseek-v4-pro")
+    await _llave_propia(b)
     ha, hb = await _dueno(app_client, a), await _dueno(app_client, b)
-    del_b = (await app_client.get("/api/v1/admin/agent-models", headers=hb)).json()["business_model"]
-    assert (await app_client.get("/api/v1/admin/agent-models", headers=ha)).json()["business_model"] == "deepseek-v4-pro"
-    assert del_b != "deepseek-v4-pro"
+    del_b = (await app_client.get("/api/v1/admin/agent-models", headers=await api_headers(app_client, b))).json()["business_model"]
+    del_a = (await app_client.get("/api/v1/admin/agent-models", headers=await api_headers(app_client, a))).json()["business_model"]
+    assert del_a == "deepseek-v4-pro" and del_b != "deepseek-v4-pro"
 
     for h, cid, esperado in ((ha, cid_a, "deepseek-v4-pro"), (hb, cid_b, del_b)):
         r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
@@ -383,7 +415,9 @@ async def test_cada_negocio_usa_su_modelo_por_defecto(app_client) -> None:
         await _poner_modelo(app_client, h, aid, "claude-haiku-4-5")
         r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
         assert r.status_code == 200, r.text
-        assert f"Se usó el modelo de tu negocio: {esperado}." in r.json()["warnings"]
+        assert NOTA_MODELO_DEL_NEGOCIO in r.json()["warnings"]
+        assert (AVISO_LLAVE_PROPIA in r.json()["warnings"]) is (h is ha)
+        assert esperado not in str(r.json()["warnings"])
         tid = a if h is ha else b
         [(contenido,)] = await _sql(
             tid, "select content from agent_versions where id = :v", v=uuid.UUID(r.json()["version"]["id"])

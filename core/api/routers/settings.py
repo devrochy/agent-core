@@ -218,7 +218,8 @@ class BotPausedState(BaseModel):
 
 
 class BrainSettings(BaseModel):
-    model_primary: str
+    # Los modelos solo los ve y los cambia el master (ADR-0210 §5): para el gestor vienen en null.
+    model_primary: str | None = None
     model_fallback: str | None = None
     model_router: str | None = None
     model_temperature: float = 0.3
@@ -411,12 +412,13 @@ def _identity_out(app_settings: AppSettings | None, available: list[str]) -> Ide
     )
 
 
-def _brain_out(defaults: DefaultsDelNegocio) -> BrainSettings:
+def _brain_out(defaults: DefaultsDelNegocio, *, master: bool) -> BrainSettings:
+    """`master=False` (gestor): sin los modelos, el negocio elige el nivel de IA del agente (ADR-0210 §5)."""
     model, policies = defaults.model, defaults.policies
     return BrainSettings(
-        model_primary=model.primary,
-        model_fallback=model.fallback,
-        model_router=model.router,
+        model_primary=model.primary if master else None,
+        model_fallback=model.fallback if master else None,
+        model_router=model.router if master else None,
         model_temperature=float(model.temperature),
         policy_max_tool_calls=policies.maxToolCallsPerTurn,
         policy_budget=float(policies.budgetUsdPerConversation or 0.0),
@@ -437,7 +439,7 @@ async def get_settings_api(
     defaults = _defaults_de(app_settings)
     return SettingsResponse(
         identity=_identity_out(app_settings, _available_guardrails(await packs_del_negocio())),
-        brain=_brain_out(defaults),
+        brain=_brain_out(defaults, master=actua_como_master(principal.admin)),
         memory=MemorySettings(**read_memory(defaults)),
         # Las tools del negocio eran del AgentSpec v2 (ADR-0206, HU-AOS-91): vacío, para no romper la APK instalada.
         skills=[],
@@ -944,24 +946,26 @@ async def save_brain(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> BrainSettings:
     """Modelo y políticas de los valores por defecto de los agentes (`agent_defaults`, ADR-0206 §6): sin versión
-    del spec. Solo cambia lo que vino; un modelo principal vacío no cambia."""
+    del spec. Solo cambia lo que vino; un modelo principal vacío no cambia. Los modelos solo los cambia el master
+    (ADR-0210 §5): del gestor se ignoran y la respuesta no los trae."""
     _exigir_negocio(principal)
+    master = actua_como_master(principal.admin)
     try:
-        defaults = await defaults_negocio.guardar(principal.tenant_id, _cerebro_del_payload(payload))
+        defaults = await defaults_negocio.guardar(principal.tenant_id, _cerebro_del_payload(payload, master=master))
     except ValueError as exc:
         raise _defaults_invalidos(exc) from None
-    return _brain_out(defaults)
+    return _brain_out(defaults, master=master)
 
 
-def _cerebro_del_payload(payload: BrainUpdate) -> dict[str, Any]:
+def _cerebro_del_payload(payload: BrainUpdate, *, master: bool = True) -> dict[str, Any]:
     venidos = payload.model_fields_set
     model: dict[str, Any] = {}
     policies: dict[str, Any] = {}
-    if payload.model_primary.strip():
-        model["primary"] = payload.model_primary.strip()
-    if "model_fallback" in venidos:
+    if master and (payload.model_primary or "").strip():
+        model["primary"] = (payload.model_primary or "").strip()
+    if master and "model_fallback" in venidos:
         model["fallback"] = (payload.model_fallback or "").strip() or None
-    if "model_router" in venidos:
+    if master and "model_router" in venidos:
         model["router"] = (payload.model_router or "").strip() or None
     if "model_temperature" in venidos:
         model["temperature"] = max(0.0, min(2.0, payload.model_temperature))

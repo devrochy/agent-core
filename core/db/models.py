@@ -2603,6 +2603,8 @@ class AgentRecord(Base):
     )
     source_template: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default="active", server_default="active")
+    # Nivel de IA del agente (ADR-0210, 0153): `estandar` | `avanzado`. Se traduce al modelo al publicar.
+    nivel_ia: Mapped[str] = mapped_column(Text, nullable=False, default="estandar", server_default="estandar")
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

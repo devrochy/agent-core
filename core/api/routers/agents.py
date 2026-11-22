@@ -3,7 +3,8 @@
 - `GET  /api/v1/admin/agents` — agentes con su última versión.
 - `POST /api/v1/admin/agents` — `{key, kind, name, description}` → agente + borrador.
 - `GET/PATCH /api/v1/admin/agents/{id}` — detalle (con borrador y versiones) / nombre,
-  descripción y estado (`key` y `kind` no cambian).
+  descripción, estado y `nivel_ia` (`key` y `kind` no cambian). `nivel_ia` (`estandar` | `avanzado`,
+  ADR-0210) se aplica al publicar; 409 `plan_nivel_ia_not_included` si el plan no incluye el nivel.
 - `GET/PUT /api/v1/admin/agents/{id}/draft` — `{content, lock_version}`: 409 si otro lo
   cambió (`lock_version` viejo), 422 con los errores del contrato (el mismo validador del CLI
   y de CI) si el spec es inválido.
@@ -39,12 +40,14 @@ from core.agents.contrato_v3 import MAX_SPEC_BYTES
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.kernel.procedures import Issue, catalogo_de_acciones
+from core.llm import niveles
 from core.plugin_manager import plugin_manager
 
 router = APIRouter(prefix="/admin/agents", tags=["admin · agentes"])
 
 _MAX_BODY_BYTES = MAX_SPEC_BYTES + 1024
 Kind = Literal["core", "specialist", "backoffice"]
+NivelIa = Literal["estandar", "avanzado"]
 
 
 # ------------------------------------------------------------------ esquemas
@@ -64,6 +67,8 @@ class AgentPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=1000)
     status: Literal["active", "archived"] | None = None
+    # Nivel de IA (ADR-0210): se aplica al publicar. `avanzado` solo en un plan que lo incluye (409).
+    nivel_ia: NivelIa | None = None
 
 
 class AgentSummary(BaseModel):
@@ -80,6 +85,12 @@ class AgentSummary(BaseModel):
     paused: bool = False
     paused_at: datetime | None = None
     paused_reason: str | None = None
+    # Nivel de IA elegido (ADR-0210 §1): el modelo que corre por debajo no se expone (§5).
+    nivel_ia: NivelIa = Field(
+        default="estandar",
+        description="Nivel de IA del agente. Cambiarlo se aplica al publicar; si el plan ya no lo incluye, el "
+        "agente atiende en Estándar.",
+    )
 
 
 class AgentPauseIn(BaseModel):
@@ -232,6 +243,7 @@ def _summary(agente: Any, ultima: int | None) -> AgentSummary:
         paused=getattr(agente, "paused_at", None) is not None,
         paused_at=getattr(agente, "paused_at", None),
         paused_reason=getattr(agente, "paused_reason", None),
+        nivel_ia=niveles.normalizar(getattr(agente, "nivel_ia", None)),
     )
 
 
@@ -430,7 +442,18 @@ async def get_agent(
     return AgentDetail(**base.model_dump(), draft=_draft(borrador), versions=[_version(v) for v in versiones])
 
 
-@router.patch("/{agent_id}", response_model=AgentSummary)
+_PATCH_409 = {
+    409: {
+        "description": (
+            "`plan_nivel_ia_not_included` con `error.details = {nivel_ia, plan}` si el plan no incluye el nivel "
+            "de IA pedido (no se escribió nada); `nivel_ia_not_applicable` si el agente no es un especialista; "
+            "`agent_reserved` o `agent_in_use` al archivar."
+        )
+    }
+}
+
+
+@router.patch("/{agent_id}", response_model=AgentSummary, responses=_PATCH_409)
 async def patch_agent(
     agent_id: uuid.UUID,
     payload: AgentPatch,
@@ -439,11 +462,18 @@ async def patch_agent(
     tid = await _puede_escribir(principal)
     try:
         agente = await svc.actualizar_agente(
-            tid, agent_id, name=payload.name, description=payload.description, status=payload.status
+            tid,
+            agent_id,
+            name=payload.name,
+            description=payload.description,
+            status=payload.status,
+            nivel_ia=payload.nivel_ia,
         )
         versiones = await svc.listar_versiones(tid, agent_id)
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None
+    except niveles.NivelNoIncluido as exc:
+        raise ApiError(409, exc.code, str(exc), details=exc.details) from None
     except svc.Conflicto as exc:
         raise ApiError(409, exc.codigo, str(exc)) from None
     return _summary(agente, versiones[0].version if versiones else None)

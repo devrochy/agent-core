@@ -6,7 +6,7 @@ Contra el stack real, con el loop real y un modelo guionado (sin LLM ni red):
   `core_decisions.active_instance_id` y `turn_outcomes.final_instance_id` con el especialista por
   defecto (ADR-0192).
 - **Rollback completo con dos releases:** la release 2 lleva otra versión del especialista (otro
-  modelo, otra frase prohibida, un binding deshabilitado, sin `perfil` en `writeNamespaces`): el
+  modelo por su nivel de IA, ADR-0210; otra frase prohibida, un binding deshabilitado, sin `perfil` en `writeNamespaces`): el
   siguiente turno la ejecuta (modelo, denegación, frase prohibida y memoria cambian); tras el
   rollback vuelve todo.
 - **Dos negocios a la vez:** nada se cruza.
@@ -278,8 +278,9 @@ async def test_rollback_completo_cambia_modelo_tools_guardrails_y_memoria(negoci
     for b in bindings:
         if b["tool"] == "consultar_inventario":
             b["enabled"] = False
+    # Otro modelo en la release 2: con la llave de la plataforma lo fija el nivel de IA al publicar (ADR-0210 §3).
+    await _sql(a, "update agents set nivel_ia = 'avanzado' where tenant_id = :t and key = 'atencion'", t=a)
     version_dos = await _publicar_especialista(a, {
-        "model": {**contenido["model"], "primary": "modelo-dos"},
         "persona": {**contenido["persona"], "forbiddenPhrases": ["plan premium"]},
         "memory": {**contenido["memory"], "writeNamespaces": []},
         "tools": bindings,
@@ -295,7 +296,7 @@ async def test_rollback_completo_cambia_modelo_tools_guardrails_y_memoria(negoci
     ]
     ctx = await _cliente(a, pagos)
     resultado, guion = await _turno(ctx, monkeypatch, MENSAJE, list(guion_dos))
-    assert guion.modelos[0] == "modelo-dos"
+    assert guion.modelos[0] == "deepseek-v4-pro"
     assert "deshabilitada" in guion.resultados[0]
     assert "no puede guardar datos" in guion.resultados[1]
     assert resultado.escalated
@@ -310,7 +311,7 @@ async def test_rollback_completo_cambia_modelo_tools_guardrails_y_memoria(negoci
         await rollback(a, cid, actor="test")
     await _sql(a, "update conversations set status = 'open', bot_paused = false where id = :c", c=ctx.conversation_id)
     resultado, guion = await _turno(ctx, monkeypatch, "¿Y el precio?", list(guion_dos))
-    assert guion.modelos[0] != "modelo-dos"
+    assert guion.modelos[0] != "deepseek-v4-pro"
     assert "deshabilitada" not in guion.resultados[0]
     assert "no puede guardar datos" not in guion.resultados[1] and '"status": "ok"' in guion.resultados[1]
     assert not resultado.escalated and resultado.text == "Tenemos el plan premium."

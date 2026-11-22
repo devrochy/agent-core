@@ -10870,6 +10870,9 @@
               }
             }
           },
+          "409": {
+            "description": "`plan_nivel_ia_not_included` con `error.details = {nivel_ia, plan}` si el plan no incluye el nivel de IA pedido (no se escribió nada); `nivel_ia_not_applicable` si el agente no es un especialista; `agent_reserved` o `agent_in_use` al archivar."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -34107,7 +34110,7 @@
           "admin · configuración"
         ],
         "summary": "Save Brain",
-        "description": "Modelo y políticas de los valores por defecto de los agentes (`agent_defaults`, ADR-0206 §6): sin versión\ndel spec. Solo cambia lo que vino; un modelo principal vacío no cambia.",
+        "description": "Modelo y políticas de los valores por defecto de los agentes (`agent_defaults`, ADR-0206 §6): sin versión\ndel spec. Solo cambia lo que vino; un modelo principal vacío no cambia. Los modelos solo los cambia el master\n(ADR-0210 §5): del gestor se ignoran y la respuesta no los trae.",
         "operationId": "save_brain_api_v1_admin_settings_brain_put",
         "parameters": [
           {
@@ -49284,6 +49287,16 @@
             ],
             "title": "Paused Reason"
           },
+          "nivel_ia": {
+            "type": "string",
+            "enum": [
+              "estandar",
+              "avanzado"
+            ],
+            "title": "Nivel Ia",
+            "description": "Nivel de IA del agente. Cambiarlo se aplica al publicar; si el plan ya no lo incluye, el agente atiende en Estándar.",
+            "default": "estandar"
+          },
           "draft": {
             "$ref": "#/components/schemas/AgentDraft"
           },
@@ -49602,6 +49615,21 @@
               }
             ],
             "title": "Status"
+          },
+          "nivel_ia": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "estandar",
+                  "avanzado"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nivel Ia"
           }
         },
         "additionalProperties": false,
@@ -50004,6 +50032,16 @@
               }
             ],
             "title": "Paused Reason"
+          },
+          "nivel_ia": {
+            "type": "string",
+            "enum": [
+              "estandar",
+              "avanzado"
+            ],
+            "title": "Nivel Ia",
+            "description": "Nivel de IA del agente. Cambiarlo se aplica al publicar; si el plan ya no lo incluye, el agente atiende en Estándar.",
+            "default": "estandar"
           }
         },
         "type": "object",
@@ -52300,7 +52338,14 @@
       "BrainSettings": {
         "properties": {
           "model_primary": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Model Primary"
           },
           "model_fallback": {
@@ -52342,15 +52387,19 @@
           }
         },
         "type": "object",
-        "required": [
-          "model_primary"
-        ],
         "title": "BrainSettings"
       },
       "BrainUpdate": {
         "properties": {
           "model_primary": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Model Primary"
           },
           "model_fallback": {
@@ -52398,9 +52447,6 @@
           }
         },
         "type": "object",
-        "required": [
-          "model_primary"
-        ],
         "title": "BrainUpdate",
         "description": "Entrada de `PUT /brain`: mismos rangos que recorta `save_brain` (temperatura 0–2,\n1–50 llamadas a tools por turno, presupuesto ≥ 0); fuera de rango responde 422."
       },
