@@ -50,6 +50,7 @@ def saldo(monkeypatch):  # type: ignore[no-untyped-def]
         "abierta": (False, None),
         "consultas_conversacion": 0,
         "sql": [],
+        "abonos": [],  # credit_grants del ciclo (HU-BILL-22)
     }
 
     async def _sub(_tid):  # type: ignore[no-untyped-def]
@@ -74,6 +75,11 @@ def saldo(monkeypatch):  # type: ignore[no-untyped-def]
     monkeypatch.setattr(enforcement, "subscription_overview", _sub)
     monkeypatch.setattr(creditos, "medir_creditos", _medir)
     monkeypatch.setattr(creditos, "conversacion_abierta", _abierta)
+
+    async def _abonos(_session, _tid, _ciclo):  # type: ignore[no-untyped-def]
+        return list(estado["abonos"])
+
+    monkeypatch.setattr(creditos, "leer_abonos", _abonos)
     monkeypatch.setattr("core.db.session.get_session", _get_session)
     return estado
 

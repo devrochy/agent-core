@@ -57795,6 +57795,27 @@
                 "type": "null"
               }
             ]
+          },
+          "balance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreditBalance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "balance_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Balance Percent"
           }
         },
         "type": "object",
@@ -85488,6 +85509,67 @@
         ],
         "title": "PlaygroundCredit",
         "description": "Consumo del playground del panel en el mes del ciclo (D-79, ADR-0208 §15). Es gratis hasta\n`free_limit` créditos; lo que pasa (`charged`) ya está sumado en `used` del crédito y en\n`by_concept.playground`. El playground lo lee para avisar antes de empezar a descontar."
+      },
+      "CreditBalance": {
+        "properties": {
+          "total": {
+            "type": "number",
+            "title": "Total"
+          },
+          "month": {
+            "type": "number",
+            "title": "Month"
+          },
+          "accumulated": {
+            "type": "number",
+            "title": "Accumulated",
+            "default": 0
+          },
+          "accumulated_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accumulated Expires At"
+          },
+          "top_ups": {
+            "type": "number",
+            "title": "Top Ups",
+            "default": 0
+          },
+          "used_month": {
+            "type": "number",
+            "title": "Used Month",
+            "default": 0
+          },
+          "used_accumulated": {
+            "type": "number",
+            "title": "Used Accumulated",
+            "default": 0
+          },
+          "used_top_ups": {
+            "type": "number",
+            "title": "Used Top Ups",
+            "default": 0
+          },
+          "over_balance": {
+            "type": "number",
+            "title": "Over Balance",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "month"
+        ],
+        "title": "CreditBalance",
+        "description": "Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22): el crédito del mes del plan más lo\nacumulado (sobrante de ciclos anteriores, en Premium y Empresarial) y las recargas. Se gasta en ese\norden: mes, acumulado (el que vence antes primero) y recargas. `over_balance` es lo consumido por\nencima del saldo (colchón de las conversaciones abiertas, lo absorbe la plataforma). En créditos con\ndécimas (1 crédito = COP 10)."
       }
     }
   }

@@ -77,7 +77,7 @@ async def _app_settings(tenant_id: uuid.UUID) -> Any:
 
 async def cotizacion(tenant_id: uuid.UUID, agent_id: uuid.UUID, fotos: int) -> dict[str, Any]:
     """Cuánto cuestan `fotos` fotos y si el crédito del mes alcanza. No escribe nada."""
-    from core.billing.creditos import alcanza, cotizar, creditos_enteros
+    from core.billing.creditos import alcanza, cotizar, creditos_enteros, saldo_entero
     from core.billing.enforcement import QuotaExceeded
 
     _destino_con_fotos(await _destino_o_error(tenant_id, agent_id))
@@ -90,8 +90,10 @@ async def cotizacion(tenant_id: uuid.UUID, agent_id: uuid.UUID, fotos: int) -> d
         # no lanza, así que «alcanza» se calcula del saldo para que la cotización diga la verdad.
         try:
             saldo = await alcanza(session, tenant_id, total)
-            usado, limite = saldo.usado, saldo.limite
-            suficiente = limite is None or usado + total <= limite
+            usado = saldo.usado
+            suficiente = saldo.limite is None or usado + total <= saldo.limite
+            # El saldo lleva décimas con abonos (HU-BILL-22): se muestra entero.
+            limite = None if saldo.limite is None else saldo_entero(saldo.limite)
         except QuotaExceeded as exc:
             usado, limite, suficiente = Decimal(exc.used), exc.limit, False
     disponible = None if limite is None else max(int(limite) - creditos_enteros(usado), 0)

@@ -87,9 +87,32 @@ class CreditUsage(BaseModel):
     by_agent_truncated: bool = False
     # Playground del panel: consumo, gratuito restante y cobrado (null si no se pudo medir).
     playground: PlaygroundCredit | None = None
+    # Saldo del ciclo desglosado (HU-BILL-22). `limit`/`percent` siguen siendo del crédito mensual del plan;
+    # `balance_percent` es lo usado sobre el saldo total (mes + acumulado + recargas). Null si no se midió.
+    balance: CreditBalance | None = None
+    balance_percent: float | None = None
 
 
 MAX_AGENTES_EN_CREDITO = 50
+
+
+class CreditBalance(BaseModel):
+    """Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22): el crédito del mes del plan más lo
+    acumulado (sobrante de ciclos anteriores, en Premium y Empresarial) y las recargas. Se gasta en ese
+    orden: mes, acumulado (el que vence antes primero) y recargas. `over_balance` es lo consumido por
+    encima del saldo (colchón de las conversaciones abiertas, lo absorbe la plataforma). En créditos con
+    décimas (1 crédito = COP 10)."""
+
+    total: float
+    month: float
+    accumulated: float = 0
+    # Vencimiento más próximo de lo acumulado que todavía queda (fin del último ciclo en que cuenta).
+    accumulated_expires_at: datetime | None = None
+    top_ups: float = 0
+    used_month: float = 0
+    used_accumulated: float = 0
+    used_top_ups: float = 0
+    over_balance: float = 0
 
 
 class PlanOverview(BaseModel):
@@ -139,6 +162,10 @@ class PlanResponse(BaseModel):
     plan_por_el_asistente: bool = False
 
 
+def _decima(valor: Any) -> Any:
+    return round(valor, 1) if isinstance(valor, float) else valor
+
+
 @router.get("", response_model=PlanResponse)
 async def get_plan(
     principal: Annotated[Principal, Depends(require("plan"))],
@@ -174,6 +201,12 @@ async def get_plan(
                 by_agent=[CreditByAgent(**a) for a in agentes],
                 by_agent_truncated=len(con_nombre) > MAX_AGENTES_EN_CREDITO,
                 playground=PlaygroundCredit(**medido["playground"]) if medido.get("playground") else None,
+                balance=CreditBalance(**{k: _decima(v) for k, v in medido["balance"].items()}),
+                balance_percent=(
+                    100.0
+                    if medido["balance"]["total"] <= 0
+                    else round(medido["used"] * 100.0 / medido["balance"]["total"], 1)
+                ),
             )
     return PlanResponse(
         overview=(
