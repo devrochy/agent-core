@@ -2,7 +2,7 @@
 
 Una habilidad es del negocio solo si algún agente activo la tiene instalada: el alta ya no elige packs. Los tests que
 antes pedían `onboard_tenant(packs=[...])` usan `onboard_tenant` de aquí, que da de alta el negocio sin packs y luego
-instala esas habilidades en un especialista de prueba (`habilidades-de-prueba`), como lo hace el dueño al crear su
+instala esas habilidades en un especialista de prueba (`habilidades_de_prueba`), como lo hace el dueño al crear su
 primer agente. El especialista no tiene versión publicada: no entra en ningún release ni atiende conversaciones.
 """
 
@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
-KEY_DE_PRUEBA = "habilidades-de-prueba"
+KEY_DE_PRUEBA = "habilidades_de_prueba"
 
 
 async def dar_habilidades(tenant_id: uuid.UUID, packs: Iterable[str], *, key: str = KEY_DE_PRUEBA) -> uuid.UUID:
