@@ -4,6 +4,11 @@
   la ventana de 3-20h (ag-sale: ventana de mensajería proactiva).
 Los crons de leads (reenganche y recordatorios de seguimiento) son del core desde ADR-0193 (`core.leads.jobs`).
 
+El reenganche de cotizaciones es de campañas completas (Premium y Empresarial, HU-BILL-26, decisión del dueño del
+2026-11-22): en un plan sin ellas no se escribe a nadie, la cotización no se marca y la tarjeta del cron queda
+`skipped` con el motivo. Una cotización que sigue dentro de su ventana cuando el negocio sube de plan recibe su
+PRIMER reenganche (nunca salió nada; no es un reenvío).
+
 El decorador @register_cron salta automáticamente si el plugin está inactivo. Un
 negocio con el pack habilitado pero sin configurar se salta con un aviso y el cron
 sigue con los demás (`_config_del_negocio`).
@@ -16,6 +21,8 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, text
 
+from core.billing.campanas_del_plan import COMPLETAS, plan_que_frena
+from core.billing.campanas_del_plan import MOTIVO as MOTIVO_PLAN
 from core.db.session import get_owned, get_session
 from core.gateway import pausa_automatica
 from core.shared.exceptions import PluginConfigError
@@ -93,6 +100,14 @@ async def follow_up_quotes() -> None:
                 continue
             config = await _config_del_negocio(tenant_id, "quote")
             if config is None:
+                continue
+            # Campañas completas (HU-BILL-26). Sin suscripción o con un plan desconocido, None: sale.
+            if plan := await plan_que_frena(tenant_id, COMPLETAS):
+                log.info("follow_up_frenado_por_plan", kind="quote", tenant_id=str(tenant_id), motivo=MOTIVO_PLAN, plan=plan)
+                await registrar(
+                    tenant_id, CRON_QUOTES, acciones=0, status="skipped",
+                    resumen="Sin enviar: tu plan no incluye el seguimiento automático de cotizaciones",
+                )
                 continue
             candidates, sent = await _follow_up_quotes_del_negocio(tenant_id, config)
             await registrar(

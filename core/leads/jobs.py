@@ -4,6 +4,11 @@
 - `core.leads_recordar_seguimientos`: avisa a la persona cuando llega la hora de un seguimiento que programó y le
   manda cada mañana «Tu día de ventas» (HU-CRM-22). Sin LLM y sin mensajes al cliente.
 
+El seguimiento automático de leads es de campañas completas (Premium y Empresarial, HU-BILL-26): en un plan sin
+ellas no se escribe a ningún lead, no se toca su etapa y la tarjeta del cron queda `skipped` con el motivo. Un lead
+que sigue dentro de su ventana cuando el negocio sube de plan recibe su PRIMER seguimiento (nunca salió nada; no es
+un reenvío). Los recordatorios de seguimiento avisan al equipo, no al cliente: no dependen del plan.
+
 Solo corren en los negocios con la config de Captar leads (`lead_settings`): sin fila no hacen nada, la misma conducta
 que antes tenía un negocio sin commerce. Respetan la pausa del negocio (HU-ARCH-37) y la política del negocio de cada
 cron (`cron_negocio`). Un negocio que falla no corta a los demás.
@@ -16,6 +21,8 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from core.billing.campanas_del_plan import COMPLETAS, plan_que_frena
+from core.billing.campanas_del_plan import MOTIVO as MOTIVO_PLAN
 from core.db.models import Lead, LeadSettings
 from core.db.session import get_owned, get_session
 from core.gateway import pausa_automatica
@@ -70,6 +77,14 @@ async def follow_up_leads() -> None:
                     continue
                 config = await config_leads.cargar_del_negocio(tenant_id)
                 if config is None:
+                    continue
+                # Campañas completas (HU-BILL-26). Sin suscripción o con un plan desconocido, None: sale.
+                if plan := await plan_que_frena(tenant_id, COMPLETAS):
+                    log.info("follow_up_frenado_por_plan", kind="lead", tenant_id=str(tenant_id), motivo=MOTIVO_PLAN, plan=plan)
+                    await registrar(
+                        tenant_id, CRON_LEADS, acciones=0, status="skipped",
+                        resumen="Sin enviar: tu plan no incluye el seguimiento automático de leads",
+                    )
                     continue
                 candidates, sent = await _follow_up_leads_del_negocio(tenant_id, config)
                 await registrar(
