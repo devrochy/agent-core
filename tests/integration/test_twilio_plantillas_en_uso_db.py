@@ -71,6 +71,7 @@ async def _negocio_con_twilio(prefijo: str) -> dict[str, Any]:
 
     slug = f"{prefijo}-{uuid.uuid4().hex[:8]}"
     tid, _ = await onboard_tenant(
+        plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
         name=f"Twilio {slug}", slug=slug, packs=[], sembrar_ejemplos=False
     )
     ac = "AC" + uuid.uuid4().hex

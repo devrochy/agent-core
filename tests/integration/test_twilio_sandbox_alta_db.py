@@ -74,6 +74,7 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
     for prefijo in ("sba", "sbb"):
         slug = f"{prefijo}-{uuid.uuid4().hex[:8]}"
         tid, _ = await onboard_tenant(
+            plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
             name=f"Sandbox {slug}", slug=slug, packs=[], sembrar_ejemplos=False
         )
         creados.append((tid, slug))

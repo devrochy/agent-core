@@ -124,6 +124,9 @@ async def plan_error_handler(request: Request, exc: Exception) -> JSONResponse:
     from core.api.plan_limits import plan_limit_error
 
     log.info("plan_error_sin_traducir", path=request.url.path, error=type(exc).__name__)
+    if not request.url.path.startswith(("/api/v1/", "/admin")):
+        # Fuera del panel (webhooks, rutas públicas) no se cuenta el estado del plan a quien llama.
+        return JSONResponse({"error": {"code": "internal_error", "message": "Error interno."}}, status_code=500)
     return await api_error_handler(request, plan_limit_error(exc))  # type: ignore[arg-type]
 
 

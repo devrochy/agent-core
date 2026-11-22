@@ -125,7 +125,7 @@ def _sin_cola(monkeypatch) -> list[str]:
 async def test_lo_que_entra_a_una_conexion_pausada_se_guarda_sin_llm(monkeypatch, tipo: str) -> None:
     from core.gateway.meta_connection_state import TITULO_CONEXION_PROPIA_PAUSADA
 
-    tid = await _negocio()
+    tid = await _negocio(plan="empresarial")
     cid, external_id = await _conexion(tid, tipo)
     await _activa(tid, cid, False)
     _inmediato(monkeypatch)
@@ -156,7 +156,7 @@ async def test_un_seguimiento_del_pack_no_sale_por_la_conexion_pausada(monkeypat
     from core.leads.jobs import _follow_up_leads_del_negocio
     from core.shared.tenant import tenant_scope
 
-    tid = await _negocio()
+    tid = await _negocio(plan="empresarial")
     cid, external_id = await _conexion(tid, "waweb")
     _inmediato(monkeypatch)
     encolados = _sin_cola(monkeypatch)
@@ -192,7 +192,7 @@ async def test_lo_encolado_antes_de_pausar_no_sale(monkeypatch) -> None:
     from core.shared.tenant import tenant_scope
     from core.tasks import outbound_send
 
-    tid = await _negocio()
+    tid = await _negocio(plan="empresarial")
     cid, external_id = await _conexion(tid, "manual")
     conv = (await _entrada(tid, uniq("wa-cola"), external_id)).id  # sin turno: nada más en cola
     async with tenant_scope(tid):
@@ -213,7 +213,7 @@ async def test_lo_encolado_antes_de_pausar_no_sale(monkeypatch) -> None:
 
 # ---------------------------------------------------------------- reanudar y aislamiento
 async def test_al_reanudar_vuelve_a_responder_y_otro_negocio_no_se_entera(monkeypatch) -> None:
-    tid_a, tid_b = await _negocio(), await _negocio()
+    tid_a, tid_b = await _negocio(plan="empresarial"), await _negocio(plan="empresarial")
     cid_a, ext_a = await _conexion(tid_a, "waweb")
     _cid_b, ext_b = await _conexion(tid_b, "waweb")
     _inmediato(monkeypatch)
@@ -247,7 +247,7 @@ async def test_la_fila_canonica_de_meta_no_tiene_pausa_propia() -> None:
     from core.gateway.meta_connection_state import pausa_de_conversacion
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, _viejo = await _negocio_con_byok()
+    tid, cuenta, _waba, _viejo = await _negocio_con_byok(plan="empresarial")
     numero = uniq("ph-canon")
     await _alta_numero(tid, cuenta, numero)
     (fila,) = await _conexiones(tid, numero)
@@ -271,7 +271,7 @@ async def test_choque_manual_inactiva_con_cuenta_viva_queda_en_silencio(monkeypa
     from core.shared.crypto import get_secret_box
     from core.shared.tenant import tenant_scope
 
-    tid, _cuenta, _waba, numero = await _negocio_con_byok()
+    tid, _cuenta, _waba, numero = await _negocio_con_byok(plan="empresarial")
     async with tenant_scope(tid):
         async with get_session() as session:
             manual = ChannelConnection(

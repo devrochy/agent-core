@@ -151,7 +151,7 @@ async def negocios() -> AsyncIterator[tuple[uuid.UUID, uuid.UUID]]:
     creados = []
     for prefijo in ("pna", "pnb"):
         slug = f"{prefijo}-{uuid.uuid4().hex[:8]}"
-        tid, _ = await onboard_tenant(name=f"Plantillas {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+        tid, _ = await onboard_tenant(plan="empresarial", name=f"Plantillas {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
         async with tenant_scope(tid):
             await bandera.fijar(tid, "whatsapp_twilio", True, actor="test")
         creados.append((tid, slug))

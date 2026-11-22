@@ -3,7 +3,9 @@
 Un negocio nuevo en Free no tiene ningún pack (`spec.packs == []`). Antes las 4 plantillas salían
 `available=false` y `from-script` daba 409 `template_unavailable`: el dueño no podía elegir el tipo de
 negocio. Ahora la plantilla trae `will_enable`, crear el agente habilita las habilidades que pide (en una
-sola versión de spec), sin validar `min_plan`, y quien no tiene `plugins:write` recibe 403 sin efectos.
+sola versión de spec), y quien no tiene `plugins:write` recibe 403 sin efectos. Desde HU-BILL-19 (ADR-0208 §10) crear
+el agente exige el `min_plan` de sus habilidades: Free crea Agenda, pero Ventas pide Basic (409
+`plan_plugin_not_included`, sin escribir nada).
 Sin LLM ni red.
 """
 
@@ -59,12 +61,12 @@ def _ruteo(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 
-async def _negocio_sin_packs() -> uuid.UUID:
-    """El negocio del self-service en Free: sin packs, sin preset."""
+async def _negocio_sin_packs(plan: str | None = None) -> uuid.UUID:
+    """El negocio del self-service (Free si no se pide otro plan): sin packs, sin preset."""
     from _habilidades import onboard_tenant
 
     slug = f"habil-{uuid.uuid4().hex[:8]}"
-    tid, _ = await onboard_tenant(name=f"HABIL {slug}", slug=slug, packs=[], sembrar_ejemplos=False)
+    tid, _ = await onboard_tenant(name=f"HABIL {slug}", slug=slug, packs=[], sembrar_ejemplos=False, plan=plan)
     return tid
 
 
@@ -105,8 +107,8 @@ async def _huella(tid: uuid.UUID) -> tuple[int, int, int]:
     return tuple(filas[0])  # type: ignore[return-value]
 
 
-async def test_free_sin_packs_ve_los_cuatro_tipos_y_crear_habilita_la_habilidad(app_client) -> None:
-    tid = await _negocio_sin_packs()
+async def test_sin_packs_ve_los_cuatro_tipos_y_crear_habilita_la_habilidad(app_client) -> None:
+    tid = await _negocio_sin_packs("basic")
     h = await _usuario(app_client, tid, secciones={"settings": "write", "plugins": "write"}, dueno=True)
     assert await _packs(tid) == set()
     huella_antes = await _huella(tid)
@@ -157,7 +159,7 @@ async def test_sin_plugins_write_no_habilita_ni_crea(app_client) -> None:
 
 
 async def test_habilitar_en_un_negocio_no_toca_a_otro(app_client) -> None:
-    a, b = await _negocio_sin_packs(), await _negocio_sin_packs()
+    a, b = await _negocio_sin_packs("premium"), await _negocio_sin_packs()
     h = await _usuario(app_client, a, secciones={"settings": "write", "plugins": "write"}, dueno=True)
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "cobranza", "answers": {}})
     assert r.status_code == 201, r.text
@@ -166,7 +168,7 @@ async def test_habilitar_en_un_negocio_no_toca_a_otro(app_client) -> None:
 
 
 async def test_dos_plantillas_a_la_vez_dejan_las_dos_habilidades(app_client) -> None:
-    tid = await _negocio_sin_packs()
+    tid = await _negocio_sin_packs("basic")
     h = await _usuario(app_client, tid, secciones={"settings": "write", "plugins": "write"}, dueno=True)
     cuerpo = {"answers": {}}
     r1, r2 = await asyncio.gather(
@@ -191,8 +193,28 @@ async def test_dos_plantillas_a_la_vez_dejan_las_dos_habilidades(app_client) -> 
 async def test_el_dueno_del_negocio_puede_habilitar_sin_permisos_explicitos(app_client) -> None:
     """El owner no tiene filas en `admin_permissions`: su acceso a `plugins` sale del rol. Si no fuera
     `write`, el dueño recibiría 403 en su propio onboarding."""
-    tid = await _negocio_sin_packs()
+    tid = await _negocio_sin_packs("basic")
     h = await _usuario(app_client, tid, secciones={}, dueno=True)
     r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "suscripciones", "answers": {}})
     assert r.status_code == 201, r.text
     assert r.json()["enabled_skills"] == ["pack_subscriptions"]
+
+
+async def test_free_no_crea_un_agente_cuya_habilidad_pide_otro_plan(app_client) -> None:
+    """HU-BILL-19: Ventas (`pack_commerce`, `min_plan = basic`) en Free es 409 `plan_plugin_not_included` y no se
+    escribe nada; Agenda (`pack_calendar`, Free) sí entra."""
+    tid = await _negocio_sin_packs()
+    h = await _usuario(app_client, tid, secciones={"settings": "write", "plugins": "write"}, dueno=True)
+    huella = await _huella(tid)
+
+    r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "ventas", "answers": {}})
+    assert r.status_code == 409, r.text
+    error = r.json()["error"]
+    assert error["code"] == "plan_plugin_not_included"
+    assert error["details"] == {"skills": ["pack_commerce"], "min_plan": "basic", "plan": "free"}
+    assert not error.get("fields")
+    assert await _packs(tid) == set() and await _huella(tid) == huella
+
+    r = await app_client.post("/api/v1/admin/agents/from-script", headers=h, json={"template_key": "agenda", "answers": {}})
+    assert r.status_code == 201, r.text
+    assert await _packs(tid) == {"pack_calendar"}

@@ -106,7 +106,7 @@ async def _estado(tid: uuid.UUID, cid: uuid.UUID, status: str) -> None:
 
 # ---------------------------------------------------------------- altas posteriores
 async def test_alta_crea_una_conexion_por_numero_sin_credenciales_y_la_religa_al_cambiar_de_cuenta() -> None:
-    tid, cuenta, _waba, _phone = await _negocio_con_byok()
+    tid, cuenta, _waba, _phone = await _negocio_con_byok(plan="empresarial")
     numero = uniq("ph-alta")
 
     await _alta_numero(tid, cuenta, numero)
@@ -131,7 +131,7 @@ async def test_una_conexion_manual_del_mismo_numero_gana_y_no_se_duplica() -> No
     from core.gateway.connections import save_connection
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, _phone = await _negocio_con_byok()
+    tid, cuenta, _waba, _phone = await _negocio_con_byok(plan="empresarial")
     numero = uniq("ph-manual")
     async with tenant_scope(tid):
         manual, _ = await save_connection(
@@ -160,7 +160,7 @@ async def test_alta_byok_crea_la_conexion_y_el_rollback_la_devuelve_a_la_cuenta_
     import core.gateway.meta_byok as byok_mod
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, _phone = await _negocio_con_byok()
+    tid, cuenta, _waba, _phone = await _negocio_con_byok(plan="empresarial")
     numero = uniq("ph-byok")
     await _alta_numero(tid, cuenta, numero)
 
@@ -205,7 +205,7 @@ async def test_la_conexion_canonica_no_rutea_ni_reclama_el_numero_ni_es_manual()
     from core.gateway.meta_asset_claims import asset_claimed_by_other_tenant
     from core.shared.tenant import resolve_tenant_for_phone, tenant_scope
 
-    tid, cuenta, _waba, _phone = await _negocio_con_byok()
+    tid, cuenta, _waba, _phone = await _negocio_con_byok(plan="empresarial")
     numero = uniq("ph-ruteo")
     await _alta_numero(tid, cuenta, numero)
     (fila,) = await _conexiones(tid, numero)
@@ -242,7 +242,7 @@ async def test_las_guardas_pausan_por_la_cuenta_de_la_conexion_con_y_sin_connect
     from core.gateway.sender import send_to_conversation
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, viejo = await _negocio_con_byok()  # `viejo`: número sin fila canónica
+    tid, cuenta, _waba, viejo = await _negocio_con_byok(plan="empresarial")  # `viejo`: número sin fila canónica
     numero = uniq("ph-pausa")
     await _alta_numero(tid, cuenta, numero)
     (fila,) = await _conexiones(tid, numero)
@@ -307,7 +307,7 @@ async def test_lo_que_entra_por_la_conexion_pausada_se_guarda_sin_ia_y_avisa_con
     import core.orchestrator.consumer as consumer_mod
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, _phone = await _negocio_con_byok()
+    tid, cuenta, _waba, _phone = await _negocio_con_byok(plan="empresarial")
     numero = uniq("ph-entra")
     await _alta_numero(tid, cuenta, numero)
     await _estado(tid, cuenta, "revoked")
@@ -340,7 +340,7 @@ async def test_el_sender_envia_por_el_numero_de_la_conexion_sin_respaldo() -> No
     from core.gateway.sender import resolve_credentials
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, primero = await _negocio_con_byok()  # la cuenta ya tiene un número vivo
+    tid, cuenta, _waba, primero = await _negocio_con_byok(plan="empresarial")  # la cuenta ya tiene un número vivo
     segundo = uniq("ph-segundo")
     await _alta_numero(tid, cuenta, segundo)
     conversacion = await _entrada(tid, uniq("wa-num"), segundo)
@@ -372,7 +372,7 @@ async def test_las_plantillas_se_buscan_en_la_cuenta_de_la_conexion() -> None:
     from core.gateway.event_notices import approved_template_for
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, _phone = await _negocio_con_byok()
+    tid, cuenta, _waba, _phone = await _negocio_con_byok(plan="empresarial")
     numero = uniq("ph-plantilla")
     await _alta_numero(tid, cuenta, numero)
     conversacion = await _entrada(tid, uniq("wa-pl"), numero)
@@ -405,7 +405,7 @@ async def test_bandera_encendida_una_conversacion_por_conexion_sin_reescribir(mo
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, viejo = await _negocio_con_byok()
+    tid, cuenta, _waba, viejo = await _negocio_con_byok(plan="empresarial")
     uno, dos = uniq("ph-a"), uniq("ph-b")
     await _alta_numero(tid, cuenta, uno)
     await _alta_numero(tid, cuenta, dos)
@@ -455,7 +455,7 @@ async def test_backfill_idempotente_con_dry_run_choques_tipos_y_conversaciones()
     from core.shared.tenant import tenant_scope
 
     # Cuenta con un número (de antes: sin fila canónica) y una conversación por el puente.
-    tid, cuenta, _waba, numero = await _negocio_con_byok()
+    tid, cuenta, _waba, numero = await _negocio_con_byok(plan="empresarial")
     sola = await _entrada(tid, uniq("wa-bf"), numero)
     # Como quedaban antes del backfill: el número sin fila canónica y la conversación sin conexión
     # (hoy el consumer las asegura al entrar; se retiran con borrado lógico).
@@ -528,8 +528,8 @@ async def test_numero_que_pasa_a_otro_negocio_no_queda_reclamado_ni_responde_por
     from core.gateway.sender import resolve_credentials
     from core.shared.tenant import resolve_tenant_for_phone, tenant_scope
 
-    tid_a, cuenta_a, _waba_a, _phone_a = await _negocio_con_byok()
-    tid_b, cuenta_b, _waba_b, _phone_b = await _negocio_con_byok()
+    tid_a, cuenta_a, _waba_a, _phone_a = await _negocio_con_byok(plan="empresarial")
+    tid_b, cuenta_b, _waba_b, _phone_b = await _negocio_con_byok(plan="empresarial")
     numero = uniq("ph-traspaso")
     await _alta_numero(tid_a, cuenta_a, numero)
     conversacion_a = await _entrada(tid_a, uniq("wa-a"), numero)
@@ -564,7 +564,7 @@ async def test_editar_una_manual_hacia_un_numero_con_conexion_canonica_da_error_
     from core.gateway.connections import save_connection
     from core.shared.tenant import tenant_scope
 
-    tid, cuenta, _waba, _phone = await _negocio_con_byok()
+    tid, cuenta, _waba, _phone = await _negocio_con_byok(plan="empresarial")
     canonico = uniq("ph-canonico")
     await _alta_numero(tid, cuenta, canonico)
     async with tenant_scope(tid):

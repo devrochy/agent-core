@@ -99,12 +99,13 @@ async def _ajustes(tid: uuid.UUID, **valores: Any) -> None:
                 setattr(ajustes, clave, valor)
 
 
-async def _negocio(**ajustes: Any) -> uuid.UUID:
+async def _negocio(*, plan: str | None = None, **ajustes: Any) -> uuid.UUID:
+    """`plan`: el de la suscripción (los tests con varias conexiones piden uno con cupo, HU-BILL-19)."""
     from _habilidades import onboard_tenant
 
     slug = uniq("kin")
     tid, _ = await onboard_tenant(
-        name=f"K {slug}", slug=slug, persona={"tone": "cercano"}, admin_email="admin@local"
+        name=f"K {slug}", slug=slug, persona={"tone": "cercano"}, admin_email="admin@local", plan=plan
     )
     if ajustes:
         await _ajustes(tid, **ajustes)

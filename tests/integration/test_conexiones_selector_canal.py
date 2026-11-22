@@ -42,6 +42,7 @@ async def _new_tenant():
 
     slug = _uniq("selector-canal")
     tid, _ = await onboard_tenant(
+        plan="empresarial",  # todos los canales y cupo de conexiones (HU-BILL-19)
         name=f"Tenant selector canal {slug}", slug=slug, business_description="Test del selector de canal.",
         persona={"tone": "cercano"}, admin_email="admin@local",
     )

@@ -114,7 +114,7 @@ async def test_pausado_desde_la_consola_no_responde_y_al_reanudar_vuelve(app_cli
     from _api_helpers import capturar_avisos
     from release_de_prueba import release_inicial
 
-    tid = await _negocio()
+    tid = await _negocio(plan="empresarial")
     cid, key, h = await _widget(app_client, tid)
     await release_inicial(tid)  # el chat web con su release (ADR-0191)
     _inmediato(monkeypatch)
@@ -144,7 +144,7 @@ async def test_pausado_desde_la_consola_no_responde_y_al_reanudar_vuelve(app_cli
 
 # ---------------------------------------------------------------- un solo estado
 async def test_el_estado_coincide_con_configuracion_en_los_dos_sentidos(app_client) -> None:
-    tid = await _negocio()
+    tid = await _negocio(plan="empresarial")
     cid, key, h = await _widget(app_client, tid)
     assert await _estado(app_client, h, tid, cid) == {
         "configuracion": True, "consola": (True, "ok", True, "connection"),
@@ -168,7 +168,7 @@ async def test_el_estado_coincide_con_configuracion_en_los_dos_sentidos(app_clie
 async def test_desincronizado_con_app_settings_falla_cerrado_sin_tocar_nada(app_client) -> None:
     """Si `app_settings` no tiene el widget de esa conexión (dato roto), no se repara en silencio
     ni se genera clave: 409 y todo queda como estaba."""
-    tid = await _negocio()
+    tid = await _negocio(plan="empresarial")
     cid, _key, h = await _widget(app_client, tid)
     await _filas(tid, "UPDATE app_settings SET web_chat_config = '{}'::jsonb WHERE tenant_id = :t RETURNING id", t=tid)
 
@@ -181,7 +181,7 @@ async def test_desincronizado_con_app_settings_falla_cerrado_sin_tocar_nada(app_
 
 # ---------------------------------------------------------------- auditoría
 async def test_pausar_y_reanudar_queda_auditado_desde_la_consola_y_desde_configuracion(app_client) -> None:
-    tid = await _negocio()
+    tid = await _negocio(plan="empresarial")
     cid, _key, h = await _widget(app_client, tid)
     assert await _auditoria(tid, cid) == [], "crear el widget no es reanudar"
 
@@ -197,7 +197,7 @@ async def test_pausar_y_reanudar_queda_auditado_desde_la_consola_y_desde_configu
 
 # ---------------------------------------------------------------- permisos y alcance
 async def test_sin_permiso_de_editar_conexiones_no_hay_boton_ni_accion(app_client) -> None:
-    tid = await _negocio()
+    tid = await _negocio(plan="empresarial")
     cid, _key, h = await _widget(app_client, tid)
     solo_ver = await api_headers(
         app_client, tid, email=await _colaborador(tid, {"connections": "read", "settings": "write"}), password=PASSWORD
@@ -216,7 +216,7 @@ async def test_sin_permiso_de_editar_conexiones_no_hay_boton_ni_accion(app_clien
 
 
 async def test_primaria_y_borrar_siguen_fuera_y_otro_negocio_no_se_entera(app_client) -> None:
-    tid_a, tid_b = await _negocio(), await _negocio()
+    tid_a, tid_b = await _negocio(plan="empresarial"), await _negocio(plan="empresarial")
     cid_a, _key_a, h_a = await _widget(app_client, tid_a)
     cid_b, key_b, h_b = await _widget(app_client, tid_b)
 

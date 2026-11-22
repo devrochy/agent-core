@@ -146,6 +146,12 @@ async def lock_growth(tenant_id: uuid.UUID, key: str, *, session) -> None:
 
     if key not in GROWTH_METRICS and key not in PACK_LIMIT_KEYS:
         raise ValueError(f"{key} no es una métrica estructural")
+    # El lock, el plan y el conteo corren en la sesión del caller, con la RLS de su scope: con otro `tenant_id` el
+    # conteo vería 0 y el lock serializaría a otro negocio (auditor-multitenant, HU-BILL-19).
+    from core.shared.tenant import get_current_tenant_id
+
+    if get_current_tenant_id() != tenant_id:
+        raise ValueError("lock_growth: tenant_id distinto del tenant_scope vigente")
     await session.execute(
         text("select pg_advisory_xact_lock(hashtext(:m), hashtext(:t))"), {"m": f"billing:{key}", "t": str(tenant_id)}
     )

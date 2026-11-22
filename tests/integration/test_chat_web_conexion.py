@@ -320,7 +320,7 @@ async def test_altas_posteriores_nacen_con_coordinador_y_su_especialista(app_cli
 async def test_sync_phone_numbers_da_de_alta_los_numeros_nuevos_con_su_conexion(monkeypatch) -> None:
     import core.gateway.meta_phone_numbers as phone_numbers_mod
 
-    tid, cuenta, waba_id, _phone = await _negocio_con_byok()
+    tid, cuenta, waba_id, _phone = await _negocio_con_byok(plan="empresarial")
     nuevo = uniq("ph-sync")
 
     async def _lista(*_args, **_kwargs):
@@ -352,7 +352,7 @@ async def test_webhook_de_meta_a_dos_numeros_responde_por_cada_numero(app_client
 
     secreto = get_settings().whatsapp_app_secret or "ci-meta-app-secret-not-real"
     monkeypatch.setattr(get_settings(), "whatsapp_app_secret", secreto)
-    tid, cuenta, waba_id, _viejo = await _negocio_con_byok()
+    tid, cuenta, waba_id, _viejo = await _negocio_con_byok(plan="empresarial")
     uno, dos = uniq("ph-uno"), uniq("ph-dos")
     await _alta_numero(tid, cuenta, uno)
     await _alta_numero(tid, cuenta, dos)

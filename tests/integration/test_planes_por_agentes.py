@@ -217,8 +217,9 @@ async def test_free_el_editor_no_crea_el_borrador_si_no_hay_cupo(app_client) -> 
 async def test_free_el_editor_no_publica_la_version_si_no_hay_cupo(app_client) -> None:
     tid, cid = await _negocio("free")
     h = await _dueno(app_client, tid)
-    # El borrador se crea con cupo libre; después se llena el cupo y publicar ya no entra.
-    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    # El borrador se crea con cupo libre; después se llena el cupo y publicar ya no entra. Agenda: su habilidad es de
+    # Free (Ventas pide Basic desde HU-BILL-19).
+    r = await app_client.post("/api/v1/admin/agent-templates/agenda/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
     hm = await api_headers(app_client, tid)

@@ -1,0 +1,28 @@
+## Conexiones, correos, canales y habilidades por plan (2026-11-22)
+
+- HU-BILL-19 (SPEC-51, D-79, ADR-0208 §8-10). Los planes v3 se diferencian por estructura, no por consumo.
+- **Métricas nuevas** `conexiones` y `correos` (`scope = lifetime`, en `GROWTH_METRICS`), con su límite en el catálogo: Free 1/0, Basic 2/1, Premium 6/3, Empresarial 20/10.
+  - `conexiones` cuenta las conexiones vivas y activas de canales conversacionales (`whatsapp`, `instagram`, `messenger`, `telegram`, `web`). No cuentan el correo, el Centro de pruebas (`test`) ni Google Calendar.
+  - `correos` cuenta las de `channel = "email"`.
+- **Todas las altas y activaciones de conexión** exigen el canal del plan y su tope con `enforce_growth`, en la transacción que escribe la fila (`core/billing/canales_del_plan.exigir_alta_de_conexion`):
+  - conexiones manuales (`save_connection_in`, `set_active` y `set_primary` al reanudar una pausada), Twilio y Telegram;
+  - WhatsApp por QR (`core/waweb/connections.py`), chat web (habilitar o reanudar el widget);
+  - las canónicas de Meta (números, Páginas de Messenger y cuentas de Instagram), solo cuando se crea la fila; volver a ligar la misma fila no cuenta.
+  - Editar una conexión que ya estaba activa no se mide: un negocio por encima del tope conserva lo que tiene y solo no crece.
+- **Canales por plan:** `plan_incluye_canal` pasa de `core/gateway/meta_messenger_alta.py` a `core/billing/canales_del_plan.py` (se reexporta) y se exige en todas las altas. WhatsApp (Meta, Twilio, Plivo y QR) y el chat web en todos los planes; Telegram desde Basic; Instagram y Messenger desde Premium. Un negocio sin suscripción no se bloquea; antes Messenger e Instagram sí lo bloqueaban.
+- **Habilidades:** instalar una habilidad en un agente exige el `min_plan` del pack (free < basic < premium < empresarial), con 409 `plan_plugin_not_included` antes de escribir nada.
+  - Lo exige `asegurar_habilidades`, al crear un agente desde una plantilla, al instalar una habilidad transversal y en los presets.
+  - Revierte la nota «NO valida `min_plan`».
+  - Una habilidad que el agente ya tiene se conserva aunque el plan baje.
+  - `plans.plan_alcanza` es la comparación única, también para `presets/apply` y `primeros_pasos`.
+- **API (409 nuevos, documentados en `docs/openapi.json`):** `plan_limit_conexiones` y `plan_limit_correos` con `{metric, used, limit}`, `plan_channel_not_included` con `{channel, plan}` y `plan_plugin_not_included` con `{skills, min_plan, plan}`.
+  - Se añaden en las rutas de conexiones, chat web, WhatsApp por QR, el asistente de WhatsApp (sesión, canje, BYOK y manual), los números de Meta, Messenger, Instagram, Twilio, Telegram y el editor de agentes.
+  - Un `QuotaExceeded` o `PlanNoIncluye` que no se tradujo sale como 409, no como 500 (handler global en `core/main.py`).
+- **Decisiones:**
+  - **`asegurar_conexion_en_vuelo` no exige el plan.** Corre en el camino del mensaje entrante y solo repara la fila canónica de un número que el negocio ya tiene conectado: fila en `phone_numbers` y cuenta fuera de `draft`, y su alta ya pasó por `numero_para_conexion`, que sí exige. Bloquear ahí dejaría sin conexión los mensajes de un canal existente. Si el negocio queda por encima del tope, se registra `conexion_en_vuelo_sobre_el_tope`.
+  - **El backfill de conexiones canónicas y la reversión de un alta BYOK fallida** tampoco exigen el plan: reconstruyen lo que ya existía.
+  - **Antes del OAuth de Meta** (intento de Messenger e Instagram, Instagram Login y sesión del asistente de WhatsApp) se mide el tope sin lock (`verificar_antes_del_oauth`). Solo se mide si el negocio no tiene ya una conexión canónica de ese canal: con una, el OAuth puede ser una reconexión, que no es un alta.
+  - **Agregar un número a la WABA** se mide antes de crearlo en Meta. El definitivo es siempre el `enforce_growth` del insert.
+  - **El sync de números de una WABA** omite, sin cortar, el número que no cabe en el plan.
+  - **Messenger e Instagram** informan la Página o la cuenta que no cabe en `skipped`, con el código del 409.
+  - **`GET /admin/meta/waweb`** ya no crea ni reanuda la conexión por QR: eso lo hace `accept-risk`, que exige el plan.
