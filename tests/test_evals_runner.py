@@ -192,7 +192,7 @@ def test_spec_del_escenario_carga_el_de_evals_specs_y_sin_campo_deja_el_neutro()
     neutro = _load_spec(None)
     assert _spec_del_escenario({}, neutro, None) is neutro
     cobranza = _spec_del_escenario({"spec": "cobranza"}, neutro, None)
-    assert cobranza.packs == ["pack_cobranza"]
+    assert cobranza.packs == ("pack_cobranza",)  # el agente del turno v3 (HU-AOS-91)
     assert "cobranza" in [p.name for p in cobranza.playbooks]
     with pytest.raises(ValueError):
         _spec_del_escenario({"spec": "cobranza"}, neutro, "un-negocio")  # con --tenant manda el spec real
