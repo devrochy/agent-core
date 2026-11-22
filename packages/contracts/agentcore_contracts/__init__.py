@@ -1,4 +1,4 @@
-"""agentcore-contracts — v3.2.0 (Python).
+"""agentcore-contracts — v4.0.0 (Python).
 
 Contratos congelados de agent-core. Ver docs/adr/0011-contratos-python.md.
 
@@ -12,6 +12,9 @@ Contratos congelados de agent-core. Ver docs/adr/0011-contratos-python.md.
   adenda de ADR-0113 del 2026-10-20 (ADR-0145, HU-AOS-49).
 - v3.2.0: `ExposedQuery.action`, opcional con default (adenda HU-AOS-19 de ADR-0113): la acción de
   lectura que responde la consulta.
+- v4.0.0: sale el `AgentSpec` v2 y los tipos que solo usaba él (`Persona`, `AgentModel`, `AgentMemory`,
+  `PlaybookRef`, `AgentPolicies`, `ToolBinding`, `RagConfig`): ADR-0206 §8, HU-AOS-91. El agente es
+  `AgentSpecV3` y el Coordinador `KernelSpec`; `Tone`, `Emojis` y `SideEffect` siguen.
 """
 
 from agentcore_contracts.agentspec import (
@@ -24,10 +27,6 @@ from agentcore_contracts.agentspec import (
     ToolBindingV3,
 )
 from agentcore_contracts.contracts import (
-    AgentMemory,
-    AgentModel,
-    AgentPolicies,
-    AgentSpec,
     AgentTurnResult,
     AudioContent,
     BusinessHourRange,
@@ -47,9 +46,6 @@ from agentcore_contracts.contracts import (
     LocationContent,
     Logger,
     OutboundMessage,
-    Persona,
-    PlaybookRef,
-    RagConfig,
     Scope,
     ScopedDb,
     ScopedHttp,
@@ -57,7 +53,6 @@ from agentcore_contracts.contracts import (
     SideEffect,
     TextContent,
     Tone,
-    ToolBinding,
     ToolCallTrace,
     ToolContext,
     ToolDefinition,
@@ -80,14 +75,10 @@ from agentcore_contracts.procedure import (
     Triggers,
 )
 
-__version__ = "3.2.0"
+__version__ = "4.0.0"
 
 __all__ = [
     "SENSITIVE_HEADERS",
-    "AgentMemory",
-    "AgentModel",
-    "AgentPolicies",
-    "AgentSpec",
     "AgentSpecV3",
     "AgentTurnResult",
     "AudioContent",
@@ -116,11 +107,8 @@ __all__ = [
     "LocationContent",
     "Logger",
     "OutboundMessage",
-    "Persona",
-    "PlaybookRef",
     "Procedure",
     "ProcedureRef",
-    "RagConfig",
     "Recovery",
     "RoutingRule",
     "Scope",
@@ -134,7 +122,6 @@ __all__ = [
     "Stage",
     "TextContent",
     "Tone",
-    "ToolBinding",
     "ToolBindingV3",
     "ToolCallTrace",
     "ToolContext",

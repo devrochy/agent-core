@@ -11,7 +11,7 @@ Runtime y contratos en **Python** (ver ADR-0011).
    No existen tablas "globales" de negocio.
 2. **Nunca se hace fork por cliente.** La personalización se resuelve en este orden:
    configuración → pack → plugin del tenant → topología de despliegue. Mismo binario siempre.
-3. **Cero prompts en código.** Los prompts viven en `AgentSpec` (base de datos) o en
+3. **Cero prompts en código.** Los prompts viven en las versiones de cada agente (`AgentSpecV3`, base de datos) o en
    playbooks `SKILL.md` versionados dentro de un pack. No en `.py`, `.ts`, plantillas ni
    configuración embebida.
 4. **Los contratos de `@agentcore/contracts` son inmutables.** Cambiarlos requiere un ADR nuevo.
@@ -42,7 +42,7 @@ core/                  monolito modular (todo el runtime en un proceso)
                        orchestrator/verificador (ADR-0119)
   mcp/                 host de skills/tools/guardrails
   plugin_manager.py    entry_points, registry, config por tenant
-  agents/              AgentSpec (BD), playbooks (allowlist)
+  agents/              agentes y sus versiones (AgentSpecV3 en BD), playbooks (allowlist)
   onboarding.py        artefactos por tenant en TENANTS_ROOT (tenant_dir, docs, voz de marca)
   alta_negocio.py      alta de tenants: CLI `tenant create`, panel y aprovisionamiento (ADR-0121)
   memory/              working (Redis) + recall (pgvector)

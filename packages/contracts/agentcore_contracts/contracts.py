@@ -95,7 +95,7 @@ class InboundMessage(BaseModel):
 
 
 # ─────────────────────────────────────────────────────────────
-# 2. Definición del agente — declarativa, versionada, sin código
+# 2. Tipos compartidos del agente (el AgentSpec v2 salió en 4.0.0: ADR-0206 §8). El agente es `AgentSpecV3`.
 # ─────────────────────────────────────────────────────────────
 
 Tone = Literal["formal", "neutral", "cercano", "informal"]
@@ -133,77 +133,7 @@ class EscalationPolicy(BaseModel):
     outOfHoursMessage: str | None = None
 
 
-class RagConfig(BaseModel):
-    # v2.0.0 (ADR-0050): `collections` se eliminó (sin caso de uso). El recall se
-    # parametriza por `topK` y `minScore`.
-    topK: int
-    minScore: float
-
-
-class ToolBinding(BaseModel):
-    tool: str
-    enabled: bool
-    # v2.0.0 (ADR-0050): `scopes`, `maxCallsPerConversation` y
-    # `requiresConfirmation` tienen efecto real en el loop (autorización fina,
-    # tope por conversación y human-in-the-loop). Defaults seguros para no
-    # romper specs v1.
-    scopes: list[str] = []
-    maxCallsPerConversation: int | None = None
-    requiresConfirmation: bool = False
-
-
-class Persona(BaseModel):
-    role: str
-    tone: Tone
-    warmth: Literal[0, 1, 2, 3, 4, 5]
-    emojis: Literal["none", "sparse", "free"]
-    maxLength: int
-    forbiddenPhrases: list[str]
     # v2.0.0 (ADR-0050): `locale` se eliminó (el idioma vive en AppSettings.language).
-
-
-class AgentModel(BaseModel):
-    primary: str
-    fallback: str | None = None
-    router: str | None = None
-    temperature: float = 0.3
-
-
-class AgentMemory(BaseModel):
-    # v2.0.0 (ADR-0050): `shortTermTurns` y `rag` tienen efecto real; `summarize`
-    # se eliminó (sin caso de uso).
-    shortTermTurns: int = 30
-    rag: RagConfig | None = None
-
-
-class PlaybookRef(BaseModel):
-    # Índice de playbooks: nombre + descripción. El contenido se carga con load_playbook.
-    name: str
-    description: str
-
-
-class AgentPolicies(BaseModel):
-    # v2.0.0 (ADR-0050): `escalation` y `confirmBeforeWrite` se eliminaron (la
-    # escalación operativa vive en AppSettings; horarios/SLA son Tanda 3).
-    maxToolCallsPerTurn: int
-    budgetUsdPerConversation: float | None = None
-
-
-class AgentSpec(BaseModel):
-    id: str
-    version: str
-    tenantId: str
-    persona: Persona
-    model: AgentModel
-    memory: AgentMemory
-    playbooks: list[PlaybookRef]
-    tools: list[ToolBinding]
-    policies: AgentPolicies
-    packs: list[str]
-    # v2.0.0 (ADR-0050): extensibilidad por tenant sin fork. Datos libres que un
-    # motor de hooks/guardrails declarativos consumirá (Tanda 3). RESERVADO: hoy
-    # se persiste y viaja en el spec, pero ningún motor lo lee todavía.
-    extensions: dict[str, Any] = {}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -337,10 +267,6 @@ class Usage(BaseModel):
 
 
 __all__ = [
-    "AgentMemory",
-    "AgentModel",
-    "AgentPolicies",
-    "AgentSpec",
     "AgentTurnResult",
     "AudioContent",
     "BusinessHourRange",
@@ -360,9 +286,6 @@ __all__ = [
     "LocationContent",
     "Logger",
     "OutboundMessage",
-    "Persona",
-    "PlaybookRef",
-    "RagConfig",
     "Scope",
     "ScopedDb",
     "ScopedHttp",
@@ -370,7 +293,6 @@ __all__ = [
     "SideEffect",
     "TextContent",
     "Tone",
-    "ToolBinding",
     "ToolCallTrace",
     "ToolContext",
     "ToolDefinition",
