@@ -7,10 +7,15 @@ secciones `## <clave>`. Este módulo solo las extrae.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from agentcore_contracts import AgentSpec
 
+if TYPE_CHECKING:
+    from core.agents.turno import TienePlaybooks
 
-async def load_response(spec: AgentSpec, key: str) -> str | None:
+
+async def load_response(spec: AgentSpec | TienePlaybooks, key: str) -> str | None:
     """Devuelve el texto de la sección `## <key>` del playbook respuestas."""
     from core.agents.playbooks import load_playbook
 

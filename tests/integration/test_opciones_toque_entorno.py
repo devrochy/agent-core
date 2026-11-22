@@ -1,7 +1,7 @@
 """SPEC-40 · el toque con el ENTORNO REAL: la tool corre por `_execute_tool_safely` fuera del loop (HU-OPC-03).
 
 Prueba el punto más frágil del ADR-0172: fuera de un turno no hay release ni spec. El entorno del toque los
-resuelve como un turno (`load_active_spec` → `fijar_release_del_turno` → `spec_del_turno` bajo la ranura de la
+resuelve como un turno (`fijar_release_del_turno` → `del_turno` bajo la ranura de la
 release) y la tool corre con sus bindings reales, en negocio_opciones. También el camino
 completo del consumer: bandera apagada = comportamiento de siempre; encendida = toque → respuesta fija con el LLM
 invocado cero veces.

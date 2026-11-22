@@ -1,4 +1,4 @@
-"""HU-AOS-15 · la vista v2 de la release (`core/agents/spec_de_release.py`) y el agente en foco.
+"""HU-AOS-90 · el agente del turno sobre `AgentSpecV3` y `KernelSpec` (`core/agents/turno.py`, ADR-0206 §1).
 
 Unitarios, sin BD ni red. Un especialista nativo (`agentspec/3` desde la configuración del
 negocio, `core.agents.base`, ADR-0192) y su Coordinador (`kernelspec/1`): la vista lo devuelve como
@@ -18,11 +18,12 @@ from agentcore_contracts import AgentSpec
 
 from core.agents.base import contenido_base, kernel_del_negocio
 from core.agents.claves import KEY_COORDINADOR
-from core.agents.spec_de_release import (
+from core.agents.turno import (
+    AgenteDelTurno,
     VistaInvalida,
+    agente_del_turno,
     declarativas_omitidas,
-    spec_del_turno,
-    spec_v2_desde_release,
+    del_turno,
 )
 from core.kernel.procedures import ActionInfo, catalogo_de_acciones
 from core.kernel.release_del_turno import con_release
@@ -124,25 +125,36 @@ def _congelados(raw: dict[str, Any], catalogo: Mapping[str, ActionInfo]) -> tupl
 
 
 # ---------------------------------------------------------------- la vista
-def test_la_vista_v2_devuelve_lo_que_el_loop_lee(catalogo) -> None:
+def test_el_agente_del_turno_devuelve_lo_que_el_loop_lee(catalogo) -> None:
     especialista, kernel, original = _congelados(v2_completo(), catalogo)
-    vista = spec_v2_desde_release(especialista, kernel, tenant_id=T, skills=("pack_commerce", "pack_payments"), tenant_plugins=())
+    vista = agente_del_turno(especialista, kernel, skills=("pack_commerce", "pack_payments"), tenant_plugins=())
 
-    assert vista.tenantId == str(T) and vista.id == KEY and vista.version == "atencion@v3:3"
+    assert isinstance(vista, AgenteDelTurno) and vista.version == "atencion@v3:3"
     # Persona: la voz de la conexión (KernelSpec) y el tope y las frases del agente.
-    assert vista.persona.model_dump() == original.persona.model_dump()
-    assert vista.model.model_dump() == original.model.model_dump()
-    assert vista.memory.model_dump() == original.memory.model_dump()
+    p = original.persona
+    assert (vista.persona.role, vista.persona.tone, vista.persona.warmth, vista.persona.emojis) == (
+        p.role, p.tone, p.warmth, p.emojis,
+    )
+    assert (vista.persona.maxLength, list(vista.persona.forbiddenPhrases)) == (p.maxLength, list(p.forbiddenPhrases))
+    m = original.model
+    assert (vista.model.primary, vista.model.fallback, vista.model.router, vista.model.temperature) == (
+        m.primary, m.fallback, m.router, m.temperature,
+    )
+    assert vista.memory.shortTermTurns == original.memory.shortTermTurns
     assert [p.name for p in vista.playbooks] == [p.name for p in original.playbooks]
-    assert vista.policies.model_dump() == original.policies.model_dump()
+    assert (vista.policies.maxToolCallsPerTurn, vista.policies.budgetUsdPerConversation) == (
+        original.policies.maxToolCallsPerTurn, original.policies.budgetUsdPerConversation,
+    )
     assert set(vista.packs) == set(original.packs)
     # Bindings: exactamente los del agente.
-    assert [b.model_dump() for b in vista.tools] == [b.model_dump() for b in original.tools]
-    # Guardrails y declarativas vuelven a `extensions` (lo único que v2 transportaba ahí).
-    reglas = {g["name"]: g for g in vista.extensions["guardrails"]}
+    assert [(b.tool, b.enabled, list(b.scopes)) for b in vista.tools] == [
+        (b.tool, b.enabled, list(b.scopes)) for b in original.tools
+    ]
+    # Guardrails y declarativas: de los campos tipados del v3, no de `extensions`.
+    reglas = {g["name"]: g for g in vista.guardrails}
     assert reglas["gratis"]["action"] == "escalate" and reglas["link"]["tool"] == "confirmar_pago_pedido"
     assert reglas["largo"]["value"] == 900
-    [declarativa] = vista.extensions["tools"]
+    [declarativa] = vista.declarativas
     assert declarativa["name"] == "consultar_envio" and declarativa["allowed_domains"] == ["api.transportadora.co"]
     assert declarativa["headers"]["X-Cliente"] == "solvershub"
     # El secreto viaja por referencia (lo resuelve `declarative.py`).
@@ -175,17 +187,17 @@ def test_las_declarativas_con_referencias_en_url_o_body_se_omiten(catalogo) -> N
     from agentcore_contracts import AgentSpecV3
 
     assert declarativas_omitidas(AgentSpecV3.model_validate(contenido)) == ["consultar_envio", "notificar"]
-    vista = spec_v2_desde_release(agente, kernel, tenant_id=T, skills=(), tenant_plugins=())
-    assert [t["name"] for t in vista.extensions["tools"]] == ["sin_secretos"]
+    vista = agente_del_turno(agente, kernel, skills=(), tenant_plugins=())
+    assert [t["name"] for t in vista.declarativas] == ["sin_secretos"]
 
 
 def test_un_contenido_que_no_pasa_el_contrato_es_fail_closed(catalogo) -> None:
     especialista, kernel, _ = _congelados(v2_completo(), catalogo)
     roto = AgenteCongelado(**{**especialista.__dict__, "content": {**dict(especialista.content), "model": {"primary": ""}}})
     with pytest.raises(VistaInvalida):
-        spec_v2_desde_release(roto, kernel, tenant_id=T, skills=(), tenant_plugins=())
+        agente_del_turno(roto, kernel, skills=(), tenant_plugins=())
     with pytest.raises(VistaInvalida):
-        spec_v2_desde_release(especialista, None, tenant_id=T, skills=(), tenant_plugins=())
+        agente_del_turno(especialista, None, skills=(), tenant_plugins=())
 
 
 # ---------------------------------------------------------------- agente en foco
@@ -217,28 +229,28 @@ def test_elegir_foco_dueno_valido_luego_por_defecto_luego_unico() -> None:
 
 # ---------------------------------------------------------------- la ranura del turno
 @pytest.mark.asyncio
-async def test_spec_del_turno_sin_release_es_el_mismo_y_con_release_la_vista(catalogo, monkeypatch) -> None:
+async def test_del_turno_sin_release_es_none_y_con_release_el_agente(catalogo, monkeypatch) -> None:
     especialista, kernel, original = _congelados(v2_completo(), catalogo)
     monkeypatch.setattr("core.shared.release_vigente.get_current_tenant_id", lambda: T)
-    assert spec_del_turno(original) is original
+    assert del_turno() is None
     assert release_vigente.write_namespaces_del_turno() is None
 
     @con_release
-    async def turno() -> tuple[AgentSpec, frozenset[str] | None]:
+    async def turno() -> tuple[AgenteDelTurno | None, frozenset[str] | None]:
         release_vigente.fijar(
             ArtefactosDeRelease(
                 tenant_id=T, connection_id=C, release_id=uuid.uuid4(), lane="stable", idle_minutes=720,
                 agentes=(kernel, especialista), foco=especialista, skills=("pack_commerce", "pack_payments"),
             )
         )
-        return spec_del_turno(original), release_vigente.write_namespaces_del_turno()
+        return del_turno(), release_vigente.write_namespaces_del_turno()
 
     vista, namespaces = await turno()
-    assert vista is not original and vista.version == "atencion@v3:3"
-    assert vista.persona.model_dump() == original.persona.model_dump()
+    assert vista is not None and vista.version == "atencion@v3:3"
+    assert vista.persona.tone == original.persona.tone
     assert namespaces == frozenset({"perfil"})
     # Fuera del turno la ranura queda vacía: el siguiente turno no hereda nada.
-    assert spec_del_turno(original) is original
+    assert del_turno() is None
 
 
 @pytest.mark.asyncio
