@@ -29,8 +29,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from core.agents.spec import enabled_packs
-from core.agents.turno import del_turno
+from core.agents.turno import del_turno, enabled_packs
 from core.db.models import utcnow
 from core.gateway.connection_types import capacidades_de, capacidades_del_canal
 from core.kernel.opciones import activaciones, payload, resolver, respuesta_texto

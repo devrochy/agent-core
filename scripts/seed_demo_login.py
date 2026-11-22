@@ -74,29 +74,30 @@ async def _gestor_en(tenant_id, admin_email: str) -> None:
 
 
 async def _habilitar_pack(tenant_id, pack: str) -> None:
-    """Garantiza que el tenant tenga el pack habilitado (el spec puede preexistir)."""
-    from sqlalchemy import select
-
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
+    """El negocio tiene la habilidad si un agente activo la tiene instalada (HU-AOS-91): crea el agente de la
+    plantilla del pack si todavía no existe."""
+    from core.agents.editor import ErrorDelEditor, crear_desde_plantilla
+    from core.agents.instalaciones_agente import packs_del_negocio
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
+    plantilla = {"pack_cobranza": "cobranza"}[pack]
     async with tenant_scope(tenant_id):
-        async with get_session() as session:
-            rec = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tenant_id,
-                        AgentSpecRecord.is_active.is_(True),
-                        AgentSpecRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if rec is None:
-                return
-            packs = list(rec.spec.get("packs") or [])
-            if pack not in packs:
-                rec.spec = {**rec.spec, "packs": [*packs, pack]}
+        if pack in await packs_del_negocio(tenant_id):
+            return
+        try:
+            await crear_desde_plantilla(
+                tenant_id,
+                plantilla,
+                nombre=None,
+                catalogo=catalogo_de_acciones(plugin_manager.list_modules()),
+                actor=None,
+                puede_habilitar=True,
+            )
+        except ErrorDelEditor as exc:
+            if exc.code != "key_taken":
+                raise
 
 
 async def _tenant(nombre: str, slug: str, owner_email: str):

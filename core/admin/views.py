@@ -19,7 +19,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
 
 from core.admin.advanced_service import (
-    list_spec_versions,
     save_llm,
 )
 from core.admin.auth import (
@@ -96,12 +95,7 @@ from core.admin.waweb_service import (
 )
 from core.agents import defaults_negocio
 from core.agents.habilitacion import configure_plugin_for_tenant
-from core.agents.instalaciones_agente import packs_del_negocio
-from core.agents.spec import (
-    CORE_PACK_ID,
-    load_active_spec,
-    next_spec_version,
-)
+from core.agents.instalaciones_agente import CORE_PACK_ID, packs_del_negocio
 from core.billing.enforcement import QuotaExceeded
 from core.billing.tipos_de_uso import NO_ES_ACTIVIDAD, NO_SON_TURNOS
 from core.config import get_settings
@@ -1035,12 +1029,7 @@ async def collaborators_toggle(request: Request, admin_id: uuid.UUID):
     return _collab_redirect(f"usuario {state}")
 
 
-# ------------------------------------------------------------------ AgentSpec
-async def _spec_versions() -> list[dict[str, Any]]:
-    """Delegación a `advanced_service.list_spec_versions` (fuente única)."""
-    return await list_spec_versions(get_current_tenant_id())
-
-
+# ------------------------------------------------------------------ horario
 def _format_business_ranges(escalation_config: dict) -> str:
     """Delegación a `settings_service.format_business_ranges` (fuente única)."""
     return format_business_ranges(escalation_config)
@@ -1049,17 +1038,6 @@ def _format_business_ranges(escalation_config: dict) -> str:
 def _parse_business_ranges(text: str) -> list[dict[str, Any]]:
     """Delegación a `settings_service.parse_business_ranges` (fuente única)."""
     return parse_business_ranges(text)
-
-
-def _declarative_tools_json(spec) -> str:  # type: ignore[no-untyped-def]
-    """Definiciones declarativas del tenant a JSON editable (ADR-0052). Los headers sensibles
-    literales salen enmascarados: el panel nunca muestra un secreto (HU-AOS-12)."""
-    import json as _json
-
-    from core.agents.declarativas import enmascarar
-
-    tools = enmascarar((spec.extensions or {}).get("tools") or [])
-    return _json.dumps(tools, indent=2, ensure_ascii=False) if tools else ""
 
 
 async def _recent_eval_runs(limit: int = 10) -> list[dict[str, Any]]:
@@ -1090,21 +1068,13 @@ async def _recent_eval_runs(limit: int = 10) -> list[dict[str, Any]]:
     ]
 
 
-async def _next_spec_version() -> str:
-    """Delegación a `core.agents.spec.next_spec_version` (fuente única)."""
-    tid = get_current_tenant_id()
-    if tid is None:
-        return "1.0.0"
-    return await next_spec_version(tid)
-
-
 _V2_RETIRADO_SSR = "Retirado con el AgentSpec v2: los guardrails y las tools se configuran en cada agente."
 
 
 @router.get("/spec")
 async def spec_editor() -> RedirectResponse:
-    """El editor de AgentSpec vive ahora en la tab "Avanzado" de Configuración
-    (ADR-0050). Se conserva la ruta por compatibilidad con enlaces/docs."""
+    """El editor del AgentSpec v2 se retiró (HU-AOS-91): la ruta se conserva por enlaces viejos y lleva a
+    Avanzado."""
     return RedirectResponse("/admin/configuracion?tab=avanzado", status_code=307)
 
 
@@ -2600,7 +2570,6 @@ async def settings_page(request: Request):
         async with get_session() as session:
             app_settings = AppSettings(tenant_id=get_current_tenant_id())
             session.add(app_settings)
-    spec = await load_active_spec()
     enabled = await packs_del_negocio()
     from core.orchestrator.verificador import TOGGLES, normalizar_desactivados
 
@@ -2613,13 +2582,13 @@ async def settings_page(request: Request):
     # archivo del tenant, ADR-0017/0026). `resolve_flow` cae al default del pack
     # si el tenant todavía no tiene flow.json. Se filtra por las tools realmente
     # habilitadas para el tenant, mismo criterio que el runtime.
+    from core.admin.advanced_service import _PacksDelNegocio
     from core.agents.flow import resolve_flow
-    from core.mcp.declarative import tools_for_spec
 
-    available_tool_names = {
-        t.name for t in mcp_host.get_tools() if t.plugin_id in enabled or t.plugin_id == "core"
-    } | {t.name for t in tools_for_spec(spec)}
-    resolved_flow = await resolve_flow(spec, available=available_tool_names)
+    available_tool_names = {t.name for t in mcp_host.get_tools() if t.plugin_id in enabled or t.plugin_id == "core"}
+    resolved_flow = await resolve_flow(
+        _PacksDelNegocio(tuple(sorted(enabled - {CORE_PACK_ID}))), available=available_tool_names
+    )
     ctx.update(
         tab=request.query_params.get("tab", "identidad"),
         s=app_settings,
@@ -2634,13 +2603,9 @@ async def settings_page(request: Request):
         escalation=dict(app_settings.escalation_config or {}),
         escalation_ranges_text=_format_business_ranges(app_settings.escalation_config or {}),
         payments_enabled="pack_payments" in enabled,
-        # Habilidades (ADR-0050): lo versionable del spec. Persona, cerebro y memoria son los valores por
-        # defecto de los agentes del negocio (`agent_defaults`, ADR-0206 §6).
-        spec=spec.model_dump(mode="json"),
+        # Persona, cerebro y memoria son los valores por defecto de los agentes del negocio (`agent_defaults`,
+        # ADR-0206 §6).
         defaults=defaults_negocio.a_guardar(defaults_negocio.desde_dict(app_settings.agent_defaults)),
-        versions=await _spec_versions(),
-        guardrails_text=_format_custom_guardrails((spec.extensions or {}).get("guardrails") or []),
-        declarative_tools_json=_declarative_tools_json(spec),
         eval_runs=await _recent_eval_runs(),
         config_tabs=await config_tabs(request),
         all_tools=[
@@ -2711,21 +2676,6 @@ async def settings_skills_save(request: Request):
     if await current_admin(request) is None:
         return _login_redirect()
     return HTMLResponse(_V2_RETIRADO_SSR, status_code=410)
-
-
-def _format_custom_guardrails(rules: list[dict[str, Any]]) -> str:
-    lines = []
-    for r in rules or []:
-        kind = r.get("kind")
-        if kind == "max_length":
-            lines.append(f"max_length | {r.get('value')} | {r.get('action', 'retry')}")
-        elif kind == "required_tool":
-            phrases = ", ".join(r.get("phrases") or [])
-            lines.append(f"required_tool | {phrases} | {r.get('tool')} | {r.get('action', 'retry')}")
-        elif kind == "forbidden_phrase":
-            phrases = ", ".join(r.get("phrases") or [])
-            lines.append(f"forbidden_phrase | {phrases} | {r.get('action', 'retry')}")
-    return "\n".join(lines)
 
 
 @router.post("/configuracion/asistente")

@@ -1,6 +1,6 @@
 """Tools declarativas por tenant (ADR-0052).
 
-Un tenant declara tools HTTP en `AgentSpec.extensions["tools"]` (JSON), sin
+Un agente declara tools HTTP en `AgentSpecV3.declarativeTools` (JSON), sin
 escribir Python. El core las convierte a `MCPTool` en runtime y las ejecuta con
 `ScopedHttp` (allowlist de dominios; nunca el pool ni `environ`).
 
@@ -23,9 +23,8 @@ escapados), nunca con texto del LLM sin pasar por argumentos.
 Headers sensibles (ADR-0113 §2, HU-AOS-12): un header puede declararse por referencia,
 `{"secret": "<nombre>"}`, y su valor se resuelve AL EJECUTAR desde la configuración cifrada
 de la instalación `core` del negocio (`core.agents.secretos`). Si falta el secreto, la tool
-devuelve un error sin llamar a nadie. Los valores literales de specs v2 viejos siguen
-funcionando igual; los editores ya no dejan guardar literales en `Authorization`, `Cookie`
-ni `X-Api-Key` (`core.agents.declarativas`).
+devuelve un error sin llamar a nadie. El contrato v3 no admite literales en `Authorization`,
+`Cookie` ni `X-Api-Key`.
 
 `allowed_domains` solo admite FQDN públicos (`public_fqdn`): ni IPs, ni hosts de
 una etiqueta (`redis`), ni sufijos internos. Al ejecutar, `ScopedHttp` además
@@ -217,11 +216,6 @@ def _raw_or_interpolated(value: Any, arguments: dict[str, Any]) -> Any:
 
 def tools_for_spec(spec) -> list[MCPTool]:  # type: ignore[no-untyped-def]
     """Tools declarativas del agente del turno: `AgenteDelTurno.declarativas`, de `AgentSpecV3.declarativeTools`
-    (ADR-0206 §1). Un `AgentSpec` v2 (el runner de evals, hasta HU-AOS-91) las trae en `extensions["tools"]`."""
-    if spec is None:
-        return []
-    if hasattr(spec, "declarativas"):
-        raw = spec.declarativas
-    else:
-        raw = (spec.extensions or {}).get("tools") if getattr(spec, "extensions", None) else None
+    (ADR-0206 §1)."""
+    raw = getattr(spec, "declarativas", None) if spec is not None else None
     return [build_tool(d) for d in validate_declarative_tools(raw)]

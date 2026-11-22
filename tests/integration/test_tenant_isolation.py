@@ -288,7 +288,7 @@ async def test_onboarding_idempotente(moto_setup) -> None:
     """Correr el onboarding dos veces no duplica filas."""
     from _habilidades import onboard_tenant
 
-    from core.db.models import AgentSpecRecord, AppSettings, Tenant
+    from core.db.models import AgentRecord, AppSettings, Tenant
     from core.db.session import get_session
     from core.shared.tenant import tenant_scope
 
@@ -301,11 +301,12 @@ async def test_onboarding_idempotente(moto_setup) -> None:
             ).scalar()
         async with tenant_scope(moto):
             async with get_session() as session:
-                specs = (
+                # El alta ya no siembra `agent_specs` (HU-AOS-91): lo que no debe duplicar son sus agentes.
+                agentes = (
                     await session.execute(
                         select(func.count())
-                        .select_from(AgentSpecRecord)
-                        .where(AgentSpecRecord.tenant_id == moto)
+                        .select_from(AgentRecord)
+                        .where(AgentRecord.tenant_id == moto, AgentRecord.deleted_at.is_(None))
                     )
                 ).scalar()
                 settings = (
@@ -315,7 +316,7 @@ async def test_onboarding_idempotente(moto_setup) -> None:
                         .where(AppSettings.tenant_id == moto)
                     )
                 ).scalar()
-        return tenants, specs, settings
+        return tenants, agentes, settings
 
     antes = await _counts()
     await onboard_tenant(

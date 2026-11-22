@@ -536,17 +536,17 @@ async def armar_con_instancias(
 ) -> dict[str, Any]:
     """Pasos 2 a 5 del build con los agentes ya leídos. También lo usa la prueba del borrador
     (`core.releases.efimera`, adenda HU-AOS-72 de ADR-0191), que arma las instancias en memoria."""
+    from core.agents import defaults_negocio
     from core.agents.flow import read_tenant_flow_raw
     from core.agents.instalaciones_agente import packs_del_negocio
-    from core.agents.spec import leer_spec_activo
     from core.releases.cargar import derivar_procedimientos
     from core.shared.tenant import tenant_slug
 
     _exigir_scope(tenant_id)
-    leido = await leer_spec_activo(tenant_id)
     del_negocio = await packs_del_negocio(tenant_id, con_core=False)
-    allowlist: set[str] = {p.name for p in leido[1].playbooks} if leido else set()
-    del leido
+    # Los playbooks base del negocio (`agent_defaults`, ADR-0206 §6; los que antes listaba el AgentSpec v2) más los
+    # que declara cada agente.
+    allowlist: set[str] = {p.name for p in (await defaults_negocio.leer(tenant_id)).playbooks}
     for inst in instancias:
         for ref in inst.contenido.get("playbooks") or []:
             if isinstance(ref, dict) and isinstance(ref.get("name"), str):

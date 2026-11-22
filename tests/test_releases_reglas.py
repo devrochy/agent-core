@@ -263,21 +263,12 @@ def test_prompt_con_los_campos_congelados() -> None:
 
 
 def test_playbook_y_flujo_salen_de_la_release(tmp_path: Any, monkeypatch: Any) -> None:
-    from agentcore_contracts import AgentSpec
-
     from core.agents import playbooks
     from core.agents.flow import resolve_flow
-    from core.agents.spec import DEFAULT_SPEC
+    from core.agents.turno import agente_desde_defaults
 
-    spec = AgentSpec.model_validate(
-        DEFAULT_SPEC
-        | {
-            "tenantId": str(T),
-            "playbooks": [
-                {"name": "tono", "description": ""},
-                {"name": "identidad", "description": ""},
-            ],
-        }
+    spec = agente_desde_defaults(
+        {"playbooks": [{"name": "tono", "description": ""}, {"name": "identidad", "description": ""}]}
     )
 
     @con_release

@@ -7,8 +7,8 @@ Lo usa `core/api/routers/plantillas_opciones.py`; el router solo traduce HTTP. A
   congela una fila nueva de `option_template_versions` (inmutable por trigger) con `version_n = max + 1` bajo
   `SELECT … FOR UPDATE` de la plantilla: dos publicaciones simultáneas no repiten número. La versión anterior NO se
   retira: un botón viejo ejecuta SU versión mientras no venza (ADR-0172 §3).
-- **Contexto del lint = el del negocio.** Las fichas de las tools salen del AgentSpec activo del negocio SIN escribir
-  (`leer_spec_activo`: no siembra el default) y con las mismas piezas que el resolver del toque
+- **Contexto del lint = el del negocio.** Las fichas de las tools salen de los bindings de sus especialistas activos
+  (la unión de su última versión publicada, HU-AOS-91) y con las mismas piezas que el resolver del toque
   (`lint.fichas_de_tools`, `lint.motivos_de_rechazo`). Límite: los bindings reales son los de
   la release del agente en foco, que aquí no hay; el resolver vuelve a lintar al tocar (ADR-0172 adenda del PR 6).
 - **Catálogo de acciones.** Solo las tools que `motivos_de_rechazo` deja elegibles (marca `apta_para_opcion`, pack
@@ -124,36 +124,64 @@ def _forma_o_vacia(almacenada: Any) -> Definicion | None:
 
 
 # ------------------------------------------------------------------ catálogos
+async def _bindings_de_los_especialistas(tenant_id: uuid.UUID) -> list[Any]:
+    """Los bindings de tools de la última versión publicada de cada especialista activo, unidos (decisión del dueño
+    del 2026-11-22, HU-AOS-91: lo del negocio es lo de sus agentes). Una tool queda habilitada si algún agente la
+    habilita, y pide confirmación si alguno la pide."""
+    _scope(tenant_id)
+    from types import SimpleNamespace
+
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                text(
+                    "SELECT DISTINCT ON (v.agent_id) v.content FROM agent_versions v "
+                    "JOIN agents a ON a.tenant_id = v.tenant_id AND a.id = v.agent_id "
+                    "WHERE v.tenant_id = :t AND a.kind = 'specialist' AND a.status = 'active' "
+                    "AND a.deleted_at IS NULL ORDER BY v.agent_id, v.version DESC"
+                ),
+                {"t": tenant_id},
+            )
+        ).scalars().all()
+    por_tool: dict[str, SimpleNamespace] = {}
+    for contenido in filas:
+        for b in (contenido or {}).get("tools") or []:
+            if not isinstance(b, dict) or not b.get("tool"):
+                continue
+            actual = por_tool.setdefault(
+                str(b["tool"]), SimpleNamespace(tool=str(b["tool"]), enabled=False, requiresConfirmation=False)
+            )
+            actual.enabled = actual.enabled or bool(b.get("enabled", True))
+            actual.requiresConfirmation = actual.requiresConfirmation or bool(b.get("requiresConfirmation", False))
+    return list(por_tool.values())
+
+
 async def fichas_del_negocio(tenant_id: uuid.UUID, agent_id: uuid.UUID | None = None) -> dict[str, FichaTool]:
-    """Una ficha por tool del negocio (registradas en el host y declarativas del AgentSpec), con el binding
-    EXPLÍCITO del AgentSpec activo. Sin AgentSpec activo: vacío (no se siembra nada desde una consulta).
+    """Una ficha por tool del negocio registrada en el host, con el binding EXPLÍCITO de sus especialistas: la unión
+    de la última versión publicada de cada uno (HU-AOS-91; antes, el del AgentSpec v2 del negocio).
 
     Con `agent_id` (ADR-0190, HU-AOS-67): las del AGENTE que atiende la conexión — sus habilidades instaladas (o
-    las del negocio si no tiene propias) y los bindings de su borrador, que es lo que el dueño ve en «Acciones»."""
+    las del negocio si no tiene propias) y los bindings de su borrador, que es lo que el dueño ve en «Acciones». Las
+    tools declarativas no entran: las del negocio eran del AgentSpec v2 y las de cada agente llegan con su HU."""
     _scope(tenant_id)
     from core.agents.instalaciones_agente import packs_del_negocio
-    from core.agents.spec import leer_spec_activo
     from core.kernel.procedures import registro
     from core.mcp.declarative import PLUGIN_ID as DECLARATIVE_PLUGIN_ID
-    from core.mcp.declarative import tools_for_spec
     from core.mcp.host import mcp_host
     from core.plugin_manager import plugin_manager
 
-    activo = await leer_spec_activo(tenant_id)
-    if activo is None:
-        return {}
-    spec = activo[1]
     registradas = {t.name: t for t in mcp_host.get_tools()}
-    # Prioridad al host, como el loop: una declarativa no puede ocultar una tool registrada.
-    declarativas = [t for t in tools_for_spec(spec) if t.name not in registradas]
     habilitados = await packs_del_negocio(tenant_id)
     inactivos = await plugin_manager.disabled_plugins_for_tenant(tenant_id)
     packs_activos = set(habilitados) - set(inactivos)
-    if declarativas:
-        packs_activos.add(DECLARATIVE_PLUGIN_ID)
     gobernadas = lint.acciones_de_procedimientos(registro.disponibles(habilitados, inactivos).values())
-    bindings: list[Any] = list(spec.tools)
-    if agent_id is not None:
+    if agent_id is None:
+        bindings = await _bindings_de_los_especialistas(tenant_id)
+    else:
         from types import SimpleNamespace
 
         from core.agents import versiones
@@ -161,16 +189,17 @@ async def fichas_del_negocio(tenant_id: uuid.UUID, agent_id: uuid.UUID | None = 
 
         packs_activos &= await packs_del_agente(tenant_id, agent_id, set(habilitados)) | {DECLARATIVE_PLUGIN_ID}
         borrador = await versiones.obtener_borrador(tenant_id, agent_id)
+        contenido = borrador.content or {}
         bindings = [
             SimpleNamespace(
                 tool=str(b["tool"]),
                 enabled=bool(b.get("enabled", True)),
                 requiresConfirmation=bool(b.get("requiresConfirmation", False)),
             )
-            for b in (borrador.content or {}).get("tools") or []
+            for b in contenido.get("tools") or []
             if isinstance(b, dict) and b.get("tool")
         ]
-    return lint.fichas_de_tools([*registradas.values(), *declarativas], bindings, packs_activos, gobernadas)
+    return lint.fichas_de_tools(list(registradas.values()), bindings, packs_activos, gobernadas)
 
 
 async def contexto_del_lint(tenant_id: uuid.UUID, agent_id: uuid.UUID | None = None) -> ContextoLint:

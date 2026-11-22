@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
 from core.admin.envios_segmento import PALABRAS_DE_BAJA_POR_DEFECTO
-from core.agents.spec import DEFAULT_SPEC
+from core.agents.defaults_negocio import POR_DEFECTO
 from core.config import DEBOUNCE_DELAY_MS, Settings
 from core.config_limites import rango
 from core.config_registro.modelo import Dependencia, Opcion, ValorPosible
@@ -42,7 +42,7 @@ from core.waweb.policy import (
     MODE_REPLY_ONLY,
 )
 
-_PERSONA_POR_DEFECTO: dict[str, Any] = DEFAULT_SPEC["persona"]
+_PERSONA_POR_DEFECTO: dict[str, Any] = POR_DEFECTO.persona.model_dump(mode="json")
 _CAMPOS_SETTINGS = Settings.model_fields
 
 
@@ -831,9 +831,9 @@ AGENT_OS: list[Opcion] = [
 # Solo texto para personas: cada una se guarda con su propio `PUT` (`/brain`, `/memory`, `/web-chat`, `/media`).
 # El proveedor, el modelo y la llave de audio y visión quedan fuera: su catálogo cambia por proveedor y la
 # llave es un secreto que el registro no describe.
-_MODELO_POR_DEFECTO = DEFAULT_SPEC["model"]
-_POLITICAS_POR_DEFECTO = DEFAULT_SPEC["policies"]
-_MEMORIA_POR_DEFECTO = DEFAULT_SPEC["memory"]
+_MODELO_POR_DEFECTO = POR_DEFECTO.model.model_dump(mode="json")
+_POLITICAS_POR_DEFECTO = POR_DEFECTO.policies.model_dump(mode="json")
+_MEMORIA_POR_DEFECTO = POR_DEFECTO.memory.model_dump(mode="json")
 # Los decimales no están en `config_limites` (solo enteros): se espejan de los modelos de entrada de la API y
 # `tests/test_cfg02_registro_opciones.py` vigila que coincidan.
 TEMPERATURA = (0.0, 2.0)

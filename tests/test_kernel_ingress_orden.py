@@ -39,9 +39,6 @@ def efectos(monkeypatch) -> list[tuple[str, Any]]:
     async def _sin_cuenta(_conv):
         return None
 
-    async def _spec():
-        return SimpleNamespace()
-
     async def _respuesta(_spec, _clave):
         return "Te paso con una persona."
 
@@ -50,7 +47,6 @@ def efectos(monkeypatch) -> list[tuple[str, Any]]:
     monkeypatch.setattr("core.orchestrator.escalation.escalate", _escalar)
     monkeypatch.setattr("core.gateway.sender.send_to_conversation", _enviar)
     monkeypatch.setattr("core.gateway.meta_connection_state.cuenta_meta_de_conversacion", _sin_cuenta)
-    monkeypatch.setattr("core.agents.spec.load_active_spec", _spec)
     return vistos
 
 

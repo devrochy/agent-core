@@ -28,8 +28,7 @@ from core.agents.compiler import aviso_no_disponible
 from core.agents.flow import confirmed_actions_v2, render_flow, resolve_flow
 from core.agents.horario_agente import con_horario_del_agente
 from core.agents.responses import load_response
-from core.agents.spec import enabled_packs
-from core.agents.turno import del_turno
+from core.agents.turno import del_turno, enabled_packs
 from core.config import get_settings
 from core.config_limites import leer_entero
 from core.datos_cliente.ajustes import herramientas_activas as datos_del_cliente_activos

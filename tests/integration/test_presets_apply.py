@@ -30,31 +30,31 @@ async def _alta(preset: str, plan: str | None):
 async def _estado(tid):
     from pack_commerce.models import Product, ProductVariant
 
-    from core.agents.spec import load_active_spec
-    from core.db.models import AgentSpecRecord, Tenant
+    from core.agents.instalaciones_agente import packs_del_negocio
+    from core.db.models import AgentVersionRecord, Tenant
     from core.db.session import get_session
     from core.plugin_manager import plugin_manager
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
-        spec = await load_active_spec()
+        packs = await packs_del_negocio(tid, con_core=False)
         async with get_session() as s:
             productos = (await s.execute(select(func.count()).select_from(Product).where(Product.tenant_id == tid))).scalar_one()
             skus = set((await s.execute(select(ProductVariant.sku).where(ProductVariant.tenant_id == tid))).scalars())
-            versiones = (await s.execute(select(func.count()).select_from(AgentSpecRecord).where(AgentSpecRecord.tenant_id == tid))).scalar_one()
+            versiones = (await s.execute(select(func.count()).select_from(AgentVersionRecord).where(AgentVersionRecord.tenant_id == tid))).scalar_one()
             tenant = await s.get(Tenant, tid)
         config = await plugin_manager.load_config("pack_commerce")
-    return spec, productos, skus, versiones, (tenant.settings or {}).get("preset"), config
+    return packs, productos, skus, versiones, (tenant.settings or {}).get("preset"), config
 
 
 @pytest.mark.asyncio
 async def test_alta_con_preset_restaurante() -> None:
     """Gherkin «Alta con preset», «Packs con claves» y «Fragmentos por pack»."""
     tid, pasos = await _alta("restaurante", "basic")
-    spec, productos, skus, versiones, preset, config = await _estado(tid)
+    packs, productos, skus, _versiones, preset, config = await _estado(tid)
 
-    # El preset solo siembra configuración (HU-AOS-91): no habilita packs ni escribe el spec.
-    assert spec.packs == [] and versiones == 1
+    # El preset solo siembra configuración (HU-AOS-91): no habilita packs (ni hay AgentSpec v2 que escribir).
+    assert packs == set()
     # pack_payments exige claves de Wompi: queda pendiente y el alta no falla.
     assert [p["pack"] for p in preset["pendientes"]] == ["pack_payments"]
     assert preset["id"] == "restaurante" and preset["version"] == 2
@@ -74,10 +74,10 @@ async def test_aplicar_dos_veces_no_duplica() -> None:
     resultado = await apply_preset(tid, "restaurante")
     despues = await _estado(tid)
 
-    assert resultado.spec_version is None  # el spec no cambió
+    assert resultado.spec_version is None  # no hay spec que cambie
     assert despues[1] == antes[1] and despues[2] == antes[2]
-    assert despues[3] == antes[3]
-    assert despues[0].packs == antes[0].packs
+    assert despues[3] == antes[3]  # ni versiones de agentes nuevas
+    assert despues[0] == antes[0]
 
 
 @pytest.mark.asyncio

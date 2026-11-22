@@ -265,11 +265,15 @@ async def test_backfill_suma_conocimiento_si_el_agente_lo_usa(monkeypatch: pytes
     tiene: así no lo pierde en su próxima release. Dry-run (el venv local puede no registrar el pack)."""
     from _habilidades import onboard_tenant
 
-    import core.agents.spec as spec_mod
+    import core.agents.instalaciones_agente as instalaciones
     from core.agents.instalaciones_agente import backfill_habilidades_por_agente
 
-    original = spec_mod.enabled_packs
-    monkeypatch.setattr(spec_mod, "enabled_packs", lambda spec: set(original(spec)) | {"pack_knowledge"})
+    # El backfill lee las habilidades del negocio de `agent_specs.packs` (por SQL, hasta la parte E de HU-AOS-91), que
+    # el alta ya no siembra: se dan aquí, con Conocimiento.
+    async def _del_spec_v2(_tid: uuid.UUID) -> set[str]:
+        return {"pack_commerce", "pack_knowledge"}
+
+    monkeypatch.setattr(instalaciones, "_packs_del_spec_v2", _del_spec_v2)
     slug = uniq("hpakn")
     tid, _ = await onboard_tenant(
         name=f"HPA {slug}", slug=slug, packs=["pack_commerce"], sembrar_ejemplos=False, plan="premium"

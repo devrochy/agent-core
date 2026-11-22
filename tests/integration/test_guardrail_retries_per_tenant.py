@@ -51,34 +51,10 @@ async def _set_behavior(tenant_id: uuid.UUID, **overrides) -> None:
 
 
 async def _ensure_max_tool_calls_per_turn(tid: uuid.UUID, value: int) -> None:
-    """Algún otro test de la suite (`test_tools_limits.py`) deja
-    `maxToolCallsPerTurn=1` persistido para T1 en la BD local (no se resetea
-    entre corridas) -- con guardrail_max_retries>0 eso corta el turno por
-    "max_iterations" antes de completar los reintentos esperados. Se fija
-    explícito acá para no depender de qué dejó una corrida anterior."""
-    import copy
-
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        from core.agents.spec import ensure_default_spec
-
-        await ensure_default_spec(tid)
-        async with get_session() as session:
-            row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tid,
-                        AgentSpecRecord.is_active.is_(True),
-                    )
-                )
-            ).scalar_one()
-            spec = copy.deepcopy(row.spec)
-            spec.setdefault("policies", {})["maxToolCallsPerTurn"] = value
-            row.spec = spec
-    # En v3 el tope sale de la versión del especialista de la release (ADR-0191): se fija ahí.
+    """Algún otro test de la suite (`test_tools_limits.py`) puede dejar `maxToolCallsPerTurn=1` en la versión del
+    especialista de T1 -- con guardrail_max_retries>0 eso corta el turno por "max_iterations" antes de completar los
+    reintentos esperados. Se fija explícito para no depender de qué dejó otro test. En v3 el tope sale de la versión
+    del especialista de la release (ADR-0191): se fija ahí."""
     from release_de_prueba import republicar
 
     await republicar(tid, politicas_agente={"maxToolCallsPerTurn": value})

@@ -76,11 +76,11 @@ def contenido_inicial(kind: str) -> dict[str, Any]:
     """Borrador válido de un agente nuevo: los defaults del contrato."""
     from agentcore_contracts import KernelSpec
 
-    from core.agents.spec import DEFAULT_SPEC
+    from core.agents.defaults_negocio import POR_DEFECTO
 
     if CONTRATO_POR_KIND[kind] == "kernelspec/1":
         return KernelSpec().model_dump(mode="json", by_alias=True)
-    modelo = {"primary": DEFAULT_SPEC["model"]["primary"]}
+    modelo = {"primary": POR_DEFECTO.model.primary}
     return AgentSpecV3.model_validate({"model": modelo}).model_dump(mode="json", by_alias=True)
 
 

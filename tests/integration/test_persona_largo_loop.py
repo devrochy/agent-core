@@ -10,7 +10,6 @@ veracidad (`guardrail_max_retries`, `guardrail_fail_action`).
 
 from __future__ import annotations
 
-import copy
 import os
 import uuid
 from typing import Any
@@ -41,30 +40,11 @@ PLANES = {"generar_cotizacion": {"planes": [{"price": p} for p in (100000, 20000
 
 
 async def _ajustar_spec(tid: uuid.UUID, *, persona: dict[str, Any] | None = None, **policies: Any) -> None:
-    from sqlalchemy import select
-
-    from core.agents.spec import ensure_default_spec
-    from core.db.models import AgentSpecRecord
-    from core.db.session import get_session
+    """ADR-0206 §6: el agente del turno se siembra desde los valores por defecto del negocio (`agent_defaults`)."""
+    from core.agents import defaults_negocio
     from core.shared.tenant import tenant_scope
 
     async with tenant_scope(tid):
-        await ensure_default_spec(tid)
-        async with get_session() as session:
-            row = (
-                await session.execute(
-                    select(AgentSpecRecord).where(
-                        AgentSpecRecord.tenant_id == tid, AgentSpecRecord.is_active.is_(True)
-                    )
-                )
-            ).scalar_one()
-            spec = copy.deepcopy(row.spec)
-            spec.setdefault("persona", {}).update({"maxLength": TOPE, **(persona or {})})
-            spec.setdefault("policies", {}).update({"maxToolCallsPerTurn": 10, **policies})
-            row.spec = spec
-        # ADR-0206 §6: el agente del turno se siembra desde `agent_defaults`, no desde el spec.
-        from core.agents import defaults_negocio
-
         await defaults_negocio.guardar(
             tid, {"persona": {"maxLength": TOPE, **(persona or {})}, "policies": {"maxToolCallsPerTurn": 10, **policies}}
         )

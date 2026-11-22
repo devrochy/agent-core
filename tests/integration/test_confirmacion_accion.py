@@ -114,14 +114,16 @@ class Charla:
                 return dict((await s.get(Conversation, self.conv.id)).state)
 
     async def llamar(self, *, args: dict[str, Any] | None = None, motor: Any = None, ya_confirmada: bool = False) -> dict[str, Any]:
-        from core.agents.spec import load_active_spec
+        from _turno_sin_release import agente_desde_el_negocio
+
         from core.llm.types import LLMToolCall
         from core.orchestrator.loop import _execute_tool_safely
         from core.shared.tenant import tenant_scope
 
         llamada = LLMToolCall(id=uuid.uuid4().hex[:8], name=TOOL, arguments=dict(ARGS if args is None else args))
         async with tenant_scope(self.tid):
-            spec = await load_active_spec()
+            # El agente del negocio sin bindings (antes, el AgentSpec v2 sembrado por el alta, retirado en HU-AOS-91).
+            spec = await agente_desde_el_negocio()
             return await _execute_tool_safely(self.conv, self.cliente, llamada, spec, motor=motor, ya_confirmada=ya_confirmada)
 
 

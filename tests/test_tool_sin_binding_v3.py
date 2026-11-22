@@ -136,15 +136,19 @@ async def test_con_binding_corre_y_el_deshabilitado_sigue_negando() -> None:
 @pytest.mark.usefixtures("registradas", "turno")
 async def test_declarativa_de_la_version_concedida_y_la_ajena_negada() -> None:
     release_vigente.fijar(_release())
-    spec = make_spec([])
-    spec.extensions = {
-        "tools": [
-            {
-                "name": "consulta_propia", "description": "d", "method": "GET", "url": "https://api.ejemplo.com/x",
-                "allowed_domains": ["api.ejemplo.com"], "parameters": {"type": "object", "properties": {}},
-            }
-        ]
-    }
+    from core.agents.turno import agente_desde_defaults
+
+    # La declarativa es del agente (`AgentSpecV3.declarativeTools`, ADR-0206 §1), no de `extensions` del v2.
+    spec = agente_desde_defaults(
+        {
+            "declarativeTools": [
+                {
+                    "name": "consulta_propia", "description": "d", "method": "GET", "url": "https://api.ejemplo.com/x",
+                    "allowedDomains": ["api.ejemplo.com"], "parameters": {"type": "object", "properties": {}},
+                }
+            ]
+        }
+    )
     assert await _tool_denial(spec, "consulta_propia") is None
     assert await _tool_denial(spec, "declarativa_ajena") is not None
 

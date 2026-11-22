@@ -131,26 +131,24 @@ async def test_suscripcion_aislada_entre_tenants():
 
 async def test_metrica_plugins_no_cuenta_el_core():
     """El core es plomería del framework: no consume cuota (ADR-0045)."""
-    from core.agents.spec import (
-        count_tenant_packs,
-        enabled_business_packs,
-        enabled_packs,
-        load_active_spec,
-    )
+    from core.agents.defaults_negocio import POR_DEFECTO
+    from core.agents.instalaciones_agente import packs_del_negocio
+    from core.agents.turno import agente_desde_defaults, enabled_business_packs, enabled_packs
     from core.billing.metrics import count_metric
     from core.shared.tenant import tenant_scope
 
     tid = await _onboard(_uniq("pkgnocore"))
 
     async with tenant_scope(tid):
-        spec = await load_active_spec(tid)
+        con_core = await packs_del_negocio(tid)
+        de_negocio = await packs_del_negocio(tid, con_core=False)
+    agente = agente_desde_defaults(POR_DEFECTO.model_dump(mode="json"), packs=sorted(de_negocio))
 
-    # `enabled_packs` (filtrado de tools) SÍ incluye el core...
-    assert "core" in enabled_packs(spec)
+    # `enabled_packs` (filtrado de tools) y las habilidades del negocio por defecto SÍ incluyen el core...
+    assert "core" in enabled_packs(agente) and "core" in con_core
     # ...pero la cuenta que consumen las cuotas no.
-    assert "core" not in enabled_business_packs(spec)
-    assert count_tenant_packs(spec) == len(set(spec.packs))
-    assert count_tenant_packs(spec) == 0  # onboarding sin packs de negocio
+    assert "core" not in enabled_business_packs(agente) and "core" not in de_negocio
+    assert de_negocio == set()  # onboarding sin packs de negocio
 
     assert await count_metric(tid, "plugins") == 0
 

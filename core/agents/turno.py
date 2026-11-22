@@ -37,8 +37,7 @@ PREFIJO_RECEPCION = "coordinador@recepcion"
 
 
 class TienePlaybooks(Protocol):
-    """Lo que necesita `load_playbook` para la allowlist: el agente del turno, un `AgentSpec` (evals) o
-    `SoloRespuestas`."""
+    """Lo que necesita `load_playbook` para la allowlist: el agente del turno o `SoloRespuestas`."""
 
     @property
     def playbooks(self) -> Sequence[Any]: ...
@@ -182,6 +181,57 @@ def declarativas_omitidas(v3: AgentSpecV3) -> list[str]:
     return sorted(t.name for t in v3.declarativeTools if referencias_en_url(t.url) or referencias_en_body(t.body))
 
 
+CORE_PACK_ID = "core"
+
+
+class _ConPacks(Protocol):
+    @property
+    def packs(self) -> Sequence[str] | frozenset[str]: ...
+
+
+def enabled_packs(agente: _ConPacks) -> set[str]:
+    """Las habilidades del agente del turno, con el core (sus tools son plomería del framework y no se filtran por
+    pack)."""
+    return set(agente.packs) | {CORE_PACK_ID}
+
+
+def enabled_business_packs(agente: _ConPacks) -> set[str]:
+    """Las habilidades del agente del turno, sin el core."""
+    return set(agente.packs) - {CORE_PACK_ID}
+
+
+def agente_desde_defaults(
+    datos: Any, *, packs: Sequence[str] = (), key: str = "evals", tenant_plugins: Sequence[str] = ()
+) -> AgenteDelTurno:
+    """Un agente del turno armado como en una release desde un dict con la forma de los valores por defecto del
+    negocio (`persona`, `model`, `memory`, `policies`, `playbooks`, más `tools` con sus bindings y `declarativeTools`
+    en la forma de `AgentSpecV3`): el contenido
+    `agentspec/3` sale de `contenido_base`, y el `KernelSpec`, de la misma voz. Para evals y tests: el turno real lo
+    arma `agente_del_turno` desde la release."""
+    import uuid
+
+    from core.agents import defaults_negocio
+    from core.agents.base import contenido_base, kernel_del_negocio
+
+    defaults = defaults_negocio.desde_dict(dict(datos))
+    contenido = contenido_base(defaults)
+    contenido["tools"] = [
+        {"tool": b["tool"], "enabled": bool(b.get("enabled", True)), "scopes": list(b.get("scopes") or [])}
+        for b in (datos.get("tools") or [])
+    ]
+    contenido["declarativeTools"] = list(datos.get("declarativeTools") or [])
+    cero = uuid.UUID(int=0)
+    agente = AgenteCongelado(
+        instance_id=cero, agent_id=cero, key=key, role="specialist", version_id=cero, version=1,
+        contract="agentspec/3", content=contenido,
+    )
+    kernel = AgenteCongelado(
+        instance_id=cero, agent_id=cero, key="coordinador", role="core", version_id=cero, version=1,
+        contract="kernelspec/1", content=kernel_del_negocio(defaults),
+    )
+    return agente_del_turno(agente, kernel, skills=tuple(packs), tenant_plugins=tuple(tenant_plugins))
+
+
 def agente_del_turno(
     agente: AgenteCongelado,
     kernel: AgenteCongelado | None,
@@ -212,6 +262,7 @@ def del_turno() -> AgenteDelTurno | None:
 
 
 __all__ = [
+    "CORE_PACK_ID",
     "AgenteDelTurno",
     "PersonaDelTurno",
     "PoliticasDelTurno",
@@ -219,7 +270,10 @@ __all__ = [
     "TienePlaybooks",
     "VistaInvalida",
     "agente_del_turno",
+    "agente_desde_defaults",
     "declarativas_omitidas",
     "del_turno",
+    "enabled_business_packs",
+    "enabled_packs",
     "validar_componentes",
 ]

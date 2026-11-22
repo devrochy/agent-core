@@ -1,10 +1,10 @@
 """SystemPromptBuilder: ENSAMBLADOR de bloques del system prompt (Sprint 2, ADR-0014).
 
 Este módulo NO contiene texto de instrucciones al modelo: todo el contenido vive en
-playbooks (`.md`, allowlist de `AgentSpec.playbooks`) y en datos del tenant. Aquí solo
+playbooks (`.md`, allowlist de los playbooks del agente) y en datos del tenant. Aquí solo
 se ensambla:
 
-  1. Los playbooks del tenant en el orden del índice `AgentSpec.playbooks`,
+  1. Los playbooks del tenant en el orden del índice de playbooks del agente,
      con sustitución de placeholders ({assistant_name}, {business_description},
      {language}).
      Si el agente tiene Captar leads, sigue el playbook del kernel `captar-leads` (HU-AOS-70).
@@ -22,8 +22,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-from agentcore_contracts import AgentSpec
 
 if TYPE_CHECKING:
     from core.agents.turno import AgenteDelTurno
@@ -44,7 +42,7 @@ PLAYBOOK_RECEPCION = "recepcion-coordinador"
 VERSION_RECEPCION = "coordinador@recepcion"
 
 
-def tiene_captar_leads(spec: AgentSpec | AgenteDelTurno) -> bool:
+def tiene_captar_leads(spec: AgenteDelTurno) -> bool:
     """True si el agente tiene encendida alguna acción de Captar leads (binding `enabled`)."""
     from core.leads.tools import es_de_captar_leads
 
@@ -155,7 +153,7 @@ def _next_days_line(today: date, lang: str) -> str:
 
 
 async def _render_playbook(
-    spec: AgentSpec | AgenteDelTurno,
+    spec: AgenteDelTurno,
     ref_name: str,
     vars_: dict[str, str],
     tenant_slug: str | None,
@@ -221,7 +219,7 @@ def bloque_dinamico(ctx: PromptContext) -> str:
     return "\n\n".join(dynamic_parts)
 
 
-async def build_system_blocks(spec: AgentSpec | AgenteDelTurno, ctx: PromptContext) -> list[str]:
+async def build_system_blocks(spec: AgenteDelTurno, ctx: PromptContext) -> list[str]:
     """Ensambla los bloques del system prompt desde el spec + playbooks + turno."""
     # Override por tenant (ADR-0026): se resuelve UNA VEZ acá, no dentro de
     # cada llamada a load_playbook -- este loop puede pedir 4-6 playbooks por
@@ -252,7 +250,7 @@ async def build_system_blocks(spec: AgentSpec | AgenteDelTurno, ctx: PromptConte
 
 
 async def bloques_fijos(
-    spec: AgentSpec | AgenteDelTurno,
+    spec: AgenteDelTurno,
     ctx: PromptContext,
     *,
     tenant_slug: str | None,

@@ -1,4 +1,7 @@
-"""AgentSpec desde BD contra el stack real (Sprint 2, Fase A)."""
+"""Habilidades del negocio desde BD contra el stack real (ADR-0019, HU-AOS-91).
+
+La carga del AgentSpec v2 desde `agent_specs` se retiró (ADR-0206): queda la habilitación de packs por negocio.
+"""
 
 from __future__ import annotations
 
@@ -13,37 +16,6 @@ pytestmark = [
         reason="tests de integración: requiere AGENT_CORE_INTEGRATION=1 y el stack local",
     ),
 ]
-
-
-async def test_load_active_spec_desde_bd(moto_setup) -> None:
-    _t1, t2 = moto_setup
-    from core.agents.spec import load_active_spec
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(t2):
-        spec = await load_active_spec()
-    assert spec.tenantId == str(t2)
-    assert spec.persona.tone == "cercano"
-    # el spec sembrado referencia solo los playbooks default: el alta ya no elige packs (HU-AOS-91)
-    assert {p.name for p in spec.playbooks} == {"identidad", "tono", "reglas-operacion", "respuestas"}
-
-
-async def test_spec_aislado_por_tenant(tenant_setup) -> None:
-    t1, t2 = tenant_setup
-    from agentcore_contracts import AgentSpec
-
-    from core.agents.spec import load_active_spec
-    from core.shared.tenant import tenant_scope
-
-    # el spec de T1 y T2 son distintos y quedan aislados por RLS
-    async with tenant_scope(t1):
-        spec_t1 = await load_active_spec()
-    async with tenant_scope(t2):
-        spec_t2 = await load_active_spec()
-    assert isinstance(spec_t1, AgentSpec) and isinstance(spec_t2, AgentSpec)
-    assert spec_t1.tenantId == str(t1)
-    assert spec_t2.tenantId == str(t2)
-    assert spec_t1.tenantId != spec_t2.tenantId
 
 
 async def test_enablement_packs_por_tenant(moto_setup, tenant_setup) -> None:

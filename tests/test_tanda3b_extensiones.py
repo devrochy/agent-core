@@ -99,20 +99,3 @@ async def test_declarative_tool_ejecuta_con_http_mockeado(monkeypatch) -> None:
     # El argumento va escapado en la URL (no inyección).
     assert calls["url"] == "https://api.x.com/orders/AB%2012"
 
-
-async def test_tools_for_spec_desde_extensions() -> None:
-    from agentcore_contracts import AgentSpec
-
-    from core.agents.spec import DEFAULT_SPEC
-    from core.mcp.declarative import tools_for_spec
-
-    spec_data = dict(DEFAULT_SPEC)
-    spec_data["tenantId"] = "t1"
-    spec_data["extensions"] = {
-        "tools": [
-            {"name": "x", "method": "POST", "url": "https://a.com/y", "allowed_domains": ["a.com"]}
-        ]
-    }
-    spec = AgentSpec.model_validate(spec_data)
-    tools = tools_for_spec(spec)
-    assert len(tools) == 1 and tools[0].name == "x"

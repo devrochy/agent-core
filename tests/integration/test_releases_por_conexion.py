@@ -463,7 +463,8 @@ async def test_al_cambiar_de_release_las_tareas_se_revalidan_cancelan_o_escalan(
 
 # ---------------------------------------------------------------- equivalencia del prompt
 async def test_con_la_release_1_el_prompt_es_el_mismo_que_en_legacy() -> None:
-    from core.agents.spec import load_active_spec
+    from core.agents import defaults_negocio
+    from core.agents.turno import agente_desde_defaults
     from core.db.session import get_session
     from core.kernel.release_del_turno import con_release
     from core.llm.prompt_builder import PromptContext, build_system_blocks
@@ -482,7 +483,9 @@ async def test_con_la_release_1_el_prompt_es_el_mismo_que_en_legacy() -> None:
     ahora = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
 
     async with tenant_scope(tid):
-        spec = await load_active_spec(tid)
+        # El mismo agente en los dos lados (HU-AOS-91: desde los valores por defecto del negocio, sin AgentSpec v2):
+        # lo que cambia es si los valores del negocio salen en caliente o de la release.
+        spec = agente_desde_defaults((await defaults_negocio.leer(tid)).model_dump(mode="json"))
         # Como el loop: los campos salen de `app_settings` en caliente.
         ((nombre, descripcion, idioma, voz),) = await _sql(
             tid,
