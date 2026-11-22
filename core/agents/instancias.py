@@ -157,6 +157,43 @@ async def especialista_por_defecto(session: Any, tenant_id: uuid.UUID) -> uuid.U
     return fila
 
 
+async def packs_con_especialista(session: Any, tenant_id: uuid.UUID) -> set[str]:
+    """Packs que cubre algún especialista publicado del negocio: agente activo (no el Coordinador) con al
+    menos una instancia viva habilitada. El pack sale de la plantilla del agente (`source_template`, o su
+    `key`; ADR-0139). Es la regla del dueño (2026-11-12) con la que el panel habilita cada módulo
+    (`lib/shell/modulos.ts`): sin especialista publicado, el módulo queda con candado."""
+    from core.presets import PresetError, load_plantilla
+
+    filas = (
+        await session.execute(
+            select(AgentRecord.key, AgentRecord.source_template)
+            .join(
+                AgentInstanceRecord,
+                (AgentInstanceRecord.tenant_id == AgentRecord.tenant_id)
+                & (AgentInstanceRecord.agent_id == AgentRecord.id),
+            )
+            .where(
+                AgentRecord.tenant_id == tenant_id,
+                AgentRecord.kind != "core",
+                AgentRecord.status == "active",
+                AgentRecord.deleted_at.is_(None),
+                AgentInstanceRecord.enabled.is_(True),
+                AgentInstanceRecord.deleted_at.is_(None),
+            )
+            .distinct()
+        )
+    ).all()
+    packs: set[str] = set()
+    for key, plantilla in filas:
+        for candidata in dict.fromkeys(k for k in (plantilla, key) if k):
+            try:
+                packs.update(load_plantilla(candidata).habilidades)
+                break
+            except PresetError:
+                continue  # `ventas_2` (HU-AOS-68) o un agente sin plantilla: se prueba con la otra clave
+    return packs
+
+
 async def _vivas(session: Any, tenant_id: uuid.UUID, connection_id: uuid.UUID) -> list[AgentInstanceRecord]:
     return list(
         (

@@ -24273,7 +24273,7 @@
           "admin · colaboradores"
         ],
         "summary": "List Pack Roles",
-        "description": "Roles de colaborador que aportan los packs habilitados (ADR-0066).",
+        "description": "Roles de colaborador que aportan los packs ACTIVOS en el negocio activo (ADR-0066, #870): pack\nencendido y con un especialista publicado, la misma regla con la que el panel habilita el módulo.",
         "operationId": "list_pack_roles_api_v1_admin_collaborators_pack_roles_get",
         "parameters": [
           {
@@ -24872,6 +24872,86 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/RevokeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/collaborators/{admin_id}/pack-roles/revoke": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · colaboradores"
+        ],
+        "summary": "Revoke Collaborator Pack Role",
+        "description": "Quita un rol de pack de la cuenta en el negocio activo (#870), p. ej. el perfil de Gestor de\nCobranza: vuelve a la política de Colaborador. El pack da de baja su perfil sin tocar registros\nni carteras. Vale aunque el pack ya no esté activo en el negocio.",
+        "operationId": "revoke_collaborator_pack_role_api_v1_admin_collaborators__admin_id__pack_roles_revoke_post",
+        "parameters": [
+          {
+            "name": "admin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Admin Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokePackRoleRequest"
               }
             }
           }
@@ -78250,6 +78330,19 @@
           "datos_retirados"
         ],
         "title": "RevocacionDatosOut"
+      },
+      "RevokePackRoleRequest": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "title": "RevokePackRoleRequest"
       },
       "RevokeRequest": {
         "properties": {

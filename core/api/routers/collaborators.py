@@ -28,6 +28,7 @@ from core.admin.collaborators_service import (
     reactivate_collaborator,
     reset_password,
     resolve_tenant_id,
+    revoke_pack_role,
     revoke_permission,
     secciones_del_catalogo,
     set_permissions,
@@ -100,8 +101,11 @@ class UsernameDisponibleResponse(BaseModel):
 async def list_pack_roles(
     principal: Annotated[Principal, Depends(require("collaborators"))],
 ) -> list[PackRole]:
-    """Roles de colaborador que aportan los packs habilitados (ADR-0066)."""
-    return [PackRole(**r) for r in await pack_collaborator_roles()]
+    """Roles de colaborador que aportan los packs ACTIVOS en el negocio activo (ADR-0066, #870): pack
+    encendido y con un especialista publicado, la misma regla con la que el panel habilita el módulo."""
+    if principal.tenant_id is None:
+        return []
+    return [PackRole(**r) for r in await pack_collaborator_roles(principal.tenant_id)]
 
 
 @router.get("/existe", response_model=ExisteResponse)
@@ -350,6 +354,11 @@ class RevokeRequest(BaseModel):
     tenant: str = ""
 
 
+class RevokePackRoleRequest(BaseModel):
+    value: str
+    """El rol de pack a quitar, como lo da `/pack-roles` o `pack_profiles` (`pack:rol`)."""
+
+
 class LinkRequest(BaseModel):
     tenant: str
     role: str = "colaborador"
@@ -468,6 +477,32 @@ async def revoke_collaborator_permission(
         str(admin_id),
         section=payload.section,
         scope=payload.tenant or "*",
+    )
+    return Response(status_code=204)
+
+
+@router.post("/{admin_id}/pack-roles/revoke", status_code=204)
+async def revoke_collaborator_pack_role(
+    admin_id: uuid.UUID,
+    payload: RevokePackRoleRequest,
+    principal: Annotated[Principal, Depends(require("collaborators", write=True))],
+) -> Response:
+    """Quita un rol de pack de la cuenta en el negocio activo (#870), p. ej. el perfil de Gestor de
+    Cobranza: vuelve a la política de Colaborador. El pack da de baja su perfil sin tocar registros
+    ni carteras. Vale aunque el pack ya no esté activo en el negocio."""
+    error = await revoke_pack_role(
+        actor=principal.admin,
+        admin_id=admin_id,
+        value=payload.value,
+        current_tenant_id=principal.tenant_id,
+    )
+    _fail(error)
+    audit(
+        "revoke_pack_role",
+        principal.admin.email,
+        str(admin_id),
+        role=payload.value,
+        tenant=str(principal.tenant_id),
     )
     return Response(status_code=204)
 

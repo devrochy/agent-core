@@ -26,9 +26,13 @@ PW = "password123"
 
 
 async def _tenant_cobranza(nombre: str, slug: str, owner_email: str):
+    """Negocio con Cobranza ACTIVO: el pack y un especialista publicado (si no, no ofrece el rol de
+    gestor, agent-core#870)."""
+    from test_roles_de_pack_activos import _publicar_cobranza
+
     from core.alta_negocio import onboard_tenant
 
-    return await onboard_tenant(
+    creado = await onboard_tenant(
         name=nombre,
         slug=slug,
         business_description="Tenant de prueba de invitaciones.",
@@ -37,6 +41,8 @@ async def _tenant_cobranza(nombre: str, slug: str, owner_email: str):
         admin_password=PW,
         packs=["pack_cobranza"],
     )
+    await _publicar_cobranza(creado[0])
+    return creado
 
 
 async def _admin_colaborador(email: str) -> None:

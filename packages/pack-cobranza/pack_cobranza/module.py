@@ -272,6 +272,41 @@ class CobranzaModule(BaseModule):
         if bajados:
             log.info("access_equipos_degradados", tenant_id=str(tid), admin_id=str(aid), equipos=len(bajados))
 
+    async def on_collaborator_role_removed(self, tenant_id: Any, admin_id: Any, role_id: str) -> None:
+        """Le quitaron el rol `gestor` desde Equipo (#870): baja lógica del perfil `Gestor`, igual que
+        en la baja de la cuenta (ADR-0198): pagos, visitas, promesas y carteras siguen intactos. La
+        cuenta vuelve a la política de Colaborador; un equipo que quedó `pendiente` por la de campo se
+        aprueba solo en el próximo ingreso si la de Colaborador es abierta (ADR-0174)."""
+        if role_id != "gestor":
+            return
+        import uuid as _uuid
+        from datetime import UTC, datetime
+
+        from sqlalchemy import select
+
+        from core.access.devices import invalidar_cuenta
+        from core.db.session import get_session
+        from core.shared.tenant import tenant_scope
+        from pack_cobranza.models import Gestor
+
+        tid = _uuid.UUID(str(tenant_id))
+        aid = _uuid.UUID(str(admin_id))
+        dado_de_baja = False
+        async with tenant_scope(tid), get_session() as session:
+            gestor = (
+                await session.execute(
+                    select(Gestor).where(Gestor.tenant_id == tid, Gestor.admin_id == aid)
+                )
+            ).scalar_one_or_none()
+            if gestor is not None and gestor.deleted_at is None:
+                gestor.deleted_at = datetime.now(UTC)
+                gestor.estatus = "baja"
+                dado_de_baja = True
+        # El rol de acceso cambió: la caché de la cuenta se invalida ya con el commit.
+        await invalidar_cuenta(tid, aid, [])
+        if dado_de_baja:
+            log.info("cobranza_gestor_quitado", tenant_id=str(tid), admin_id=str(aid))
+
     async def on_collaborator_removed(self, tenant_id: Any, admin_id: Any) -> None:
         """Baja lógica del perfil `Gestor` cuando la cuenta de equipo se elimina (ADR-0198).
 
