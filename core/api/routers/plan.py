@@ -7,6 +7,10 @@ Mismos datos que la vista SSR `/admin/plan` (ADR-0045).
 Desde HU-SH-04 (ADR-0123) es también el **canal panel** del cobro de la plataforma: muestra el
 período que toca pagar (`cobro`) con su referencia, si ya lo pagó el asistente, y
 `POST /subscribe` responde 409 `ya_pagado` en vez de cobrar dos veces el mismo período.
+
+Desde HU-BILL-23 (ADR-0209 §4 y §5): `recargas` lista los paquetes de créditos con el precio del plan
+vigente, `POST /recargas` devuelve el link de Wompi de un paquete y el historial de pagos distingue las
+recargas (`concepto`, `creditos`).
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from core.admin.plan_view import (
     billing_usage,
     cobro_del_periodo,
     credito_del_mes,
+    paquetes_de_recarga,
     subscription_overview_or_none,
 )
 from core.api.deps import Principal, require
@@ -134,6 +139,20 @@ class Payment(BaseModel):
     checkout_url: str | None
     # HU-SH-04: referencia del período que cubre (`plat-<slug>-<AAAAMM>`).
     periodo: str | None = None
+    # ADR-0209 §5 (HU-BILL-23): `plan` | `recarga`. Una recarga no tiene `periodo` y trae sus `creditos`.
+    concepto: str = "plan"
+    creditos: float | None = None
+
+
+class TopUpPackage(BaseModel):
+    """Paquete de recarga de créditos con el precio del plan vigente (ADR-0209 §4, D-79): el de lista
+    menos `features.descuento_recarga` del plan, en pesos enteros."""
+
+    id: str
+    creditos: int
+    precio_lista_cop: int
+    descuento_pct: int
+    precio_cop: int
 
 
 class Cobro(BaseModel):
@@ -160,6 +179,8 @@ class PlanResponse(BaseModel):
     credit: CreditUsage | None = None
     # El negocio lo creó el asistente de SolversHub: su plan se cambia por el asistente.
     plan_por_el_asistente: bool = False
+    # Paquetes de recarga que puede comprar (vacío sin suscripción activa o en Free, HU-BILL-23).
+    recargas: list[TopUpPackage] = []
 
 
 def _decima(valor: Any) -> Any:
@@ -178,6 +199,7 @@ async def get_plan(
     usage = await billing_usage(tenant_id, overview) if tenant_id else []
     payments = await billing_payments(tenant_id) if tenant_id else []
     cobro, por_el_asistente = await cobro_del_periodo(tenant_id) if tenant_id else (None, False)
+    recargas = await paquetes_de_recarga(tenant_id) if tenant_id else []
 
     current_plan_id = overview.plan_id if overview else None
     plan_actual = plan_del_catalogo(current_plan_id) if current_plan_id else None
@@ -239,6 +261,7 @@ async def get_plan(
         cobro=Cobro(**cobro) if cobro else None,
         credit=credito,
         plan_por_el_asistente=por_el_asistente,
+        recargas=[TopUpPackage(**r) for r in recargas],
     )
 
 
@@ -277,4 +300,38 @@ async def subscribe_to_plan(
         raise ApiError.bad_request(
             "La pasarela de pago no está configurada.", "checkout_unavailable"
         )
+    return SubscribeResponse(checkout_url=checkout_url)
+
+
+class TopUpRequest(BaseModel):
+    paquete: str
+
+
+@router.post("/recargas", response_model=SubscribeResponse)
+async def comprar_recarga(
+    payload: TopUpRequest,
+    principal: Annotated[Principal, Depends(require("plan", write=True))],
+) -> SubscribeResponse:
+    """Link de pago de un paquete de recarga de créditos (ADR-0209 §4, HU-BILL-23). Mismo permiso que
+    `POST /subscribe`. El precio lo arma el servidor con el descuento del plan vigente.
+
+    400 `unknown_package`: paquete desconocido.
+    409 `recarga_no_disponible`: sin suscripción activa o en Free.
+    409 `recarga_bajo_minimo`: el precio queda bajo el mínimo de Wompi del ambiente (sandbox: 150.000 COP)."""
+    from core.billing.checkout import RecargaBajoElMinimo, RecargaNoDisponible, start_recarga
+    from core.billing.plans import get_paquete_de_recarga
+
+    if get_paquete_de_recarga(payload.paquete) is None:
+        raise ApiError.bad_request("Paquete de recarga desconocido.", "unknown_package")
+
+    try:
+        checkout_url = await start_recarga(payload.paquete)
+    except (RecargaNoDisponible, RecargaBajoElMinimo) as exc:
+        raise ApiError(409, exc.code, str(exc)) from exc
+    except Exception as exc:
+        log.exception("plan_recarga_failed", paquete=payload.paquete)
+        # El detalle (respuesta del proveedor, ids) va al log, no al cliente.
+        raise ApiError(502, "checkout_failed", "No se pudo iniciar el pago. Intenta de nuevo en unos minutos.") from exc
+    if checkout_url is None:
+        raise ApiError.bad_request("La pasarela de pago no está configurada.", "checkout_unavailable")
     return SubscribeResponse(checkout_url=checkout_url)
