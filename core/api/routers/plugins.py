@@ -21,8 +21,7 @@ from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from core.agents.instalaciones_agente import packs_del_negocio
-from core.agents.spec import CORE_PACK_ID
+from core.agents.instalaciones_agente import CORE_PACK_ID, packs_del_negocio
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.forms import coerce_schema_values, hide_fields, redact_secrets

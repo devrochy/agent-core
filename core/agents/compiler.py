@@ -65,7 +65,7 @@ class Compilado:
 def herramientas_estaticas(spec: Any) -> set[str]:
     """Las herramientas que la release habilita, sin filtros del turno: las acciones del binario
     de los packs habilitados (el core incluido) más las declarativas de la versión."""
-    from core.agents.spec import enabled_packs
+    from core.agents.turno import enabled_packs
     from core.kernel.procedures import catalogo_de_acciones
     from core.mcp.declarative import tools_for_spec
     from core.plugin_manager import plugin_manager

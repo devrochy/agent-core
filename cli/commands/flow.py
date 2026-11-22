@@ -153,7 +153,7 @@ def sync(
     from core.agents.flow import pack_flow_path, seed_tenant_flow
 
     async def _run() -> None:
-        from core.agents.spec import CORE_PACK_ID
+        from core.agents.instalaciones_agente import CORE_PACK_ID
 
         _, _, habilitados = await _load_spec_and_slug(slug)
         pack_ids = [p.strip() for p in packs.split(",") if p.strip()] or sorted(habilitados - {CORE_PACK_ID})

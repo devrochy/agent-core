@@ -13,36 +13,19 @@ from typing import TYPE_CHECKING, Any
 from agentcore_contracts import AgentSpec
 
 if TYPE_CHECKING:
-    from core.agents.turno import AgenteDelTurno
+    pass
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.agents.turno import (  # noqa: F401 (transitorio)
+    CORE_PACK_ID,
+    enabled_business_packs,
+    enabled_packs,
+)
 from core.db.models import AgentSpecRecord
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
-
-CORE_PACK_ID = "core"
-
-
-def enabled_packs(spec: AgentSpec | AgenteDelTurno) -> set[str]:
-    """Packs habilitados para el tenant según `spec.packs` (ADR-0019).
-
-    El pack del core ("core") siempre está habilitado: sus tools son plomería del
-    framework y no se filtran por pack del tenant.
-    """
-    return set(spec.packs) | {CORE_PACK_ID}
-
-
-def enabled_business_packs(spec: AgentSpec | AgenteDelTurno) -> set[str]:
-    """Packs de NEGOCIO del tenant, SIN el core.
-
-    Es la cuenta que consumen las cuotas de plan (ADR-0045, métrica `plugins`) y
-    el KPI del panel: el core es plomería del framework, no un pack que el tenant
-    habilite, así que no consume cuota ni se lista en `/admin/plugins`.
-    Fuente única para que la métrica del plan y el dashboard no diverjan.
-    """
-    return set(spec.packs)
 
 
 def con_tenant_de_la_fila(spec: AgentSpec, tenant_id: uuid.UUID) -> AgentSpec:

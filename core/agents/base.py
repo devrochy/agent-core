@@ -66,12 +66,12 @@ def kernel_del_negocio(spec: DefaultsDelNegocio) -> dict[str, Any]:
 def contenido_base(spec: DefaultsDelNegocio, *, playbooks_de_packs: Iterable[str] = ()) -> dict[str, Any]:
     """Base `agentspec/3` de un especialista nuevo desde los valores por defecto del negocio (sin tools ni
     procedimientos: la completa la plantilla)."""
-    from core.agents.spec import DEFAULT_SPEC
+    from core.agents.defaults_negocio import POR_DEFECTO
 
     de_packs = set(playbooks_de_packs)
     persona = spec.persona
     rag = spec.memory.rag
-    primario = spec.model.primary.strip()[:100] or str(DEFAULT_SPEC["model"]["primary"])
+    primario = spec.model.primary.strip()[:100] or POR_DEFECTO.model.primary
     contenido: dict[str, Any] = {
         "persona": {
             "inheritConnectionVoice": True,

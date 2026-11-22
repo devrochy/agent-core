@@ -39,33 +39,11 @@ SPECS_DIR = Path(__file__).parent / "specs"
 
 
 def agente_de_evals(datos: dict[str, Any]) -> AgenteDelTurno:
-    """El agente del turno de un spec de evals (ADR-0206, HU-AOS-91), como lo armaría una release: su contenido
-    `agentspec/3` desde los valores por defecto que trae el spec (persona, modelo, memoria, políticas y playbooks,
-    `contenido_base`), con sus bindings de tools, y el `KernelSpec` del Coordinador desde la misma voz. Los packs del
-    spec son las habilidades del agente. El archivo conserva la forma de siempre: no hace falta el AgentSpec v2."""
-    import uuid as _uuid
+    """El agente del turno de un spec de evals (ADR-0206, HU-AOS-91), como lo armaría una release
+    (`agente_desde_defaults`): los packs del spec son sus habilidades. El archivo conserva su forma."""
+    from core.agents.turno import agente_desde_defaults
 
-    from core.agents import defaults_negocio
-    from core.agents.base import contenido_base, kernel_del_negocio
-    from core.agents.turno import agente_del_turno
-    from core.shared.release_vigente import AgenteCongelado
-
-    defaults = defaults_negocio.desde_dict(datos)
-    contenido = contenido_base(defaults)
-    contenido["tools"] = [
-        {"tool": b["tool"], "enabled": bool(b.get("enabled", True)), "scopes": list(b.get("scopes") or [])}
-        for b in datos.get("tools") or []
-    ]
-    cero = _uuid.UUID(int=0)
-    agente = AgenteCongelado(
-        instance_id=cero, agent_id=cero, key="evals", role="specialist", version_id=cero, version=1,
-        contract="agentspec/3", content=contenido,
-    )
-    kernel = AgenteCongelado(
-        instance_id=cero, agent_id=cero, key="coordinador", role="core", version_id=cero, version=1,
-        contract="kernelspec/1", content=kernel_del_negocio(defaults),
-    )
-    return agente_del_turno(agente, kernel, skills=tuple(datos.get("packs") or ()), tenant_plugins=())
+    return agente_desde_defaults(datos, packs=tuple(datos.get("packs") or ()))
 
 
 def _load_spec(tenant: str | None) -> AgenteDelTurno:

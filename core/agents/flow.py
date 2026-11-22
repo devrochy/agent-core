@@ -382,7 +382,7 @@ async def resolve_flow(
     tenant (packs habilitados + declarativas) y registra el resto en
     `unknown_tools`. Con `available=None` no filtra (para validación/CLI).
     """
-    from core.agents.spec import enabled_business_packs
+    from core.agents.turno import enabled_business_packs
     from core.shared import release_vigente
 
     if flow_agente is not None:
