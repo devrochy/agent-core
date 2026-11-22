@@ -95,8 +95,11 @@ async def load_playbook(
     from core.shared.tenant import get_current_tenant_id
 
     scope = get_current_tenant_id()
-    if isinstance(spec_or_tenant, AgentSpec) or hasattr(spec_or_tenant, "playbooks"):
-        # Un `AgentSpec` (evals) o el agente del turno (`AgenteDelTurno`, ADR-0206 §1): la allowlist es la suya.
+    from core.agents.turno import AgenteDelTurno, SoloRespuestas
+
+    if isinstance(spec_or_tenant, (AgentSpec, AgenteDelTurno, SoloRespuestas)):
+        # Un `AgentSpec` (evals), el agente del turno (ADR-0206 §1) o la allowlist mínima del ingreso: solo deciden
+        # qué nombres se permiten; el texto y su override salen siempre del negocio del `tenant_scope`.
         spec = spec_or_tenant
     else:
         # La allowlist sale del spec del negocio pedido y el override del `tenant_scope`:

@@ -194,8 +194,10 @@ class CoreSkill(BaseSkill):
         from core.agents.turno import del_turno
 
         spec = del_turno()
+        if spec is None:  # sin agente en foco no hay presupuesto que informar (no es «sin tope»)
+            return {"error": "uso de la conversación no disponible"}
         spent = await conversation_spent(ctx.conversation_id)
-        budget = spec.policies.budgetUsdPerConversation if spec is not None else None
+        budget = spec.policies.budgetUsdPerConversation
         return {
             "spent_usd": round(spent, 6),
             "budget_usd": budget,
