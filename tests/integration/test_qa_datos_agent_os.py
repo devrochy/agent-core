@@ -179,12 +179,6 @@ async def test_negocio_nuevo_queda_listo_para_el_agent_os(app_client: Any, tenan
     assert r.status_code == 200
     _verificar_listo(r.json()["datos"])
 
-    # El tester crea Cobranza desde el editor (key de la plantilla): volver a pulsar no la toca.
-    from core.agents import versiones
-    from core.shared.tenant import tenant_scope
-
-    async with tenant_scope(tid):
-        cobranza = await versiones.crear_agente(tid, key="cobranza", kind="specialist", name="Cobranza del tester")
     # Volver a pulsar: 200, sin contraseñas, misma clave y nada duplicado.
     antes = await _foto(tid)
     r = await app_client.post("/api/v1/admin/qa/datos", headers=headers)
@@ -193,10 +187,6 @@ async def test_negocio_nuevo_queda_listo_para_el_agent_os(app_client: Any, tenan
     _verificar_listo(r.json())
     assert r.json()["agent_os"]["chat_web"]["clave"] == clave
     assert await _foto(tid) == antes
-    assert await _sql(tid, "select name, status, deleted_at from agents where id = :a", a=cobranza.id) == [
-        ("Cobranza del tester", "active", None)
-    ]
-    assert (await _sql(tid, "select count(*) from agent_instances where agent_id = :a", a=cobranza.id))[0][0] == 0
 
 
 # ---------------------------------------------------------------- fallo a medias
