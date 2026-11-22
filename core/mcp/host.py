@@ -291,8 +291,10 @@ class MCPHost:
         `{"payment_method.pago_en_linea": "Pago en línea"}`. Los usa el kernel en los mensajes que
         arma él (confirmación, pregunta de lo que falta) y en la tarjeta de estado; sin rótulo, el
         nombre del dato con espacios. Solo claves que son datos de un procedimiento que el mismo
-        plugin ya registró; el texto se sanea a una línea de hasta 40 caracteres. Son datos de la
-        habilidad: sin override por negocio y fuera de la release (ver la adenda)."""
+        plugin ya registró o argumentos de las acciones de sus etapas (el resumen de una acción
+        muestra sus argumentos: `title`, `duration_minutes`); el texto se sanea a una línea de
+        hasta 40 caracteres. Son datos de la habilidad: sin override por negocio y fuera de la
+        release (ver la adenda)."""
         from core.kernel.confirmacion import limpiar
 
         plugin_id = self._active_plugin
@@ -301,6 +303,10 @@ class MCPHost:
             for n, slot in proc.slots.items():
                 datos.add(n)
                 datos.update(f"{n}.{v}" for v in (slot.enum or []))
+            for stage in proc.stages:
+                for accion in stage.actions:
+                    tool = self._tools.get(accion)
+                    datos.update(str(p) for p in ((tool.parameters if tool is not None else {}) or {}).get("properties") or {})
         propios: dict[str, str] = {}
         for nombre, rotulo in rotulos.items():
             texto = limpiar(rotulo, 40) if isinstance(rotulo, str) else ""

@@ -22,9 +22,14 @@ parte de esas cuotas con vencimiento anterior a hoy (la misma cuenta que la mora
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from functools import cache
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from core.mcp.types import DatoDeResumen, ResolverResult, ToolContext
@@ -204,3 +209,12 @@ def registrar(host: Any, plugin_id: str) -> None:
     host.register_resolver(f"{plugin_id}.fecha_de_promesa", validar=fecha_de_promesa)
     host.register_resumen("cob_registrar_promesa_saldo", resumen_de_promesa)
     host.register_procedures(de_pack.cargar(plugin_id))
+    host.register_rotulos(rotulos_de_datos())
+
+
+@cache
+def rotulos_de_datos() -> Mapping[str, str]:
+    """Rótulos humanos de los datos del procedimiento (dato del pack, no código): «Fecha de pago»
+    en la confirmación y en la pregunta por lo que falta."""
+    crudo = json.loads((Path(__file__).resolve().parent / "rotulos_de_datos.json").read_text(encoding="utf-8"))
+    return MappingProxyType({str(k): str(v) for k, v in crudo.items()})

@@ -11,14 +11,25 @@ datos que escribe el modelo con `actualizar_tarea`, con la agenda real del servi
   presupuesto de 5 s, así que nunca recorre varios días (eso es `find_next_available`).
 - `tipo_de_cita`: id o nombre de un tipo de cita activo → su id.
 
+Los datos se llaman como los argumentos de `create_calendar_event` (`start_datetime`,
+`attendee_email`, `appointment_type_id`, `calendar`): así el motor ata cada argumento al dato de la
+tarea y el correo que se confirma es el que dio el cliente, no el que reescribió el modelo. Los
+rótulos (`rotulos_de_datos.json`) son los nombres que ve el cliente en la confirmación ("Correo"
+en vez de `attendee_email`).
+
 Reciben solo `ToolContext` (invariante 6), no tienen efectos y leen la configuración del pack,
 nunca del prompt. Los mensajes de error son datos para el modelo, como los de las tools del pack.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
+from functools import cache
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -106,7 +117,7 @@ async def horario_ofrecido(valor: Any, ctx: ToolContext, datos: dict[str, Any]) 
             ok=False,
             error=f"Ese horario ya pasó; hoy es {_long_date(ahora.date())}. Consulta los próximos con find_next_available.",
         )
-    tipo = await _tipo_por_id_o_nombre(datos.get("tipo_cita")) if datos.get("tipo_cita") else None
+    tipo = await _tipo_por_id_o_nombre(datos.get("appointment_type_id")) if datos.get("appointment_type_id") else None
     duracion = int(getattr(tipo, "duration_minutes", 0) or 0) or config.event_duration_minutes
     dia = inicio.date().isoformat()
     not_before = ahora if inicio.date() == ahora.date() else None
@@ -146,3 +157,11 @@ def registrar(host: Any, plugin_id: str) -> None:
     host.register_resolver(f"{plugin_id}.tipo_de_cita", validar=tipo_de_cita)
     host.register_resolver(f"{plugin_id}.horario_ofrecido", validar=horario_ofrecido)
     host.register_procedures(de_pack.cargar(plugin_id))
+    host.register_rotulos(rotulos_de_datos())
+
+
+@cache
+def rotulos_de_datos() -> Mapping[str, str]:
+    """Rótulos humanos de los datos y argumentos del procedimiento (dato del pack, no código)."""
+    crudo = json.loads((Path(__file__).resolve().parent / "rotulos_de_datos.json").read_text(encoding="utf-8"))
+    return MappingProxyType({str(k): str(v) for k, v in crudo.items()})

@@ -664,7 +664,7 @@ async def test_agenda_captura_el_lead_del_prospecto_y_agenda_la_demo(_ruteo: Non
         ("crear_lead", {"name": "Ana", "interest": "demo para la tienda Flores Ana"}),
         ("crear_pedido", {}),  # fuera de lo que declara Agenda: el runtime la rechaza
         ("iniciar_procedimiento", {"procedure_id": CITA}),
-        ("actualizar_tarea", {"slots": {"horario": f"{dia}T10:00:00"}}),
+        ("actualizar_tarea", {"slots": {"start_datetime": f"{dia}T10:00:00"}}),
         "Perfecto, Ana. ¿A qué correo te envío la confirmación?",
     ], PRESENTACION)
     d = await _decision(tid, conv)
@@ -680,7 +680,7 @@ async def test_agenda_captura_el_lead_del_prospecto_y_agenda_la_demo(_ruteo: Non
 
     args = {"title": "Demo con Ana", "start_datetime": f"{dia}T10:00:00", "attendee_email": "ana@example.com"}
     _, resultado = await _turno_con_resultado(tid, conv, monkeypatch, [
-        ("actualizar_tarea", {"slots": {"correo": "ana@example.com"}}),
+        ("actualizar_tarea", {"slots": {"attendee_email": "ana@example.com"}}),
         ("create_calendar_event", args),
         "Te agendo la demo a las 10, ¿confirmas?",
     ], "mi correo es ana@example.com")

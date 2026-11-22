@@ -82,6 +82,7 @@ def test_un_json_roto_se_salta_y_el_pack_sigue(tmp_path, monkeypatch) -> None:
 
 def test_cada_pack_registra_procedimiento_y_resolvers() -> None:
     from pack_calendar.procedimientos import registrar as reg_calendar
+    from pack_calendar.skills import CalendarSkill
     from pack_cobranza.procedimientos import registrar as reg_cobranza
     from pack_cobranza.skills import CobranzaSkill
     from pack_subscriptions.procedimientos import registrar as reg_subs
@@ -97,6 +98,8 @@ def test_cada_pack_registra_procedimiento_y_resolvers() -> None:
         host.begin_activation(pack_id)
         if pack_id == "pack_cobranza":
             host.register_skill(CobranzaSkill())  # el resumen de la confirmación es de una tool suya
+        if pack_id == "pack_calendar":
+            host.register_skill(CalendarSkill())  # los rótulos de los argumentos de sus tools
         registrar(host, pack_id)
         host.end_activation()
     assert host.get_resumen("cob_registrar_promesa_saldo") is not None

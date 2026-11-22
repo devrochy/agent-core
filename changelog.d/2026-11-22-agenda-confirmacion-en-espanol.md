@@ -1,0 +1,6 @@
+## La confirmación de una cita sale en español y con el correo que dio el cliente (2026-11-22)
+
+- `pack_calendar.agendar_cita` 1.2.0: los datos se llaman como los argumentos de `create_calendar_event` (`start_datetime`, `attendee_email`, `appointment_type_id`, `calendar`). El motor ata cada argumento a su dato (HU-AOS-07): un correo que el modelo reescribe mal (`sebastian.correo@` en vez de `sebastian.correa@`, chat web de Estudio Aurora, 2026-11-19) se rechaza (`argumento_ligado`) en vez de pedirle al cliente que confirme un correo que no dio. Las tareas abiertas en 1.1.0 se revalidan al cambiar la release y vuelven a pedir la hora y el correo.
+- Agenda y Cobranza publican rótulos (`rotulos_de_datos.json`): el resumen dice «Cita», «Fecha y hora», «Detalle», «Correo», «Duración (minutos)» en vez de «Title», «Start datetime», «Attendee email». `MCPHost.register_rotulos` acepta también los argumentos de las acciones de las etapas del procedimiento (el resumen de una acción muestra sus argumentos).
+- Lint nuevo (`tests/test_rotulos_de_confirmacion.py`): todo dato que se le pregunta al cliente y todo argumento de una acción que se confirma sin resumen del pack tiene rótulo.
+- pack_calendar 2.6.0 y pack_cobranza 0.8.0 en `packages/pack-versions.lock.json`.
