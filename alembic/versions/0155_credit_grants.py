@@ -22,11 +22,10 @@ Aditiva: tabla nueva y vacía, sin locks sobre tablas existentes. El downgrade l
 0143 con `tenant_cron_runs`; el test de 0096 baja por encima de ella): solo para revertir un despliegue recién
 hecho, antes de que HU-BILL-23 venda recargas.
 
-**Numeración:** 0154 con `down_revision = "0152"`; la 0153 la usan otras ramas en curso (HU-BILL-21,
-`0153_usage_kind_tts`). Se renumera al integrar, para que quede después de la 0153 (ADR-0209 §6).
+**Numeración:** 0155, después de `0153_usage_kind_tts` (HU-BILL-21) y `0154_agents_nivel_ia` (HU-BILL-24), como fija ADR-0209 §6.
 
-Revision ID: 0154
-Revises: 0152
+Revision ID: 0155
+Revises: 0154
 Create Date: 2026-11-22
 """
 
@@ -34,8 +33,8 @@ from __future__ import annotations
 
 from alembic import op
 
-revision = "0154"
-down_revision = "0152"
+revision = "0155"
+down_revision = "0154"
 branch_labels = None
 depends_on = None
 

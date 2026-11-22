@@ -1446,7 +1446,7 @@ class UsageLedger(Base):
 
 
 class CreditGrant(Base):
-    """Abono de créditos de un ciclo (migración 0154, ADR-0209 §1, HU-BILL-22). Solo de inserción.
+    """Abono de créditos de un ciclo (migración 0155, ADR-0209 §1, HU-BILL-22). Solo de inserción.
 
     `ciclo` = inicio exacto de la ventana de `ventana_mensual` en que cuenta. `tipo`: `acumulado` (con
     `vence_en`: fin del último ciclo en que puede contar) | `recarga` (sin vencimiento). `origen`: id del
