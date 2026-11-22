@@ -116,6 +116,14 @@ async def test_cambio_de_password(app_client) -> None:
     assert login.status_code == 200, login.text
 
 
+def _avatar_key(url: str) -> str | None:
+    """`key` del archivo detrás de la URL firmada: la firma lleva la expiración en segundos y
+    cambia entre una llamada y otra, así que se compara el objeto, no la URL completa."""
+    from core.almacenamiento import firmas
+
+    return firmas.verificar(url.rsplit("/", 1)[-1])
+
+
 async def test_avatar_subida_y_borrado(app_client) -> None:
     s = uniq("avatar")
     owner = f"perfil-{s}@p0.test"
@@ -128,7 +136,9 @@ async def test_avatar_subida_y_borrado(app_client) -> None:
     assert subido["avatar_url"]
 
     me = (await app_client.get(ME, headers=h)).json()
-    assert me["avatar_url"] == subido["avatar_url"]
+    key = _avatar_key(subido["avatar_url"])
+    assert key, subido["avatar_url"]
+    assert _avatar_key(me["avatar_url"]) == key
 
     # La foto se sirve por la API (mismo origen para el panel, sin CSP).
     img = await app_client.get("/api/v1/admin/me/avatar", headers=h)
