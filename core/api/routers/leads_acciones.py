@@ -12,7 +12,9 @@
 - `GET /admin/leads/{lead_id}/consentimiento-datos` y `POST …/revocar`: aviso de datos; retirar es solo del
   propietario o un admin de plataforma (agent-core#692).
 
-El envío es solo del propietario del negocio o un admin de plataforma (D-SPEC-33-8).
+El envío es solo del propietario del negocio o un admin de plataforma (D-SPEC-33-8), y solo con campañas
+completas en el plan (Premium y Empresarial, HU-BILL-26): si no, la vista previa y la confirmación responden 409
+`plan_feature_not_included` y no se guarda ni sale nada.
 """
 
 from __future__ import annotations
@@ -29,7 +31,9 @@ from core.admin import envios_segmento as envios
 from core.admin.roles import actua_como_master
 from core.api.deps import Principal, es_owner_o_master, require, require_owner_or_master
 from core.api.errors import ApiError
+from core.api.plan_limits import plan_limit_error, plan_limit_responses_de
 from core.api.routers.leads import FiltroQuery, _consulta, _providers
+from core.billing.enforcement import PlanNoIncluye
 from core.db.models import ChannelConnection, CustomerConsent
 from core.db.session import get_session
 
@@ -180,7 +184,9 @@ async def conexiones_para_envio(
     return salida
 
 
-@router.post("/acciones/plantilla/vista-previa", response_model=VistaPreviaOut)
+@router.post(
+    "/acciones/plantilla/vista-previa", response_model=VistaPreviaOut, responses=plan_limit_responses_de(funcion=True)
+)
 async def vista_previa_de_envio(
     body: VistaPreviaIn,
     principal: Annotated[Principal, Depends(require("leads", write=True))],
@@ -223,6 +229,8 @@ async def vista_previa_de_envio(
         )
     except envios.EnvioError as exc:
         raise _error(exc) from exc
+    except PlanNoIncluye as exc:  # campañas completas (HU-BILL-26): no se guardó el borrador
+        raise plan_limit_error(exc) from exc
     return VistaPreviaOut(
         envio_id=vista.envio_id,
         candidatos=vista.candidatos,
@@ -241,7 +249,12 @@ async def vista_previa_de_envio(
     )
 
 
-@router.post("/acciones/plantilla/{envio_id}/confirmar", response_model=EnvioOut, status_code=202)
+@router.post(
+    "/acciones/plantilla/{envio_id}/confirmar",
+    response_model=EnvioOut,
+    status_code=202,
+    responses=plan_limit_responses_de(funcion=True),
+)
 async def confirmar_envio(
     envio_id: uuid.UUID,
     principal: Annotated[Principal, Depends(require("leads", write=True))],
@@ -259,6 +272,8 @@ async def confirmar_envio(
         return await _envio(principal.tenant_id, envio_id)
     except envios.EnvioError as exc:
         raise _error(exc) from exc
+    except PlanNoIncluye as exc:  # campañas completas (HU-BILL-26): no sale nada
+        raise plan_limit_error(exc) from exc
 
 
 @router.get("/acciones/plantilla/{envio_id}", response_model=EnvioOut)

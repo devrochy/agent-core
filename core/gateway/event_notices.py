@@ -62,6 +62,7 @@ class NoticeNotSentError(RuntimeError):
 class NoticeResult:
     # "texto" | "plantilla" | "sin_plantilla" | "duplicado" | "no_enviado" | "conexion_pausada" | "omitido_canal" | "opciones"
     # | "negocio_pausado" | "cliente_pausado" (HU-ARCH-37: el aviso no sale y no se reintenta)
+    # | "plan_feature_not_included" (HU-BILL-26: el plan no incluye el aviso; tampoco sale ni se reintenta)
     # ("omitido_canal": solo con la bandera `avisos_por_canal`, un canal de texto sin texto definido o con la política en
     # contra. "opciones": solo con esa bandera y la de `opciones_directas`, el aviso salió como plantilla con opciones,
     # ADR-0178 D3; `detalle` es la vía: interactivo, plantilla o texto).
@@ -238,6 +239,25 @@ async def _registrar_sin_plantilla(
     )
 
 
+async def _registrar_frenado(conversation: Conversation, event_key: str, notice_key: str, motivo: str) -> NoticeResult:
+    """Deja el aviso `failed` con el motivo bajo su id estable (no se reintenta ni se reenvía) y devuelve el resultado."""
+    async with get_session() as session:
+        session.add(
+            Message(
+                tenant_id=conversation.tenant_id,
+                conversation_id=conversation.id,
+                direction="outbound",
+                sender_type="agent",
+                content=f"Aviso «{event_key}» sin enviar: {motivo}",
+                status="failed",
+                error_reason=motivo,
+                client_message_id=notice_key,
+            )
+        )
+    log.info("event_notice_frenado", conversation_id=str(conversation.id), event_key=event_key, motivo=motivo)
+    return NoticeResult(motivo, motivo)
+
+
 async def _registrar_aviso_frenado(conversation: Conversation, event_key: str, notice_key: str) -> NoticeResult | None:
     """Si el negocio o el cliente está en pausa, deja el aviso `failed` con el motivo y devuelve el resultado."""
     from core.gateway.pausa_automatica import motivo_pausa_automatica
@@ -277,12 +297,15 @@ async def send_event_notice(
     notice_key: str,
     default_fallback_text: str = "",
     por_canal: bool = False,
+    frenado: str | None = None,
 ) -> NoticeResult:
     """Envía el aviso de `event_key` a la conversación (ver el docstring del módulo).
 
     `notice_key` es estable por aviso (p. ej. `sub_charge:<cargo>`): un reintento
     del evento no duplica el mensaje. Corre dentro del `tenant_scope` del evento.
     `por_canal`: la bandera `avisos_por_canal` del negocio (la lee quien llama, `avisos_bandera.habilitada_actual`).
+    `frenado`: quien emitió el aviso ya decidió que no sale (p. ej. `plan_feature_not_included`, el plan no incluye
+    recordatorios, HU-BILL-26): queda un solo `failed` con ese motivo bajo el id estable del aviso, como la pausa.
     """
     from core.db.models import utcnow
     from core.gateway.sender import send_template_to_conversation, send_to_conversation
@@ -293,6 +316,9 @@ async def send_event_notice(
         conversation = await session.get(Conversation, conversation_id)
     if conversation is None or conversation.tenant_id != get_current_tenant_id():
         return NoticeResult("no_enviado", "conversación inexistente")
+
+    if frenado:
+        return await _registrar_frenado(conversation, event_key, notice_key, frenado)
 
     # Conexión pausada o eliminada (ADR-0122, enmienda a ADR-0108): el aviso no se
     # reintenta. La pausa es a propósito y puede durar días; con `NoticeNotSentError` el

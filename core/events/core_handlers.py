@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from core.billing.campanas_del_plan import MOTIVO as MOTIVO_PLAN_NO_INCLUYE
 from core.billing.canales import on_platform_period_paid, on_subscription_charge_paid
 from core.billing.renovacion import on_platform_renewal_due
 from core.db.models import Conversation, Customer
@@ -92,6 +93,11 @@ def notice_key_for(topic: str, payload: dict[str, Any]) -> str:
     return f"sub_charge:{cargo}"
 
 
+# Motivos con los que el emisor puede marcar un aviso que no sale (`payload["frenado"]`). Solo estos: el payload no
+# decide un `error_reason` arbitrario.
+_FRENADOS_ACEPTADOS = frozenset({MOTIVO_PLAN_NO_INCLUYE})
+
+
 async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
     """Aviso al cliente de un evento de suscripción o de cita (plantilla o texto según la ventana).
 
@@ -148,6 +154,9 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
             "enlace": payload.get("enlace") or "",
         },
     }
+    # Recordatorio de cita en un plan sin recordatorios (HU-BILL-26): lo marca el cron del pack; no sale y queda
+    # `failed` con el motivo bajo el id del aviso (al subir de plan no se reenvía).
+    frenado = payload.get("frenado") if payload.get("frenado") in _FRENADOS_ACEPTADOS else None
     result = await send_event_notice(
         conversation.id,
         topic,
@@ -156,6 +165,7 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
         default_fallback_text=str(payload.get("texto") or ""),
         # Solo se pasa con la bandera encendida: apagada, la llamada es la de siempre.
         **({"por_canal": True} if por_canal else {}),
+        **({"frenado": frenado} if frenado else {}),
     )
     log.info(
         "event_notice_resultado",

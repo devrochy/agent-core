@@ -323,6 +323,11 @@ async def test_seguimientos_saltan_el_negocio_pausado(
     monkeypatch.setattr(pausa_automatica, "negocio_pausado", _negocio)
     if modulo == "core.leads.jobs":
         monkeypatch.setattr(jobs.config_leads, "cargar_del_negocio", _config)
+
+        async def _sin_freno(*_a, **_k):
+            return None  # el plan incluye el seguimiento (HU-BILL-26)
+
+        monkeypatch.setattr(jobs, "plan_que_frena", _sin_freno)
     else:
         monkeypatch.setattr(jobs, "_config_del_negocio", _config)
     monkeypatch.setattr(jobs, por_negocio, _seguimiento)

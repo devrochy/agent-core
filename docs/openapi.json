@@ -7045,6 +7045,9 @@
               }
             }
           },
+          "409": {
+            "description": "Tope o alcance del plan: `error.code` es `plan_feature_not_included`; `plan_feature_not_included` trae `error.details = {feature, plan}`. No se escribió nada."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -7132,6 +7135,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Tope o alcance del plan: `error.code` es `plan_feature_not_included`; `plan_feature_not_included` trae `error.details = {feature, plan}`. No se escribió nada."
           },
           "422": {
             "description": "Validation Error",

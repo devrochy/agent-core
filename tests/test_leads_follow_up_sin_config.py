@@ -84,6 +84,11 @@ async def test_salta_el_negocio_sin_config_y_el_que_falla_no_corta_a_los_demas(
     monkeypatch.setattr(jobs.config_leads, "cargar_del_negocio", cargar)
     monkeypatch.setattr(jobs, por_negocio, del_negocio)
     monkeypatch.setattr(jobs, "debe_correr", si)
+
+    async def sin_freno(*_a, **_k):
+        return None  # el plan incluye el seguimiento (HU-BILL-26)
+
+    monkeypatch.setattr(jobs, "plan_que_frena", sin_freno)
     monkeypatch.setattr(jobs.pausa_automatica, "negocio_pausado", no)
     monkeypatch.setattr(jobs, "registrar", registrar)
     monkeypatch.setattr(jobs, "registrar_fallo", registrar_fallo)
