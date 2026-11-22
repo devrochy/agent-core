@@ -1,6 +1,6 @@
 # ADR-0209 — Saldo de créditos: crédito del mes, acumulado y recargas
 
-- **Estado:** propuesto (HU-BILL-17, 2026-11-22).
+- **Estado:** aceptado (2026-11-22, por decisión del dueño; documento mergeado en agent-core#884, plan en solvershub-docs#291). Sin código todavía; el código va en HU-BILL-22 y HU-BILL-23.
 - **Fecha:** 2026-11-22
 - **Contexto:** D-79 y SPEC-51 (`solvershub-docs`, #291), HU-BILL-22 y HU-BILL-23. P-07 cerrada por D-79.
   **Enmienda:** ADR-0144 §8 (el límite deja de ser solo `credito_mensual`).

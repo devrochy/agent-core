@@ -1,6 +1,6 @@
 # ADR-0210 — Nivel de IA: el negocio elige un nivel y el core lo traduce al modelo
 
-- **Estado:** propuesto (HU-BILL-17, 2026-11-22).
+- **Estado:** aceptado (2026-11-22, por decisión del dueño; documento mergeado en agent-core#884, plan en solvershub-docs#291). Sin código todavía; el código va en HU-BILL-24.
 - **Fecha:** 2026-11-22
 - **Contexto:** D-79 y SPEC-51 (`solvershub-docs`, #291), HU-BILL-24.
   **Usa:** invariante 4 de `CLAUDE.md` (contratos congelados), ADR-0050 (`model.primary`/`fallback`/`router`), HU-AOS-79

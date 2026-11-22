@@ -2,7 +2,7 @@
 
 - **Estado:** propuesto (HU-BILL-04/06, 2026-10-19). Es un **precursor en modo sombra** de HU-BILL-04, no su
   cierre: mide y avisa, no bloquea. Las decisiones revisables están marcadas.
-- **Nota de estado:** ADR-0208 (propuesto, 2026-11-22): el crédito deja de ser sombra y bloquea el turno; voz e imagen pasan de fee desde `messages` (§6) a filas del ledger con costo real, la caché se cobra y se publica el tarifario `v2`. ADR-0209: el límite pasa a ser el saldo (mes + acumulado + recargas), no solo `credito_mensual` (§8).
+- **Nota de estado:** ADR-0208 (aceptado, 2026-11-22): el crédito deja de ser sombra y bloquea el turno; voz e imagen pasan de fee desde `messages` (§6) a filas del ledger con costo real, la caché se cobra y se publica el tarifario `v2`. ADR-0209: el límite pasa a ser el saldo (mes + acumulado + recargas), no solo `credito_mensual` (§8).
 - **Fecha:** 2026-10-19
 - **Contexto:** D-35, `modelo-de-precios.md` §2, §5 y §6 (docs), HU-BILL-04 y HU-BILL-06, SPEC-03 `design.md`.
   **Enmienda:** ADR-0008 (columnas nuevas en el ledger) y ADR-0142 §8 (`credit.used` deja de ser `null`).
