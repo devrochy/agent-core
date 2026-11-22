@@ -3487,6 +3487,72 @@
         }
       }
     },
+    "/api/v1/admin/conversations/export.csv": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · conversaciones"
+        ],
+        "summary": "Export Conversations Csv",
+        "description": "Conversaciones del negocio y sus mensajes en CSV (HU-BILL-25), una fila por mensaje, de las más\nantiguas a las más nuevas. Solo planes con `features.exportar` (Premium y Empresarial); en los demás,\n409 `plan_feature_not_included` con `details = {feature: \"exportar\", plan}`.\n\nRespeta el historial del plan, excluye el Centro de pruebas y no trae URLs de archivos. Tope de\n`EXPORTAR_MAX_MENSAJES` mensajes; si se recorta, la respuesta lo dice en `X-Export-Truncated: true`.\nSe transmite por lotes con un cursor del servidor.",
+        "operationId": "export_conversations_csv_api_v1_admin_conversations_export_csv_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV con una fila por mensaje (UTF-8 con BOM).",
+            "content": {
+              "text/csv": {}
+            }
+          },
+          "409": {
+            "description": "El plan no incluye la feature: `error.code = plan_feature_not_included`, `error.details = {feature, plan}` (feature `exportar`). No se escribió nada."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/conversations/connections": {
       "get": {
         "tags": [
@@ -3565,6 +3631,7 @@
           "admin · conversaciones"
         ],
         "summary": "Get Conversation",
+        "description": "Detalle con los mensajes. Con el historial del plan (HU-BILL-25), una conversación sin actividad\nen la ventana responde 409 `plan_feature_not_included` (`feature = historial`) y de una visible solo\nsalen los mensajes desde el corte.",
         "operationId": "get_conversation_api_v1_admin_conversations__conversation_id__get",
         "parameters": [
           {
@@ -3620,6 +3687,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "El plan no incluye la feature: `error.code = plan_feature_not_included`, `error.details = {feature, plan}` (feature `historial`; `historial` trae además `historial_dias`). No se escribió nada."
           },
           "422": {
             "description": "Validation Error",
@@ -3716,6 +3786,9 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "El plan no incluye la feature: `error.code = plan_feature_not_included`, `error.details = {feature, plan}` (feature `historial`; `historial` trae además `historial_dias`). No se escribió nada."
           },
           "422": {
             "description": "Validation Error",

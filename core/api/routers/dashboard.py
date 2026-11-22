@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from core.admin.plan_view import dashboard_billing_summary
 from core.agents.instalaciones_agente import packs_del_negocio
 from core.api.deps import Principal, require
+from core.api.historial import conversacion_activa_desde, historial_del_panel
 from core.api.schemas import UsageMetric
 from core.billing.tipos_de_uso import EVAL
 from core.config import get_settings
@@ -130,17 +131,21 @@ async def get_dashboard(
                 )
             )
         ).scalar_one_or_none()
-        recent_rows = (
-            await session.execute(
-                select(Conversation, Customer)
-                .join(Customer, Customer.id == Conversation.customer_id)
-                .where(
-                    Conversation.tenant_id == tenant_id,
-                    Conversation.channel != TEST_CHANNEL,
-                )
-                .order_by(Conversation.started_at.desc())
-                .limit(8)
+        recientes = (
+            select(Conversation, Customer)
+            .join(Customer, Customer.id == Conversation.customer_id)
+            .where(
+                Conversation.tenant_id == tenant_id,
+                Conversation.channel != TEST_CHANNEL,
             )
+        )
+        # Historial del plan (HU-BILL-25): las recientes no enlazan a una conversación oculta. Los KPI
+        # son de 7 y 30 días y caben en cualquier ventana (la menor es 30).
+        historial = await historial_del_panel(tenant_id, session=session)
+        if historial.desde is not None:
+            recientes = recientes.where(conversacion_activa_desde(historial.desde))
+        recent_rows = (
+            await session.execute(recientes.order_by(Conversation.started_at.desc()).limit(8))
         ).all()
 
     settings = get_settings()

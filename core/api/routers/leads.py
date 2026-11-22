@@ -56,6 +56,7 @@ from core.geocoding import disponible as geocoding_disponible
 from core.geocoding import geocodificar as geocodificar_direccion
 from core.memory import facts
 from core.memory import perfil as perfil_cliente
+from core.shared.csv_seguro import celda as _celda
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_slug
 from core.shared.test_mode import TEST_CHANNEL
@@ -955,12 +956,6 @@ async def export_leads_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="clientes.csv"'},
     )
-
-
-def _celda(valor: Any) -> str:
-    """Texto de una celda, neutralizando fórmulas (inyección CSV en hojas de cálculo)."""
-    texto = "" if valor is None else str(valor)
-    return "'" + texto if texto[:1] in ("=", "+", "-", "@", "\t", "\r") else texto
 
 
 @router.get("/{lead_id}", response_model=LeadDetail)
