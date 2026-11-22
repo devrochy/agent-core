@@ -1,0 +1,13 @@
+## Campañas, recordatorios y seguimiento de leads por plan (2026-11-22)
+
+- HU-BILL-26 (SPEC-51, D-79, REQ-BILL-17). `features.campanas` del catálogo pasa a decidir: `ninguna` (Free) < `recordatorios` (Basic) < `completas` (Premium y Empresarial).
+- **Función central** `core/billing/campanas_del_plan.py`: `plan_incluye_campanas` (pura), `campana_permitida`, `plan_que_frena` (para los crons) y `exigir_campana`, que levanta `CampanaNoIncluida` (409 `plan_feature_not_included`, `details = {feature: "campanas", plan}`). Sin suscripción o con un plan que el catálogo no conoce no se bloquea, como el resto del enforcement.
+- **Envío a segmento** (HU-CRM-06), solo con `completas`:
+  - `POST /api/v1/admin/leads/acciones/plantilla/vista-previa` responde 409 antes de leer la conexión: no se guarda el borrador que no se podría confirmar.
+  - `POST …/acciones/plantilla/{envio_id}/confirmar` responde 409 sin tocar el envío: queda en `borrador`, vence solo y no se emite ningún lote. La repetición idempotente de un envío ya confirmado se devuelve igual.
+  - Los lotes de un envío confirmado con derecho no se cortan si después baja el plan.
+- **Recordatorios de citas** (`pack_calendar.recordatorios_de_citas`), desde `recordatorios`. En Free el evento se emite igual, marcado `frenado: plan_feature_not_included`. El core (`send_event_notice(frenado=…)`) deja un solo mensaje `failed` con ese motivo bajo el id estable del aviso, sin tocar el proveedor. La tarjeta del cron queda `skipped` con «N recordatorios no enviados». Como la `dedupe_key` y el id del aviso quedan consumidos, al subir de plan no se reenvía: el mismo criterio que la pausa (D-76).
+- **Seguimiento automático de leads** (`core.leads_follow_up`), solo con `completas`. En Free y Basic no se escribe a ningún lead, no cambia su etapa y la tarjeta del cron queda `skipped` con el motivo. No hay marca por lead: uno que sigue dentro de su ventana (≤ 24 h) cuando el negocio sube de plan recibe su primer seguimiento. No es un reenvío, porque nunca salió.
+- **Sin condicionar** (no son campañas): los avisos de cobro, mora y prueba de pack-subscriptions y pack-cobranza; la confirmación y el no-show de citas; los recordatorios de seguimiento al equipo (`core.leads_recordar_seguimientos`); y `core.cliente_esperando`.
+- **API:** el 409 `plan_feature_not_included` queda documentado en las dos rutas (`plan_limit_responses_de(funcion=True)`, `docs/openapi.json`).
+- **Seguimiento de cotizaciones** (`pack_commerce.follow_up_quotes`, decisión del dueño del 2026-11-22): solo con campañas completas, como el de leads. En Free y Basic no se envía, la cotización no se marca y la tarjeta del cron queda `skipped` con el motivo.

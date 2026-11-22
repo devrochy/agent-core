@@ -500,8 +500,12 @@ async def vista_previa(
     template_id: uuid.UUID,
     variables: dict[str, dict[str, str]],
 ) -> VistaPrevia:
+    from core.billing.campanas_del_plan import COMPLETAS, exigir_campana
     from core.billing.tarifario import TARIFARIO_VIGENTE
 
+    # Campañas completas (Premium y Empresarial, HU-BILL-26): sin ellas no se arma un borrador que no se podrá
+    # confirmar. 409 `plan_feature_not_included` antes de leer o escribir nada.
+    await exigir_campana(tenant_id, COMPLETAS)
     conexion = await conexion_de_envio(tenant_id, connection_id)
     plantilla = next(
         (
@@ -678,7 +682,9 @@ async def confirmar(
     """`borrador` → `confirmado` y primer lote al outbox, en una transacción.
 
     La misma clave con el mismo envío devuelve el envío tal cual (doble clic, reintento de red).
-    La misma clave con otro envío, o un envío ya confirmado con otra clave → 409."""
+    La misma clave con otro envío, o un envío ya confirmado con otra clave → 409. Sin campañas completas en el
+    plan → `CampanaNoIncluida` (409 `plan_feature_not_included`), sin tocar nada."""
+    from core.billing.campanas_del_plan import COMPLETAS, exigir_campana
     from core.events.outbox import emit_domain
     from core.shared.events import ON_SEGMENT_SEND_BATCH
 
@@ -698,6 +704,10 @@ async def confirmar(
                 if previo.request_hash != pedido:
                     raise EnvioError(409, "idempotency_conflict", "Esa clave ya se usó con otro envío.")
                 return previo
+            # Campañas completas (HU-BILL-26): un borrador armado antes de bajar de plan tampoco sale. Después de la
+            # repetición idempotente (lo ya confirmado se devuelve igual) y antes de tocar el envío: queda en
+            # `borrador`, vence solo y no se emite ningún lote.
+            await exigir_campana(tenant_id, COMPLETAS, session=session)
             envio = (
                 await session.execute(
                     select(SegmentSend)

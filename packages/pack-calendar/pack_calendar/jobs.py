@@ -4,6 +4,11 @@
   antes (por defecto 24 h y 1 h), una sola vez cada uno (`dedupe_key`), por el outbox: el
   core la envía como plantilla o como texto según la ventana de 24 h (ADR-0108).
 
+  Solo con recordatorios en el plan (`features.campanas`, desde Basic, HU-BILL-26). En un plan
+  sin ellos (Free) el recordatorio no sale pero su evento se emite igual, marcado `frenado`: el
+  core lo deja como mensaje `failed` con el motivo bajo el id estable del aviso y la `dedupe_key`
+  queda consumida, así que al subir de plan no se reenvía (mismo criterio que la pausa, D-76).
+
 El decorador `@register_cron` salta si el pack está inactivo; el filtro por negocio
 habilitado es explícito (`_tenant_ids`, ADR-0019).
 """
@@ -15,6 +20,8 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, text
 
+from core.billing.campanas_del_plan import MOTIVO as MOTIVO_PLAN
+from core.billing.campanas_del_plan import RECORDATORIOS, plan_que_frena
 from core.db.session import get_owned, get_session
 from core.events.outbox import emit_domain
 from core.shared.events import ON_APPOINTMENT_REMINDER
@@ -88,10 +95,13 @@ async def _recordatorios_de_citas(now: datetime) -> int:
             if not await debe_correr(tenant_id, CRON_RECORDATORIOS, ahora=now):
                 continue
             enviados_negocio = 0
+            frenados_negocio = 0
             config = await _config()
             horas = [int(h) for h in (config.recordatorios_horas or []) if int(h) > 0]
             if not horas:
                 continue
+            # Recordatorios desde Basic (HU-BILL-26). Sin suscripción o con un plan desconocido, None: sale.
+            plan_frena = await plan_que_frena(tenant_id, RECORDATORIOS)
             async with get_session() as session:
                 citas = (
                     await session.execute(
@@ -126,10 +136,25 @@ async def _recordatorios_de_citas(now: datetime) -> int:
                             "horas": h,
                             **datos,
                             "texto": config.recordatorio_texto,
+                            # El core no lo envía y lo deja `failed` con este motivo (HU-BILL-26).
+                            **({"frenado": MOTIVO_PLAN} if plan_frena else {}),
                         },
                     )
-                    enviados += int(insertado)
-                    enviados_negocio += int(insertado)
+                    if plan_frena:
+                        frenados_negocio += int(insertado)
+                    else:
+                        enviados += int(insertado)
+                        enviados_negocio += int(insertado)
+            if frenados_negocio:
+                log.info(
+                    "citas_recordatorios_frenados", tenant_id=str(tenant_id), motivo=MOTIVO_PLAN,
+                    plan=plan_frena, frenados=frenados_negocio,
+                )
+                await registrar(
+                    tenant_id, CRON_RECORDATORIOS, acciones=0, status="skipped",
+                    resumen=f"{frenados_negocio} recordatorios no enviados: tu plan no incluye recordatorios",
+                )
+                continue
             await registrar(
                 tenant_id, CRON_RECORDATORIOS, acciones=enviados_negocio,
                 resumen=f"{enviados_negocio} recordatorios enviados",

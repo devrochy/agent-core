@@ -43,6 +43,7 @@ async def _negocio() -> uuid.UUID:
     tid, _ = await onboard_tenant(
         name=f"Envios {slug}", slug=slug, persona={"tone": "cercano"}, admin_email="admin@local",
         packs=["pack_commerce"], sembrar_ejemplos=False,
+        plan="premium",  # el envío a segmento es de campañas completas (HU-BILL-26)
     )
     return tid
 

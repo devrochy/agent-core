@@ -148,6 +148,11 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
             "enlace": payload.get("enlace") or "",
         },
     }
+    # Recordatorio de cita en un plan sin recordatorios (HU-BILL-26): lo marca el cron del pack; no sale y queda
+    # `failed` con el motivo bajo el id del aviso (al subir de plan no se reenvía).
+    from core.gateway.event_notices import MOTIVOS_FRENADO
+
+    frenado = payload.get("frenado") if payload.get("frenado") in MOTIVOS_FRENADO else None
     result = await send_event_notice(
         conversation.id,
         topic,
@@ -156,6 +161,7 @@ async def _avisar_suscripcion(topic: str, payload: dict[str, Any]) -> None:
         default_fallback_text=str(payload.get("texto") or ""),
         # Solo se pasa con la bandera encendida: apagada, la llamada es la de siempre.
         **({"por_canal": True} if por_canal else {}),
+        **({"frenado": frenado} if frenado else {}),
     )
     log.info(
         "event_notice_resultado",

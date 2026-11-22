@@ -7,10 +7,11 @@ para todas las entradas que pueden levantar `QuotaExceeded` de un tope estructur
 
 Desde HU-BILL-19 (ADR-0208 §9-10) también traduce lo que el plan no incluye (`PlanNoIncluye`): un canal
 (`plan_channel_not_included`, `details = {channel, plan}`) o una habilidad (`plan_plugin_not_included`,
-`details = {skills, min_plan, plan}`). Los dos son 409 y no escriben nada.
+`details = {skills, min_plan, plan}`). Todos son 409 y no escriben nada.
 
-Desde HU-BILL-25, una feature del plan (`plan_feature_not_included`, `details = {feature, plan}`): la
-exportación de conversaciones y las conversaciones fuera del historial del plan.
+Una función del plan responde `plan_feature_not_included` con `details = {feature, plan}`: desde HU-BILL-25, la
+exportación de conversaciones y las conversaciones fuera del historial del plan; desde HU-BILL-26, las campañas
+(`campanas`).
 """
 
 from __future__ import annotations
@@ -83,14 +84,19 @@ def plan_limit_responses(*metrics: str) -> dict[int | str, dict[str, str]]:
     }
 
 
-def plan_limit_responses_de(*metricas: str, canal: bool = False, habilidad: bool = False) -> dict[int | str, dict[str, str]]:
+def plan_limit_responses_de(
+    *metricas: str, canal: bool = False, habilidad: bool = False, funcion: bool = False
+) -> dict[int | str, dict[str, str]]:
     """Documentación OpenAPI del 409 de una ruta que puede levantar varios topes del plan (HU-BILL-19):
-    los `plan_limit_<métrica>` de `metricas`, `plan_channel_not_included` y `plan_plugin_not_included`."""
+    los `plan_limit_<métrica>` de `metricas`, `plan_channel_not_included`, `plan_plugin_not_included` y
+    `plan_feature_not_included` (una función del plan, como las campañas de HU-BILL-26)."""
     codigos = [f"`{plan_limit_code(m)}`" for m in metricas]
     if canal:
         codigos.append("`plan_channel_not_included`")
     if habilidad:
         codigos.append("`plan_plugin_not_included`")
+    if funcion:
+        codigos.append("`plan_feature_not_included`")
     partes = []
     if metricas:
         partes.append("`plan_limit_*` trae `error.details = {metric, used, limit}`")
@@ -98,6 +104,8 @@ def plan_limit_responses_de(*metricas: str, canal: bool = False, habilidad: bool
         partes.append("`plan_channel_not_included` trae `error.details = {channel, plan}`")
     if habilidad:
         partes.append("`plan_plugin_not_included` trae `error.details = {skills, min_plan, plan}`")
+    if funcion:
+        partes.append("`plan_feature_not_included` trae `error.details = {feature, plan}`")
     return {
         409: {
             "description": (

@@ -76,6 +76,12 @@ async def test_salta_el_negocio_sin_config_y_sigue_con_los_demas(
     monkeypatch.setattr(jobs, por_negocio, seguimiento)
     monkeypatch.setattr(jobs, "debe_correr", debe_correr)
     monkeypatch.setattr(jobs, "registrar", registrar)
+
+    async def sin_freno(*_a, **_k):
+        return None  # el plan incluye el seguimiento de cotizaciones (HU-BILL-26)
+
+    if hasattr(jobs, "plan_que_frena"):
+        monkeypatch.setattr(jobs, "plan_que_frena", sin_freno)
     monkeypatch.setattr(jobs, "log", _LogQueAnota(eventos))
 
     await cron()  # no lanza: el wrapper de `register_cron` no registra `cron_task_failed`
