@@ -47868,6 +47868,146 @@
           }
         }
       }
+    },
+    "/api/v1/admin/coordinator": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · coordinador"
+        ],
+        "summary": "Leer Opciones",
+        "operationId": "leer_opciones_api_v1_admin_coordinator_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorOptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · coordinador"
+        ],
+        "summary": "Guardar Opciones",
+        "operationId": "guardar_opciones_api_v1_admin_coordinator_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinatorOptionsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorOptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -86375,6 +86515,238 @@
           "secret"
         ],
         "title": "SecretRef"
+      },
+      "BusinessRange": {
+        "properties": {
+          "day": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Day"
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "day",
+          "from",
+          "to"
+        ],
+        "title": "BusinessRange"
+      },
+      "CoordinatorOptions": {
+        "properties": {
+          "assistant_name": {
+            "type": "string",
+            "title": "Assistant Name"
+          },
+          "business_description": {
+            "type": "string",
+            "title": "Business Description"
+          },
+          "brand_voice": {
+            "type": "string",
+            "title": "Brand Voice"
+          },
+          "business_tz": {
+            "type": "string",
+            "title": "Business Tz"
+          },
+          "business_ranges": {
+            "items": {
+              "$ref": "#/components/schemas/BusinessRange"
+            },
+            "type": "array",
+            "title": "Business Ranges"
+          },
+          "business_hours_mode": {
+            "type": "string",
+            "enum": [
+              "bloquea",
+              "informativo"
+            ],
+            "title": "Business Hours Mode"
+          },
+          "out_of_hours_message": {
+            "type": "string",
+            "title": "Out Of Hours Message"
+          },
+          "nivel_ia": {
+            "type": "string",
+            "enum": [
+              "estandar",
+              "avanzado"
+            ],
+            "title": "Nivel Ia"
+          },
+          "guardrails": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Guardrails"
+          },
+          "guardrails_problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Guardrails Problems",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "assistant_name",
+          "business_description",
+          "brand_voice",
+          "business_tz",
+          "business_ranges",
+          "business_hours_mode",
+          "out_of_hours_message",
+          "nivel_ia",
+          "guardrails"
+        ],
+        "title": "CoordinatorOptions"
+      },
+      "CoordinatorOptionsUpdate": {
+        "properties": {
+          "assistant_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistant Name"
+          },
+          "business_description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Description"
+          },
+          "brand_voice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand Voice"
+          },
+          "business_tz": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Tz"
+          },
+          "business_ranges": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BusinessRange"
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Ranges"
+          },
+          "business_hours_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "bloquea",
+                  "informativo"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours Mode"
+          },
+          "out_of_hours_message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Out Of Hours Message"
+          },
+          "nivel_ia": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "estandar",
+                  "avanzado"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nivel Ia"
+          },
+          "guardrails": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardrails"
+          }
+        },
+        "type": "object",
+        "title": "CoordinatorOptionsUpdate",
+        "description": "Todos opcionales: solo cambia lo que viene. `null` equivale a no enviarlo; para vaciar se envía `[]` o `\"\"`\n(`business_ranges: []` borra el horario del negocio)."
       }
     }
   }

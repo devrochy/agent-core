@@ -106,6 +106,8 @@ class ArtefactosDeRelease:
     tenant_plugins: tuple[str, ...] = ()
     # Como estaban al construir la release (también NULL): el prompt los recibe igual que hoy.
     app_settings: Mapping[str, str | None] = field(default_factory=dict)
+    # ADR-0211: reglas y nivel de IA de la recepción del Coordinador, congelados (`{}` = por defecto).
+    recepcion: Mapping[str, Any] = field(default_factory=dict)
     # Overrides de playbooks congelados (nombre → texto ya sin frontmatter). Un nombre que no
     # está aquí no tiene override: se usa el default del pack o del core.
     playbooks: Mapping[str, str] = field(default_factory=dict)

@@ -1,9 +1,6 @@
 # ADR-0211 — El dueño edita las opciones propias del Coordinador; sus tools y habilidades siguen cerradas
 
-- **Estado:** propuesto (2026-11-23, a petición del dueño; el dueño respondió sí a las tres preguntas de abajo el mismo día; queda aceptarlo al mergear). Sin código todavía; el código va en HU-AOS-98.
-- **Fecha:** 2026-11-23
-- **Contexto:** [D-78](https://github.com/devrochy/solvershub-docs/blob/main/02-vision-y-decisiones/decisiones.md#d-78--corazón-v3-puro-coordinador-receptor-con-captura-de-lead-base-y-manifiesto-pack--habilidad--tools), [SPEC-50](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-50-corazon-v3-coordinador-y-matriz/spec.md), HU-AOS-98.
-- **Enmienda:** [ADR-0205](0205-coordinador-receptor-y-lead-base.md) §5 (la API responde 409 `coordinador_inmutable` a cualquier edición del Coordinador: pasa a valer solo para sus tools y habilidades).
+- **Estado:** aceptado (2026-11-23, por decisión del dueño; revisado por el subagente `arquitecto`). El código va en HU-AOS-98.
 - **Usa:** invariantes 3 (cero prompts en código), 4 (contratos solo por ADR) y 7; ADR-0112 §2 (políticas deterministas del kernel), ADR-0142 (el Coordinador no cuenta en el plan), ADR-0206 (corazón V3 puro) y ADR-0210 (nivel de IA).
 
 ## Contexto
@@ -65,3 +62,30 @@ editor de agentes, pero **no es un `AgentSpecV3` editable**: cada sección escri
 - Rutas nuevas del Coordinador sobre `AppSettings` (voz, identidad, horario, nivel de IA, escalamiento) y, `guardrails`.
 - `core/shared/release_vigente.py`: la vista de recepción lee las reglas.
 - Panel: pantalla «Coordinador» en el editor de agentes (HU-AOS-98).
+
+## Adenda de implementación (2026-11-23, HU-AOS-98)
+Decisiones del diseño revisado por el subagente `arquitecto`.
+
+1. **Dónde viaja.** La fuente editable son `behavior_config["recepcion_guardrails"]` y `["recepcion_nivel_ia"]` de
+   `AppSettings` (sin migración). La release las congela en una clave de primer nivel del manifiesto, `recepcion`
+   (`{"guardrails": [...], "nivel_ia": "avanzado"}`), que se **omite** cuando está vacía y el nivel es Estándar: el
+   hash de las releases existentes no cambia. No va en `app_settings`: ese tipo es `dict[str, str | None]` y un cambio
+   ahí vuelve a medir los procedimientos de todos los agentes (`diferencias.py`), cuando la recepción no tiene
+   procedimientos. `diff_legible` la muestra como el ajuste `recepcion`.
+2. **El turno lee la release**, nunca la fila en caliente: `vista_de_recepcion(foco, recepcion=release.recepcion)`.
+   Las reglas no se compilan en bloques del prompt (solo las aplica el loop), así que la clave de caché por release
+   ya es correcta.
+3. **Reglas válidas o el build falla.** Se validan al escribir (422 por campo) y otra vez al construir
+   (`reglas_recepcion_invalidas`): el turno nunca lanza por un dato malo. `required_tool` acepta solo las 7 tools
+   de la recepción.
+4. **Nivel de IA.** No usa `agents.nivel_ia` (el Coordinador no se publica). `recepcion.nivel_ia` fija
+   `model.primary` y `model.router` con el mapa de ADR-0210; Estándar deja el modelo de la plataforma. Avanzado pasa
+   por el mismo gate de plan (409 `plan_nivel_ia_not_included`). El modelo nunca se muestra.
+5. **Ruta.** `GET` y `PUT /api/v1/admin/coordinator`, con escritura **parcial** (solo lo enviado) bajo `FOR UPDATE` y
+   una fila en `audit_log` por cambio. Permiso: `settings` (lectura y escritura), como la configuración del negocio.
+   No reutiliza `PUT /admin/settings/identity`, que sobrescribe todos sus campos. Las rutas del agente Coordinador
+   (`guardrails`, `declarative-tools`, habilidades, packs, flujo y horario por agente) siguen en 409.
+6. **Horario.** Es el del negocio entero y rige en caliente: no se mueve; la pantalla del Coordinador lo edita como
+   la misma fuente. Voz e identidad entran con la siguiente release; el horario no.
+7. **Fuera de v1:** el mensaje de escalamiento propio. El texto sale de `respuestas.md` en siete sitios del loop y de
+   la entrada; hacerlo editable pide un helper único y es un cambio del loop, no de la recepción. Va en una HU aparte.

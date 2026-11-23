@@ -17,9 +17,15 @@ por esta vista: un `AgenteCongelado` armado en memoria, nunca persistido ni edit
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Mapping
 from typing import Any
 
+from pydantic import ValidationError
+
+from core.shared.logger import get_logger
 from core.shared.release_vigente import AgenteCongelado
+
+log = get_logger(__name__)
 
 # ADR-0205 §5: el set cerrado de tools del Coordinador cuando atiende (decisión del dueño del 2026-11-20).
 TOOLS_RECEPCION = (
@@ -39,24 +45,41 @@ VERSION_RECEPCION = "coordinador@recepcion"
 _FLUJO_VACIO = {"sha256": "recepcion", "sections": []}
 
 
-def contenido_de_recepcion(modelo: str) -> dict[str, Any]:
-    """El `agentspec/3` de la vista, validado por el contrato."""
+def contenido_de_recepcion(modelo: str, recepcion: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """El `agentspec/3` de la vista, validado por el contrato. `recepcion` son las reglas y el nivel de IA que el
+    dueño configuró y la release congeló (ADR-0211); vacío = el contenido de siempre, byte a byte."""
     from agentcore_contracts import AgentSpecV3
+
+    from core.llm import niveles
+
+    recepcion = recepcion or {}
+    nivel = recepcion.get("nivel_ia")
+    # Estándar deja el modelo de la plataforma (nada cambia en silencio si `LLM_MODEL` no coincide con el mapa).
+    modelos = niveles.modelos_de(nivel) if nivel and niveles.normalizar(nivel) != niveles.ESTANDAR else None
 
     contenido = {
         "persona": {"inheritConnectionVoice": True},
-        "model": {"primary": modelo},
+        "model": {"primary": modelos.primary, "router": modelos.router} if modelos else {"primary": modelo},
         "playbooks": [{"name": "respuestas"}],
         "procedures": [],
         "memory": {"writeNamespaces": ["perfil"]},
         "tools": [{"tool": tool, "enabled": True, "scopes": []} for tool in TOOLS_RECEPCION],
-        "guardrails": [],
+        "guardrails": list(recepcion.get("guardrails") or []),
         "declarativeTools": [],
     }
-    return AgentSpecV3.model_validate(contenido).model_dump(mode="json", by_alias=True)
+    try:
+        return AgentSpecV3.model_validate(contenido).model_dump(mode="json", by_alias=True)
+    except ValidationError:
+        if not contenido["guardrails"]:
+            raise
+        # Una release ya congelada cuyas reglas dejaron de pasar el contrato: el turno no lanza, atiende sin ellas.
+        log.error("reglas_recepcion_ignoradas_en_el_turno")
+        return contenido_de_recepcion(modelo, {k: v for k, v in recepcion.items() if k != "guardrails"})
 
 
-def vista_de_recepcion(coordinador: AgenteCongelado, *, modelo: str | None = None) -> AgenteCongelado:
+def vista_de_recepcion(
+    coordinador: AgenteCongelado, *, modelo: str | None = None, recepcion: Mapping[str, Any] | None = None
+) -> AgenteCongelado:
     """La vista del Coordinador para atender. Con un agente que no es el Coordinador, lo devuelve igual."""
     if coordinador.role != "core":
         return coordinador
@@ -67,7 +90,7 @@ def vista_de_recepcion(coordinador: AgenteCongelado, *, modelo: str | None = Non
     return dataclasses.replace(
         coordinador,
         contract="agentspec/3",
-        content=contenido_de_recepcion(modelo),
+        content=contenido_de_recepcion(modelo, recepcion),
         procedimientos=(),
         packs=frozenset(),
         flow=_FLUJO_VACIO,

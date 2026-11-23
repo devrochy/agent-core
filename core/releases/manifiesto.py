@@ -105,6 +105,7 @@ def armar(
     app_settings: Mapping[str, str | None],
     built_with: Mapping[str, str] | None = None,
     a2a_graph: Mapping[str, Any] | None = None,
+    recepcion: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """El manifiesto en su orden canónico (mismas entradas → mismo hash)."""
     comps = sorted(
@@ -139,6 +140,9 @@ def armar(
     }
     if a2a_graph is not None:
         manifiesto["a2a_graph"] = dict(a2a_graph)
+    # ADR-0211: reglas y nivel de la recepción del Coordinador. Se omite si está vacía (el hash no cambia).
+    if recepcion:
+        manifiesto["recepcion"] = dict(recepcion)
     return manifiesto
 
 
