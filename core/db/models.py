@@ -2690,7 +2690,6 @@ class AgentVersionRecord(Base):
     # Horario propio congelado con la versión (HU-AOS-82); null = hereda el del negocio.
     schedule: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True))
     schedule_hash: Mapped[str | None] = mapped_column(Text)
-    legacy_agent_spec_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     notes: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

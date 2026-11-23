@@ -223,7 +223,7 @@ async def test_es_de_solo_lectura(app_client, negocios) -> None:  # type: ignore
             a,
             "select (select count(*) from message_templates), (select count(*) from option_templates), "
             "(select count(*) from option_template_versions), (select count(*) from plugin_configs where tenant_id = :t), "
-            "(select count(*) from agent_specs), (select message_templates_map::text from app_settings where tenant_id = :t), "
+            "(select message_templates_map::text from app_settings where tenant_id = :t), "
             "(select count(*) from audit_log)",
             t=a,
         )

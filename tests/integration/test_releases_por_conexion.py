@@ -190,12 +190,6 @@ async def test_release_uno_desde_el_v2_activo_idempotente_y_sin_cambio_legacy() 
         "Override del negocio para el tono.", encoding="utf-8"
     )
     (playbooks / "no_permitido.md").write_text("Fuera de la allowlist.", encoding="utf-8")
-    legacy = await _sql(
-        tid,
-        "select id, is_active, spec::text from agent_specs where tenant_id = :t order by id",
-        t=tid,
-    )
-
     reporte = await _release_uno(tid)
     assert reporte.conexiones["construida"] == 1
     rid = await _activa(tid, cid)
@@ -235,14 +229,9 @@ async def test_release_uno_desde_el_v2_activo_idempotente_y_sin_cambio_legacy() 
     ]
     assert tipos == ["built", "promoted"]
 
-    # Idempotente: una re-corrida no construye otra; el loop legacy lee lo mismo.
+    # Idempotente: una re-corrida no construye otra.
     reporte = await _release_uno(tid)
     assert reporte.conexiones["construida"] == 0 and reporte.conexiones["ya_estaba"] == 1
-    assert legacy == await _sql(
-        tid,
-        "select id, is_active, spec::text from agent_specs where tenant_id = :t order by id",
-        t=tid,
-    )
 
 
 async def test_build_congela_no_se_activa_y_es_idempotente_por_hash() -> None:
