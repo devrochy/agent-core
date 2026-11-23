@@ -19,6 +19,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.shared.tenant import tenant_scope
+
 TID = uuid.UUID("19191919-0000-0000-0000-000000000019")
 
 
@@ -153,7 +155,8 @@ async def test_cada_alta_exige_su_metrica(monkeypatch, canal, metrica) -> None:
 
     monkeypatch.setattr("core.billing.service.get_active_subscription", _sub("empresarial"))
     monkeypatch.setattr(canales_del_plan, "enforce_growth", _enforce)
-    await canales_del_plan.exigir_alta_de_conexion(object(), TID, canal)
+    async with tenant_scope(TID):
+        await canales_del_plan.exigir_alta_de_conexion(object(), TID, canal)
     assert exigidas == ([metrica] if metrica else [])
 
 
@@ -168,7 +171,18 @@ async def test_el_canal_se_mide_antes_que_el_tope(monkeypatch) -> None:
     monkeypatch.setattr("core.billing.service.get_active_subscription", _sub("free"))
     monkeypatch.setattr(canales_del_plan, "enforce_growth", _enforce)
     with pytest.raises(canales_del_plan.CanalNoIncluido):
-        await canales_del_plan.exigir_alta_de_conexion(object(), TID, "telegram")
+        async with tenant_scope(TID):
+            await canales_del_plan.exigir_alta_de_conexion(object(), TID, "telegram")
+
+
+@pytest.mark.asyncio
+async def test_el_alta_con_la_sesion_de_otro_negocio_falla(monkeypatch) -> None:
+    """Revisión de seguridad de SPEC-51: con otro scope, el conteo del tope daría 0 y dejaría crecer."""
+    from core.billing import canales_del_plan
+
+    with pytest.raises(RuntimeError, match="tenant_scope"):
+        async with tenant_scope(uuid.uuid4()):
+            await canales_del_plan.exigir_alta_de_conexion(object(), TID, "email")
 
 
 @pytest.mark.asyncio

@@ -113,6 +113,10 @@ async def exigir_alta_de_conexion(session: Any, tenant_id: uuid.UUID, channel: s
     activa la fila: el lock de `enforce_growth` dura hasta su commit, así dos altas simultáneas con un solo
     cupo no entran las dos. Quien llama decide antes si la fila es una unidad nueva (volver a ligar la
     misma fila canónica, o editar una conexión que ya estaba activa, no lo es)."""
+    from core.shared.tenant import exigir_tenant_scope
+
+    # Antes del atajo de los canales exentos: el conteo del tope también lee con esta sesión.
+    exigir_tenant_scope(tenant_id, "alta de conexión")
     channel = channel or ""
     await exigir_canal(tenant_id, channel, session=session)
     metrica = metrica_de_canal(channel)
@@ -123,6 +127,10 @@ async def exigir_alta_de_conexion(session: Any, tenant_id: uuid.UUID, channel: s
 async def verificar_alta_de_conexion(tenant_id: uuid.UUID, channel: str, *, session: Any = None) -> None:
     """La misma pregunta que `exigir_alta_de_conexion`, sin lock y sin escribir: para avisar antes de
     empezar un OAuth (Meta). Levanta `CanalNoIncluido` o `QuotaExceeded`."""
+    if session is not None:
+        from core.shared.tenant import exigir_tenant_scope
+
+        exigir_tenant_scope(tenant_id, "alta de conexión")
     await exigir_canal(tenant_id, channel, session=session)
     metrica = metrica_de_canal(channel)
     if metrica is None:
