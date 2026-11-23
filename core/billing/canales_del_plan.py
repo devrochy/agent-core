@@ -75,7 +75,11 @@ def plan_incluye_canal(plan_id: str | None, canal: str) -> bool:
 
 async def _plan_del_negocio(tenant_id: uuid.UUID, session: Any = None) -> tuple[str | None, Any]:
     from core.billing.service import get_active_subscription
+    from core.shared.tenant import exigir_tenant_scope
 
+    if session is not None:
+        # Sin sesión, `get_active_subscription` abre su propio scope; con la del caller, tiene que ser la del negocio.
+        exigir_tenant_scope(tenant_id, "candado del plan")
     sub = await get_active_subscription(tenant_id, session=session)
     if sub is None:
         return None, None

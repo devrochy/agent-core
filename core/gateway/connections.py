@@ -24,7 +24,7 @@ from core.billing.enforcement import lock_growth
 from core.billing.metrics import metrica_de_canal
 from core.config import get_settings
 from core.db.models import ChannelConnection, utcnow
-from core.db.session import get_session
+from core.db.session import get_owned, get_session
 from core.gateway.connection_types import (
     CATEGORY_COMMUNICATION,
     PLAYGROUND,
@@ -478,7 +478,8 @@ async def set_active(connection_id: uuid.UUID, active: bool) -> None:
     """Pausa o reanuda una conexión manual. Reanudar una pausada es un alta para el plan (ADR-0208 §8): exige
     el canal y el tope en esta transacción (`QuotaExceeded` / `CanalNoIncluido`); pausar nunca se bloquea."""
     async with get_session() as session:
-        connection = await session.get(ChannelConnection, connection_id)
+        # `get_owned`: filtra el `tenant_id` del scope además de la RLS (sin scope, no encuentra nada).
+        connection = await get_owned(session, ChannelConnection, connection_id)
         if connection is None or administrada_aparte(connection):
             return
         if active and not connection.active and connection.deleted_at is None:
@@ -490,7 +491,7 @@ async def set_active(connection_id: uuid.UUID, active: bool) -> None:
 
 async def set_primary(connection_id: uuid.UUID) -> None:
     async with get_session() as session:
-        target = await session.get(ChannelConnection, connection_id)
+        target = await get_owned(session, ChannelConnection, connection_id)
         if target is None or administrada_aparte(target):
             return
         # Solo se reasigna la primacía dentro de la misma categoría (ADR-0069) y
@@ -518,7 +519,7 @@ async def set_primary(connection_id: uuid.UUID) -> None:
 async def delete_connection(connection_id: uuid.UUID) -> None:
     """Borra (soft-delete) una conexión — invariante #8: sin borrado físico."""
     async with get_session() as session:
-        connection = await session.get(ChannelConnection, connection_id)
+        connection = await get_owned(session, ChannelConnection, connection_id)
         if connection is not None and not administrada_aparte(connection):
             connection.deleted_at = utcnow()
             connection.active = False

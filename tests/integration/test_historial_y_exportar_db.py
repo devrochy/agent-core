@@ -203,6 +203,34 @@ async def test_exportar_premium_trae_solo_lo_suyo(app_client) -> None:
     ]
 
 
+@pytest.mark.aislamiento
+async def test_exportar_deja_auditoria_solo_en_el_negocio_que_exporta(app_client) -> None:
+    """Revisión de seguridad de SPEC-51: la exportación queda en el `audit_log` del negocio, con quién y cuánto."""
+    from sqlalchemy import select
+
+    from core.db.models import AuditLog
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    propio, ajeno = await _negocio("premium"), await _negocio("premium")
+    h = await api_headers(app_client, propio["tid"])
+    _csv(await app_client.get(f"{URL}/export.csv", headers=h))
+
+    async def _auditoria(tid):  # type: ignore[no-untyped-def]
+        async with tenant_scope(tid):
+            async with get_session() as session:
+                return (
+                    await session.execute(select(AuditLog).where(AuditLog.action == "conversations.export"))
+                ).scalars().all()
+
+    [fila] = await _auditoria(propio["tid"])
+    assert fila.tenant_id == propio["tid"]
+    assert fila.actor.startswith("admin:")
+    assert fila.input == {"mensajes": 4, "truncado": False, "desde": fila.input["desde"]}
+    assert fila.input["desde"] is not None  # Premium: 365 días
+    assert await _auditoria(ajeno["tid"]) == []
+
+
 async def test_exportar_respeta_el_historial(app_client) -> None:
     """Con un plan que exporta pero recorta (Premium, 365 días), lo de antes del corte no sale."""
     n = await _negocio("premium")

@@ -288,3 +288,29 @@ async def test_choque_manual_inactiva_con_cuenta_viva_queda_en_silencio(monkeypa
     async with tenant_scope(tid):
         pausa = await pausa_de_conversacion(conv)
     assert pausa is not None and (pausa.motivo, pausa.alcance, pausa.id) == (MOTIVO_CONEXION_PAUSADA, "connection", mid)
+
+
+async def test_otro_negocio_no_pausa_ni_marca_principal_ni_borra_una_conexion_ajena() -> None:
+    """Revisión de seguridad de SPEC-51: `set_active`, `set_primary` y `delete_connection` filtran el `tenant_id`
+    del scope (`get_owned`), no solo la RLS. Con B en el contexto, la conexión de A no existe."""
+    from core.db.models import ChannelConnection
+    from core.db.session import get_session
+    from core.gateway.connections import delete_connection, set_active, set_primary
+    from core.shared.tenant import tenant_scope
+
+    tid_a, tid_b = await _negocio(plan="empresarial"), await _negocio(plan="empresarial")
+    cid_a, _ext = await _conexion(tid_a, "waweb")
+    async with tenant_scope(tid_b):
+        await set_active(cid_a, False)
+        await set_primary(cid_a)
+        await delete_connection(cid_a)
+    async with tenant_scope(tid_a):
+        async with get_session() as session:
+            fila = await session.get(ChannelConnection, cid_a)
+    assert fila is not None
+    assert (fila.active, fila.is_primary, fila.deleted_at) == (True, False, None)
+
+    await _activa(tid_a, cid_a, False)  # el dueño sí la pausa
+    async with tenant_scope(tid_a):
+        async with get_session() as session:
+            assert (await session.get(ChannelConnection, cid_a)).active is False
