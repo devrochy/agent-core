@@ -86510,12 +86510,12 @@
           },
           "from": {
             "type": "string",
-            "pattern": "^\\d{2}:\\d{2}$",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
             "title": "From"
           },
           "to": {
             "type": "string",
-            "pattern": "^\\d{2}:\\d{2}$",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
             "title": "To"
           }
         },
@@ -86579,6 +86579,14 @@
             },
             "type": "array",
             "title": "Guardrails"
+          },
+          "guardrails_problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Guardrails Problems",
+            "default": []
           }
         },
         "type": "object",
@@ -86722,7 +86730,7 @@
         },
         "type": "object",
         "title": "CoordinatorOptionsUpdate",
-        "description": "Todos opcionales: solo cambia lo que viene."
+        "description": "Todos opcionales: solo cambia lo que viene. `null` equivale a no enviarlo; para vaciar se envía `[]` o `\"\"`\n(`business_ranges: []` borra el horario del negocio)."
       }
     }
   }
