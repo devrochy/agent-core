@@ -34,6 +34,8 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.admin.roles import actua_como_master
+from core.agents import modelo_oculto
 from core.agents import versiones as svc
 from core.agents.aviso_retiros import CODIGO_AVISO, problemas_de_publicacion
 from core.agents.contrato_v3 import MAX_SPEC_BYTES
@@ -261,14 +263,19 @@ def _version(v: Any) -> AgentVersionSummary:
     )
 
 
-def _draft(d: Any) -> AgentDraft:
+def _draft(d: Any, *, ve_modelo: bool) -> AgentDraft:
     return AgentDraft(
-        content=d.content,
+        content=d.content if ve_modelo else modelo_oculto.sin_modelo(d.content),
         flow=d.flow,
         lock_version=d.lock_version,
         base_version_id=d.base_version_id,
         updated_at=d.updated_at,
     )
+
+
+def _ve_modelo(principal: Principal) -> bool:
+    """El modelo del agente solo lo ve el master (ADR-0210 §1); el negocio ve el nivel de IA."""
+    return actua_como_master(principal.admin)
 
 
 def _tenant(principal: Principal) -> uuid.UUID:
@@ -439,7 +446,7 @@ async def get_agent(
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None
     base = _summary(agente, versiones[0].version if versiones else None)
-    return AgentDetail(**base.model_dump(), draft=_draft(borrador), versions=[_version(v) for v in versiones])
+    return AgentDetail(**base.model_dump(), draft=_draft(borrador, ve_modelo=_ve_modelo(principal)), versions=[_version(v) for v in versiones])
 
 
 _PATCH_409: dict[int | str, dict[str, Any]] = {
@@ -516,7 +523,7 @@ async def get_draft(
     agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("settings"))]
 ) -> AgentDraft:
     try:
-        return _draft(await svc.obtener_borrador(_tenant(principal), agent_id))
+        return _draft(await svc.obtener_borrador(_tenant(principal), agent_id), ve_modelo=_ve_modelo(principal))
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None
 
@@ -543,17 +550,23 @@ async def save_draft(
             code="invalid_body",
             fields={"lock_version": "Obligatorio."},
         )
+    ve_modelo = _ve_modelo(principal)
+    contenido = cuerpo["content"]
     try:
+        if not ve_modelo:
+            # Quien no es master no ve ni cambia el modelo: se conserva el del borrador guardado.
+            guardado = await svc.obtener_borrador(tid, agent_id)
+            contenido = modelo_oculto.con_modelo_guardado(contenido, guardado.content)
         borrador = await svc.guardar_borrador(
-            tid, agent_id, cuerpo["content"], lock, catalogo=_catalogo(), actor=principal.admin.id
+            tid, agent_id, contenido, lock, catalogo=_catalogo(), actor=principal.admin.id
         )
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None
     except svc.ErroresDeContrato as exc:
-        raise _contrato_422(_con_avisos_simples(exc.issues, cuerpo["content"])) from None
+        raise _contrato_422(_con_avisos_simples(exc.issues, contenido)) from None
     except svc.Conflicto as exc:
         raise ApiError(409, "stale_lock_version", str(exc), fields={"lock_version": str(exc.lock_version)}) from None
-    return _draft(borrador)
+    return _draft(borrador, ve_modelo=ve_modelo)
 
 
 @router.get("/{agent_id}/retired-references", response_model=AgentRetiredNotices)
@@ -622,7 +635,10 @@ async def get_version(
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Versión no encontrada.") from None
     return AgentVersionDetail(
-        **_version(v).model_dump(), content=v.content, flow=v.flow, procedures=await _resueltos(v)
+        **_version(v).model_dump(),
+        content=v.content if _ve_modelo(principal) else modelo_oculto.sin_modelo(v.content),
+        flow=v.flow,
+        procedures=await _resueltos(v),
     )
 
 
