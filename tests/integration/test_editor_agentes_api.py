@@ -303,6 +303,7 @@ async def test_catalogo_de_modelos_con_costo_estimado_del_consumo_real(app_clien
 
 
 async def _poner_modelo(app_client, h: dict[str, str], aid: str, modelo: str) -> None:
+    """Fija el modelo del borrador. `h` es de un master: el negocio no ve ni cambia el modelo (ADR-0210 §1)."""
     borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
     contenido = borrador["content"]
     contenido["model"]["primary"] = modelo
@@ -336,7 +337,7 @@ async def test_modelo_que_no_sirve_usa_el_del_negocio(app_client) -> None:
     aid = r.json()["agent"]["id"]
 
     # Llave de la plataforma: un modelo de otro proveedor no se anota; la versión lleva el del nivel.
-    await _poner_modelo(app_client, h, aid, "claude-haiku-4-5")
+    await _poner_modelo(app_client, master, aid, "claude-haiku-4-5")
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
     assert r.status_code == 200, r.text
     assert NOTA_MODELO_DEL_NEGOCIO not in r.json()["warnings"]
@@ -354,7 +355,7 @@ async def test_modelo_que_no_sirve_usa_el_del_negocio(app_client) -> None:
     assert (catalogo["effective_model"], catalogo["effective_source"]) == (del_negocio, "negocio")
 
     # Publicar no falla: la versión lleva el del negocio, con la nota sin el nombre; el borrador no cambia.
-    await _poner_modelo(app_client, h, aid, "claude-haiku-4-5")
+    await _poner_modelo(app_client, master, aid, "claude-haiku-4-5")
     r = await app_client.post(
         f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)], "notes": "Primera"}
     )
@@ -366,18 +367,20 @@ async def test_modelo_que_no_sirve_usa_el_del_negocio(app_client) -> None:
         tid, "select content, notes from agent_versions where id = :v", v=uuid.UUID(pub["version"]["id"])
     )
     assert contenido["model"]["primary"] == del_negocio and notas == f"Primera\n{NOTA_MODELO_DEL_NEGOCIO}"
-    borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
+    borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=master)).json()
     assert borrador["content"]["model"]["primary"] == "claude-haiku-4-5"
+    # El dueño no ve el modelo en su borrador (HU-BILL-24).
+    assert "model" not in (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()["content"]
 
     # Retirado: igual.
-    await _poner_modelo(app_client, h, aid, "deepseek-chat")
+    await _poner_modelo(app_client, master, aid, "deepseek-chat")
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
     assert r.status_code == 200 and NOTA_MODELO_DEL_NEGOCIO in r.json()["warnings"], r.text
 
     # Un modelo válido distinto (lo fija un master en el JSON) se respeta con llave propia, sin aviso.
     catalogo = (await app_client.get("/api/v1/admin/agent-models", headers=master)).json()
     propio = next(m for m in catalogo["items"] if m["selectable"] and m["model"] != del_negocio)["model"]
-    await _poner_modelo(app_client, h, aid, propio)
+    await _poner_modelo(app_client, master, aid, propio)
     catalogo = (await app_client.get(f"/api/v1/admin/agent-models?agent_id={aid}", headers=master)).json()
     assert (catalogo["effective_model"], catalogo["effective_source"]) == (propio, "agente")
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
@@ -408,11 +411,13 @@ async def test_cada_negocio_usa_su_modelo_por_defecto(app_client) -> None:
     del_a = (await app_client.get("/api/v1/admin/agent-models", headers=await api_headers(app_client, a))).json()["business_model"]
     assert del_a == "deepseek-v4-pro" and del_b != "deepseek-v4-pro"
 
+    masters = {id(ha): await api_headers(app_client, a), id(hb): await api_headers(app_client, b)}
     for h, cid, esperado in ((ha, cid_a, "deepseek-v4-pro"), (hb, cid_b, del_b)):
+        master = masters[id(h)]
         r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
         assert r.status_code == 201, r.text
         aid = r.json()["agent"]["id"]
-        await _poner_modelo(app_client, h, aid, "claude-haiku-4-5")
+        await _poner_modelo(app_client, master, aid, "claude-haiku-4-5")
         r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
         assert r.status_code == 200, r.text
         assert NOTA_MODELO_DEL_NEGOCIO in r.json()["warnings"]
@@ -709,3 +714,44 @@ async def test_horario_por_agente(app_client) -> None:
     assert (await app_client.get(f"/api/v1/admin/agents/{aid}/schedule", headers=h_otro)).status_code == 404
     r = await app_client.put(f"/api/v1/admin/agents/{aid}/schedule", headers=h_otro, json={"schedule": None, "lock_version": 0})
     assert r.status_code == 404
+
+
+async def test_el_negocio_no_ve_ni_cambia_el_modelo_del_agente(app_client) -> None:
+    """HU-BILL-24 · ADR-0210 §1: el detalle, el borrador y la versión del agente no le nombran el modelo al
+    dueño; guardar su borrador sin `model` (o con otro) conserva el del borrador. El master lo ve."""
+    tid, cid = await _negocio()
+    h, master = await _dueno(app_client, tid), await api_headers(app_client, tid)
+    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    assert r.status_code == 201, r.text
+    aid = r.json()["agent"]["id"]
+    await _poner_modelo(app_client, master, aid, "deepseek-v4-pro")
+
+    detalle = (await app_client.get(f"/api/v1/admin/agents/{aid}", headers=h)).json()
+    borrador = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=h)).json()
+    for contenido in (detalle["draft"]["content"], borrador["content"]):
+        assert "model" not in contenido
+    assert "deepseek" not in str(detalle) + str(borrador)
+
+    # El dueño guarda su borrador (sin `model`, y después intentando poner otro): el modelo no cambia.
+    contenido = {**borrador["content"], "description": "Atiende ventas"}
+    r = await app_client.put(
+        f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": contenido, "lock_version": borrador["lock_version"]}
+    )
+    assert r.status_code == 200, r.text
+    assert "model" not in r.json()["content"]
+    otro = {**r.json()["content"], "model": {"primary": "claude-haiku-4-5"}}
+    r = await app_client.put(
+        f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": otro, "lock_version": r.json()["lock_version"]}
+    )
+    assert r.status_code == 200, r.text
+    [(guardado,)] = await _sql(tid, "select content from agent_drafts where agent_id = :a", a=uuid.UUID(aid))
+    assert guardado["model"]["primary"] == "deepseek-v4-pro" and guardado["description"] == "Atiende ventas"
+    del_master = (await app_client.get(f"/api/v1/admin/agents/{aid}/draft", headers=master)).json()
+    assert del_master["content"]["model"]["primary"] == "deepseek-v4-pro"
+
+    # La versión publicada tampoco le nombra el modelo al dueño; al master sí.
+    r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})
+    assert r.status_code == 200, r.text
+    vid = r.json()["version"]["id"]
+    assert "model" not in (await app_client.get(f"/api/v1/admin/agents/{aid}/versions/{vid}", headers=h)).json()["content"]
+    assert "model" in (await app_client.get(f"/api/v1/admin/agents/{aid}/versions/{vid}", headers=master)).json()["content"]
