@@ -1,6 +1,6 @@
 # ADR-0211 — El dueño edita las opciones propias del Coordinador; sus tools y habilidades siguen cerradas
 
-- **Estado:** propuesto (2026-11-23, a petición del dueño; falta su decisión sobre las preguntas abiertas de abajo). Sin código todavía; el código va en HU-AOS-98.
+- **Estado:** propuesto (2026-11-23, a petición del dueño; el dueño respondió sí a las tres preguntas de abajo el mismo día; queda aceptarlo al mergear). Sin código todavía; el código va en HU-AOS-98.
 - **Fecha:** 2026-11-23
 - **Contexto:** [D-78](https://github.com/devrochy/solvershub-docs/blob/main/02-vision-y-decisiones/decisiones.md#d-78--corazón-v3-puro-coordinador-receptor-con-captura-de-lead-base-y-manifiesto-pack--habilidad--tools), [SPEC-50](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-50-corazon-v3-coordinador-y-matriz/spec.md), HU-AOS-98.
 - **Enmienda:** [ADR-0205](0205-coordinador-receptor-y-lead-base.md) §5 (la API responde 409 `coordinador_inmutable` a cualquier edición del Coordinador: pasa a valer solo para sus tools y habilidades).
@@ -26,8 +26,9 @@ editor de agentes, pero **no es un `AgentSpecV3` editable**: cada sección escri
    - horario y mensaje fuera de horario;
    - nivel de IA de la recepción (ADR-0210), sin mostrar el modelo;
    - mensaje de escalamiento a una persona.
+   Configuración deja de mostrar voz e identidad: se mueven a la pantalla del Coordinador (decisión del dueño del 2026-11-23). Pueden editar el dueño y el master, como en los demás agentes.
    Los cambios entran con la siguiente release de la conexión, como hoy los de Configuración (ADR-0117).
-2. **Reglas de respuesta (guardrails) del Coordinador:** ❓ pendiente de decisión del dueño. Si se aceptan, valen solo
+2. **Reglas de respuesta (guardrails) del Coordinador:** entran en la primera versión (decisión del dueño del 2026-11-23). Valen solo
    en la vista de recepción (no en los especialistas), con el mismo contrato `GuardrailRule`, y se guardan en
    `AppSettings` (no en un agente). Exigen cambiar el contrato de la release para que las lleve: invariante 4, se
    aprueba aquí.
@@ -48,19 +49,19 @@ editor de agentes, pero **no es un `AgentSpecV3` editable**: cada sección escri
 ## Consecuencias
 **Positivas:** el dueño configura la recepción en un solo lugar, con el mismo recorrido que sus agentes.
 **Negativas / lo que aceptamos pagar:**
-- Dos formas de editar la voz (la pantalla del Coordinador y Configuración) hasta que Configuración deje de mostrarla: se decide en la HU.
-- Si se aceptan las reglas, la release lleva un campo nuevo y hay que migrar las release vigentes (un campo opcional con valor por defecto vacío).
+- Configuración pierde la edición de voz e identidad: hay que quitarla y avisar en el panel a quien la buscaba ahí.
+- La release lleva un campo nuevo y hay que migrar las release vigentes (un campo opcional con valor por defecto vacío).
 - Con especialistas, la mayoría de estas opciones no se notan en la conversación; la pantalla debe decirlo.
 
 **Qué haría que revisáramos esto:** que los dueños pidan tools propias del Coordinador, o que las reglas del Coordinador se usen para compensar especialistas mal configurados.
 
-## Preguntas abiertas para el dueño
-1. ¿Entran los guardrails del Coordinador en la primera versión o van en una segunda?
-2. ¿Configuración deja de mostrar voz e identidad y se mueven a la pantalla del Coordinador, o conviven?
-3. ¿Quién puede editar: dueño y master, como los demás agentes?
+## Decisiones del dueño (2026-11-23)
+1. Los guardrails del Coordinador entran en la primera versión.
+2. Voz e identidad se mueven de Configuración a la pantalla del Coordinador.
+3. Editan el dueño y el master, como en los demás agentes.
 
 ## Impacto en el código
 - `core/api/routers/agent_editor.py` y `core/agents/instalaciones_agente.py`: el 409 se acota a tools, secretos, habilidades y packs.
-- Rutas nuevas del Coordinador sobre `AppSettings` (voz, identidad, horario, nivel de IA, escalamiento) y, si se aceptan, `guardrails`.
+- Rutas nuevas del Coordinador sobre `AppSettings` (voz, identidad, horario, nivel de IA, escalamiento) y, `guardrails`.
 - `core/shared/release_vigente.py`: la vista de recepción lee las reglas.
 - Panel: pantalla «Coordinador» en el editor de agentes (HU-AOS-98).
