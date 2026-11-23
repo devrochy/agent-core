@@ -128,6 +128,12 @@ def _validar(secretos: Mapping[str, SecretoDeclarativo]) -> dict[str, dict[str, 
     return limpios
 
 
+def validar_secretos(secretos: Mapping[str, SecretoDeclarativo]) -> None:
+    """Valida nombres, valores y dominios sin escribir (el editor del agente lo usa antes de guardar el borrador).
+    Lanza `SecretoInvalido` sin el valor en el mensaje."""
+    _validar(secretos)
+
+
 async def guardar_secretos_declarativos(
     tenant_id: uuid.UUID,
     secretos: Mapping[str, SecretoDeclarativo],
@@ -177,6 +183,7 @@ async def guardar_secretos_declarativos(
                 tenant_id=str(tenant_id),
                 nombres=sorted(nuevos),
                 quitados=sorted(quitar),
+                actor=str(actor) if actor else None,
             )
             return resultado
         except IntegrityError:
@@ -241,4 +248,5 @@ __all__ = [
     "resolver_secretos",
     "secreto_igual",
     "secretos_configurados",
+    "validar_secretos",
 ]
