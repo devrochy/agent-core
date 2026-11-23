@@ -229,11 +229,18 @@ def validar_catalogo(modules: Iterable[Any]) -> list[str]:
     # dejaría fuera sin aviso.
     from core.mcp.host import TOOLS_DEL_CORE_POR_PACK
 
-    con_habilidad = {t for h in textos.values() for t in h.get("tools", ())}
-    for skill in [*_core_skills(), *_skills_del_core_fuera_del_linter()]:
-        for tool in skill.get_tools():
-            if tool.name not in con_habilidad and not tool.name.startswith(tuple(TOOLS_DEL_CORE_POR_PACK)):
-                problemas.append(f"la tool del core {tool.name!r} no está en ninguna habilidad del core")
+    del_core = {t.name for s in [*_core_skills(), *_skills_del_core_fuera_del_linter()] for t in s.get_tools()}
+    con_habilidad: dict[str, str] = {}
+    for hid, h in textos.items():
+        for nombre in h.get("tools", ()):
+            if nombre not in del_core:
+                problemas.append(f"la habilidad {hid!r} nombra la tool {nombre!r}, que el core no trae")
+            if nombre in con_habilidad:
+                problemas.append(f"la tool {nombre!r} está en {con_habilidad[nombre]!r} y en {hid!r}")
+            con_habilidad[nombre] = hid
+    for nombre in sorted(del_core - set(con_habilidad)):
+        if not nombre.startswith(tuple(TOOLS_DEL_CORE_POR_PACK)):
+            problemas.append(f"la tool del core {nombre!r} no está en ninguna habilidad del core")
     habilidades = {*textos, *(str(m.id) for m in modulos)}
     catalogo = catalogo_de_acciones(modulos)
     for tipo in tipos_de_agente(modulos).values():
@@ -247,7 +254,7 @@ def validar_catalogo(modules: Iterable[Any]) -> list[str]:
                 problemas.append(f"el tipo {tipo.key!r} declara el procedimiento {proc_id!r}, que su pack no publica")
                 continue
             for stage in proc.stages:
-                for accion in stage.actions:
+                for accion in [*stage.actions, *stage.preconditions]:
                     info = catalogo.get(accion)
                     if info is None or (info.owner != CORE_OWNER and info.owner not in propias):
                         problemas.append(

@@ -54,7 +54,11 @@ def _leer(ruta: str) -> AgentTypeManifest:
         manifiesto = AgentTypeManifest.model_validate(json.loads(archivo.read_text(encoding="utf-8")))
     except (ValidationError, json.JSONDecodeError) as exc:
         raise TipoDeAgenteInvalido(f"{archivo}: {exc}") from exc
-    fuera = sorted(set(manifiesto.flujo_por_defecto) - _secciones_del_flujo(archivo.parent.parent))
+    try:
+        secciones = _secciones_del_flujo(archivo.parent.parent) if manifiesto.flujo_por_defecto else set()
+    except (OSError, ValueError, AttributeError) as exc:
+        raise TipoDeAgenteInvalido(f"{archivo}: flow.json ilegible: {exc}") from exc
+    fuera = sorted(set(manifiesto.flujo_por_defecto) - secciones)
     if fuera:
         raise TipoDeAgenteInvalido(f"{archivo}: flujo_por_defecto nombra secciones que el flow.json no tiene: {fuera}")
     a_plantilla(manifiesto)  # el guion se valida al cargar, no al primer uso
@@ -111,8 +115,10 @@ def a_plantilla(manifiesto: AgentTypeManifest) -> PlantillaAgente:
                 "nombre": manifiesto.nombre,
                 "descripcion": manifiesto.descripcion,
                 "seccion": manifiesto.seccion,
-                "habilidades": manifiesto.habilidades_obligatorias,
-                "opcionales": manifiesto.habilidades_opcionales,
+                # Las `core:*` las trae todo agente: `PlantillaAgente` solo lleva packs, que son lo que se habilita
+                # e instala (`asegurar_habilidades` no conoce un id `core:*`).
+                "habilidades": [h for h in manifiesto.habilidades_obligatorias if not h.startswith("core:")],
+                "opcionales": [h for h in manifiesto.habilidades_opcionales if not h.startswith("core:")],
                 "acciones_opcionales": manifiesto.acciones_opcionales,
                 "captar_leads": manifiesto.captar_leads,
                 "procedimientos": manifiesto.procedimientos_por_defecto,

@@ -129,3 +129,14 @@ admite y obligue a tocar el core, o que la validación de arranque bloquee un de
   procedimiento en cada turno y no caben en un catálogo estático. Igual declaran `side_effect = "read"`.
 - `validar_catalogo` también falla si una tool del core (salvo las `sub_*`, que despacha un pack) no está en ninguna
   habilidad `core:*`. Así una tool nueva del core no queda fuera del catálogo sin aviso.
+- Un tipo puede nombrar habilidades `core:*`, pero `load_plantilla` las saca de `PlantillaAgente`. Esa forma solo
+  lleva packs, que son lo que se habilita e instala, y todo agente ya trae las del core.
+- La regla de los procedimientos por defecto revisa `actions` y `preconditions`, y acepta cualquier tool cuyo dueño
+  en runtime sea el core, también las `sub_*`. `pack_commerce.pago_en_linea` (Ventas) usa `sub_link_pago` sin
+  `requires`, como ya lo admite el linter.
+- Al criterio de `irreversible` se suman los puntos donde el cliente compromete algo o donde se registra dinero
+  recibido: `confirmar_cotizacion`, `sub_confirmar_inscripcion` y `cob_registrar_abono`. Al cambiar la release, una
+  tarea que pasó por uno de ellos se escala a una persona y no se cancela en silencio.
+- Si un pack de la plataforma no carga (por ejemplo `pack_payments`, opcional de Ventas), la API no arranca, porque
+  el tipo nombra una habilidad que no existe. Es lo buscado: el despliegue se queda en la versión anterior en vez de
+  arrancar degradado sin avisar.

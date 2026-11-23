@@ -71,6 +71,15 @@ def test_load_plantilla_conserva_la_forma_de_antes() -> None:
     assert ventas.procedimientos[0] == "pack_commerce.tomar_pedido" and ventas.captar_leads
 
 
+def test_las_habilidades_del_core_no_llegan_a_la_plantilla() -> None:
+    """`PlantillaAgente` solo lleva packs (lo que se habilita e instala): un `core:*` del tipo no la rompe."""
+    from core.agents.tipos_de_agente import a_plantilla
+
+    agenda = tipos_de_agente()["agenda"]
+    con_core = agenda.model_copy(update={"habilidades_opcionales": ["core:leads"]})
+    assert a_plantilla(con_core).opcionales == []
+
+
 def test_el_tipo_va_en_el_manifiesto_congelado_del_pack(modulos) -> None:
     commerce = next(m for m in modulos if m.id == "pack_commerce")
     provee = manifiesto_de_pack(commerce).manifest["provides"]

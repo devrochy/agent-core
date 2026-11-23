@@ -499,7 +499,7 @@ class CoreSkill(BaseSkill):
                 # Solo se ofrece (y se ejecuta) con la bandera `opciones_directas` del negocio encendida.
                 connection_predicate=oferta_habilitada,
                 # NO `apta_para_opcion` (default False): una opción no puede enviar otra plantilla de opciones
-                # (evita bucles de botón que envía botones), y el lint la rechaza como `tool_no_apta`.,
+                # (evita bucles de botón que envía botones), y el lint la rechaza como `tool_no_apta`.
                 side_effect="irreversible",
             ),
             MCPTool(
