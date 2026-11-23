@@ -45,16 +45,20 @@ consumo de `agent-models`, la sección `costs`.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Annotated, Any, Literal
 
+from agentcore_contracts import DeclarativeTool, GuardrailRule
 from fastapi import APIRouter, Depends, Path, Query, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from core.admin.permissions import effective_access
 from core.admin.roles import actua_como_master
 from core.agents import editor as svc
 from core.agents import requisitos, versiones
+from core.agents.contrato_v3 import MAX_SPEC_BYTES
+from core.agents.secretos import MAX_SECRET_BYTES
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.api.pagination import Page, PageParams, build_page, page_params
@@ -938,3 +942,180 @@ async def get_agent_flow_options(
     """Acciones que el agente puede poner en su flujo y la semilla de sus packs."""
     _borrador, acciones, semilla, _permitidas = await _flujo_del_agente(_tenant(principal), agent_id)
     return AgentFlowOptionsOut(actions=[_accion(a) for a in acciones], seed=semilla)
+
+
+# ------------------------------------------------------------------ reglas y tools HTTP del agente (HU-AOS-97)
+class AgentGuardrailsOut(BaseModel):
+    guardrails: list[GuardrailRule]
+    lock_version: int
+
+
+class AgentGuardrailsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # La forma la valida el contrato (`GuardrailRule`) al guardar, con el error por campo del editor.
+    guardrails: list[dict[str, Any]] = Field(max_length=100)
+    lock_version: int = Field(ge=0, lt=2**31)
+
+
+class ConfiguredSecret(BaseModel):
+    """Un secreto del negocio: su nombre y los dominios a los que puede viajar. Nunca el valor."""
+
+    name: str
+    domains: list[str]
+
+
+class AgentDeclarativeToolsOut(BaseModel):
+    tools: list[DeclarativeTool]
+    # Los secretos del negocio (los comparten sus agentes), para reutilizarlos sin volver a escribirlos.
+    secrets: list[ConfiguredSecret]
+    # Tools con referencias a secretos en la URL o en el body: se guardan, pero el turno no las ofrece (ADR-0206 §2).
+    omitted: list[str]
+    lock_version: int
+
+
+class AgentDeclarativeToolsIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # La forma la valida el contrato (`DeclarativeTool`) al guardar. Headers sensibles como `{"secret": "<nombre>"}`.
+    tools: list[dict[str, Any]] = Field(max_length=50)
+    # Valores nuevos (o rotados) de los secretos que usan las tools, de solo escritura.
+    secrets: dict[
+        Annotated[str, Field(max_length=60)], Annotated[SecretStr, Field(max_length=MAX_SECRET_BYTES)]
+    ] = Field(default_factory=dict, max_length=50)
+    lock_version: int = Field(ge=0, lt=2**31)
+
+
+def _guardrails_out(borrador: Any) -> AgentGuardrailsOut:
+    contenido = dict(borrador.content or {})
+    return AgentGuardrailsOut(
+        guardrails=[GuardrailRule.model_validate(g) for g in contenido.get("guardrails") or []],
+        lock_version=borrador.lock_version,
+    )
+
+
+async def _declarativas_out(tid: uuid.UUID, borrador: Any) -> AgentDeclarativeToolsOut:
+    from core.agents.credenciales import referencias_en_body, referencias_en_url
+    from core.agents.secretos import secretos_configurados
+
+    contenido = dict(borrador.content or {})
+    tools = [DeclarativeTool.model_validate(t) for t in contenido.get("declarativeTools") or []]
+    configurados = await secretos_configurados(tid)
+    # El mismo criterio que `turno.declarativas_omitidas`, sin validar el resto del borrador.
+    omitidas = sorted(t.name for t in tools if referencias_en_url(t.url) or referencias_en_body(t.body))
+    return AgentDeclarativeToolsOut(
+        tools=tools,
+        secrets=[ConfiguredSecret(name=n, domains=d) for n, d in sorted(configurados.items())],
+        omitted=omitidas,
+        lock_version=borrador.lock_version,
+    )
+
+
+async def _borrador_editable(tid: uuid.UUID, agent_id: uuid.UUID, lock_version: int) -> Any:
+    """El borrador de un especialista activo con ese `lock_version`; si no, el error de la API (404, 409)."""
+    await _especialista_o_409(tid, agent_id)
+    borrador = await versiones.obtener_borrador(tid, agent_id)
+    if borrador.lock_version != lock_version:
+        raise ApiError(
+            409,
+            "stale_lock_version",
+            "Otra persona guardó este borrador antes: recárgalo.",
+            fields={"lock_version": str(borrador.lock_version)},
+        )
+    return borrador
+
+
+async def _guardar(tid: uuid.UUID, agent_id: uuid.UUID, contenido: Any, lock_version: int, actor: uuid.UUID) -> Any:
+    try:
+        return await versiones.guardar_borrador(
+            tid, agent_id, contenido, lock_version, catalogo=_catalogo(), actor=actor
+        )
+    except versiones.ErroresDeContrato as exc:
+        raise _contrato_422(exc.issues) from None
+    except versiones.Conflicto as exc:
+        raise ApiError(409, "stale_lock_version", str(exc), fields={"lock_version": str(exc.lock_version)}) from None
+
+
+@router.get("/agents/{agent_id}/guardrails", response_model=AgentGuardrailsOut)
+async def get_agent_guardrails(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> AgentGuardrailsOut:
+    """Las reglas de respuesta del borrador del agente. El Coordinador no tiene (lista vacía)."""
+    try:
+        borrador = await versiones.obtener_borrador(_tenant(principal), agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    return _guardrails_out(borrador)
+
+
+@router.put("/agents/{agent_id}/guardrails", response_model=AgentGuardrailsOut)
+async def save_agent_guardrails(
+    agent_id: uuid.UUID,
+    payload: AgentGuardrailsIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentGuardrailsOut:
+    """Reemplaza las reglas del borrador (frase prohibida, tool obligatoria ante una frase, largo máximo; con
+    `retry` o `escalate`). Valen al publicar. 422 por campo (`guardrails[i]...`); 409 `coordinador_inmutable`
+    para el Coordinador y `stale_lock_version` si otro guardó antes."""
+    from core.agents.declarativas_agente import preparar_guardrails
+
+    tid = await _puede_escribir(principal)
+    if len(json.dumps(payload.guardrails, ensure_ascii=False).encode()) > MAX_SPEC_BYTES:
+        raise ApiError(413, "payload_too_large", "Las reglas son demasiado grandes.")
+    borrador = await _borrador_editable(tid, agent_id, payload.lock_version)
+    contenido = preparar_guardrails(borrador.content or {}, payload.guardrails)
+    return _guardrails_out(await _guardar(tid, agent_id, contenido, payload.lock_version, principal.admin.id))
+
+
+@router.get("/agents/{agent_id}/declarative-tools", response_model=AgentDeclarativeToolsOut)
+async def get_agent_declarative_tools(
+    agent_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("settings"))],
+) -> AgentDeclarativeToolsOut:
+    """Las tools HTTP del borrador del agente, los secretos del negocio (nombres y dominios, nunca valores) y las
+    tools que el turno no ofrecerá. El Coordinador no tiene tools (lista vacía)."""
+    tid = _tenant(principal)
+    try:
+        borrador = await versiones.obtener_borrador(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    return await _declarativas_out(tid, borrador)
+
+
+@router.put("/agents/{agent_id}/declarative-tools", response_model=AgentDeclarativeToolsOut)
+async def save_agent_declarative_tools(
+    agent_id: uuid.UUID,
+    payload: AgentDeclarativeToolsIn,
+    principal: Annotated[Principal, Depends(require("settings", write=True))],
+) -> AgentDeclarativeToolsOut:
+    """Reemplaza las tools HTTP del borrador. Valida todo antes de escribir: un header sensible con valor literal,
+    un dominio interno, un secreto sin valor o un valor que ninguna tool usa dan 422 por campo y no se guarda nada.
+    Luego cifra los secretos nuevos en la instalación `core` del negocio, atados a los dominios de las tools que los
+    usan (más los que ya tenían), y por último guarda el borrador. Si el borrador choca con otra edición (409) los
+    secretos ya quedaron escritos (un valor rotado ya vale para las tools publicadas que lo usan); reintentar con
+    el borrador al día termina de guardar."""
+    from core.agents.declarativas_agente import preparar_declarativas
+    from core.agents.secretos import (
+        SecretoInvalido,
+        guardar_secretos_declarativos,
+        secretos_configurados,
+    )
+
+    tid = await _puede_escribir(principal)
+    if len(json.dumps(payload.tools, ensure_ascii=False).encode()) > MAX_SPEC_BYTES:
+        raise ApiError(413, "payload_too_large", "Las tools son demasiado grandes.")
+    borrador = await _borrador_editable(tid, agent_id, payload.lock_version)
+    try:
+        preparadas = preparar_declarativas(
+            borrador.content or {}, payload.tools, payload.secrets, await secretos_configurados(tid), _catalogo()
+        )
+    except versiones.ErroresDeContrato as exc:
+        raise _contrato_422(exc.issues) from None
+    if preparadas.secretos:
+        try:
+            await guardar_secretos_declarativos(tid, preparadas.secretos, actor=principal.admin.id)
+        except SecretoInvalido as exc:
+            raise ApiError(422, "invalid_secret", str(exc)) from None
+    guardado = await _guardar(tid, agent_id, preparadas.contenido, payload.lock_version, principal.admin.id)
+    return await _declarativas_out(tid, guardado)

@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from core.admin.permissions import effective_access
+from core.admin.roles import actua_como_master
 from core.api.deps import Principal, require
 from core.api.errors import ApiError
 from core.db.session import get_session
@@ -176,7 +177,9 @@ async def turn_detail(
         crudo = await svc.leer(session, tid, turn_id)
     if crudo is None:
         raise ApiError.not_found("No existe ese turno en este negocio.")
-    t = svc.redactar(crudo, ver_detalle=ver_detalle, ver_costos=ver_costos)
+    t = svc.redactar(
+        crudo, ver_detalle=ver_detalle, ver_costos=ver_costos, ver_modelo=actua_como_master(principal.admin)
+    )
     return TurnDetail(
         turn_id=t.turn_id,
         conversation_id=t.conversation_id,

@@ -346,7 +346,7 @@ async def test_costos_por_agente_aislado_y_sin_filas_anteriores_al_corte(negocio
             id=uuid.uuid4(), t=a, i=entrada, r=leidos, w=escritos, a=instancia, k=kind,
         )
     async with tenant_scope(a):
-        costos = await get_costs(types.SimpleNamespace(tenant_id=a))  # type: ignore[arg-type]
+        costos = await get_costs(types.SimpleNamespace(tenant_id=a, admin=types.SimpleNamespace(role="master")))  # type: ignore[arg-type]
     fila = next(f for f in costos.by_agent if f.agent_id == str(agente))
     medibles = await _sql(
         a,
@@ -362,5 +362,5 @@ async def test_costos_por_agente_aislado_y_sin_filas_anteriores_al_corte(negocio
     assert Decimal(str(fila.cost)) > 0
 
     async with tenant_scope(b):
-        otros = await get_costs(types.SimpleNamespace(tenant_id=b))  # type: ignore[arg-type]
+        otros = await get_costs(types.SimpleNamespace(tenant_id=b, admin=types.SimpleNamespace(role="master")))  # type: ignore[arg-type]
     assert all(f.agent_id != str(agente) for f in otros.by_agent)
