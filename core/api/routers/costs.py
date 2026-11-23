@@ -20,6 +20,7 @@ from core.admin.meta_costs_service import (
     sync_meta_pricing,
     verify_credits,
 )
+from core.admin.roles import actua_como_master
 from core.api.deps import Principal, require
 from core.billing.tipos_de_uso import EVAL, NO_ES_ACTIVIDAD, NO_SON_TURNOS
 from core.db.models import AgentInstanceRecord, AgentRecord, UsageLedger
@@ -216,6 +217,7 @@ async def get_costs(
         today=float(today_cost),
         month=float(month_cost),
         total_turns=int(total_turns),
+        # El modelo solo lo ve el master (ADR-0210 §1): para el negocio, el desglose por modelo va vacío.
         by_model=[
             ModelCost(
                 model=model,
@@ -226,7 +228,9 @@ async def get_costs(
                 cost=float(cost or 0),
             )
             for model, calls, tokens_in, tokens_out, avg_latency, cost in by_model_rows
-        ],
+        ]
+        if actua_como_master(principal.admin)
+        else [],
         by_conversation=[
             ConversationCost(
                 conversation_id=str(conversation_id)[:8],

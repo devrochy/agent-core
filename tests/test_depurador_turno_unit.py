@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime
 
 from core.observability.turno import (
+    Costo,
     EventoDeTarea,
     Paso,
     Turno,
@@ -68,3 +69,12 @@ def test_clase_desconocida_se_oculta_y_los_candidatos_solo_se_cuentan() -> None:
     accion = EventoDeTarea(AHORA, uuid.uuid4(), "pedido", 6, "action_succeeded", "tool", {"action": "buscar", "candidates": ["a", "b"]})
     t = redactar(_turno(estado=[sin_clase, accion]), ver_detalle=True, ver_costos=True)
     assert t.estado[0].data["value"] == "•••" and t.estado[1].data["candidates"] == 2
+
+
+def test_el_modelo_del_costo_solo_lo_ve_el_master() -> None:
+    """HU-BILL-24 · ADR-0210 §1: el negocio ve el costo del turno sin el nombre del modelo."""
+    costo = Costo(tipo="turn", modelo="deepseek-v4-pro", llamados=1, tokens_entrada=10, tokens_salida=5, costo_usd=0.01)
+    negocio = redactar(_turno(costo=[costo]), ver_detalle=True, ver_costos=True, ver_modelo=False).costo[0]
+    assert negocio.modelo is None and negocio.costo_usd == 0.01
+    master = redactar(_turno(costo=[costo]), ver_detalle=True, ver_costos=True).costo[0]
+    assert master.modelo == "deepseek-v4-pro"

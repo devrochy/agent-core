@@ -359,9 +359,12 @@ def _redactar_evento(e: EventoDeTarea, ver_pii: bool) -> EventoDeTarea:
     return replace(e, data=data)
 
 
-def redactar(t: Turno, *, ver_detalle: bool, ver_costos: bool, ver_pii: bool = True) -> Turno:
+def redactar(
+    t: Turno, *, ver_detalle: bool, ver_costos: bool, ver_pii: bool = True, ver_modelo: bool = True
+) -> Turno:
     """Aplica ADR-0169 §2-§3: entradas y salidas de las acciones solo con `observability` y siempre
-    enmascaradas; datos de pago siempre ocultos; dinero solo con `costs`."""
+    enmascaradas; datos de pago siempre ocultos; dinero solo con `costs`; el modelo solo para el master
+    (ADR-0210 §1, `ver_modelo`)."""
     pasos = [
         replace(
             p,
@@ -388,7 +391,10 @@ def redactar(t: Turno, *, ver_detalle: bool, ver_costos: bool, ver_pii: bool = T
         )
         for o in t.a2a
     ]
-    costo = [replace(c, costo_usd=c.costo_usd if ver_costos else None) for c in t.costo]
+    costo = [
+        replace(c, costo_usd=c.costo_usd if ver_costos else None, modelo=c.modelo if ver_modelo else None)
+        for c in t.costo
+    ]
     return replace(
         t,
         pasos=pasos,
