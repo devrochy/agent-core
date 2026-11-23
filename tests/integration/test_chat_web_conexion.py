@@ -47,6 +47,7 @@ pytestmark = [
 
 ORIGEN = "https://tienda.example"
 SETTINGS = "/api/v1/admin/settings/web-chat"
+SITE_KEY = "0x4AAAAAAA_site_key"
 
 
 def _publico(key: str, sufijo: str) -> str:
@@ -122,19 +123,25 @@ async def test_guardar_el_widget_crea_su_conexion_sin_ser_manual(app_client) -> 
     from core.shared.tenant import tenant_scope
 
     tid = await _negocio()
-    salida = await _guardar(app_client, tid, turnstile_secret="ts-secreto")
+    salida = await _guardar(
+        app_client, tid, turnstile_site_key=SITE_KEY, turnstile_secret="ts-secreto"
+    )
     key = salida["key"]
     assert len(key) >= 32 and salida["turnstile_configured"] is True and "ts-secreto" not in json.dumps(salida)
+    assert salida["turnstile_site_key"] == SITE_KEY
 
     (fila,) = await _webchat(tid)
     assert (fila.external_id, fila.active, fila.is_primary, fila.meta_connection_id) == (key, True, False, None)
-    assert fila.settings == {"allowed_origins": [ORIGEN]}
+    assert fila.settings == {"allowed_origins": [ORIGEN], "turnstile_site_key": SITE_KEY}
     assert get_secret_box().decrypt_json(fila.credentials_encrypted) == {"turnstile_secret": "ts-secreto"}
     (legacy,) = await _sql(tid, "select web_chat_config from app_settings where tenant_id = :t", t=tid)
     assert legacy.web_chat_config["key"] == key  # doble escritura hasta el contract
+    assert legacy.web_chat_config["turnstile_site_key"] == SITE_KEY
 
-    # Rotar la clave, deshabilitar y borrar el secreto: la misma conexión, al día.
-    salida = await _guardar(app_client, tid, enabled=False, rotate_key=True, turnstile_secret="")
+    # Rotar la clave, deshabilitar y borrar la protección: la misma conexión, al día.
+    salida = await _guardar(
+        app_client, tid, enabled=False, rotate_key=True, turnstile_site_key="", turnstile_secret=""
+    )
     assert salida["key"] != key
     (fila,) = await _webchat(tid)
     assert (fila.external_id, fila.active, fila.credentials_encrypted) == (salida["key"], False, None)
@@ -165,7 +172,13 @@ async def test_endpoint_publico_resuelve_por_la_conexion_del_negocio_correcto(ap
     key_b = (await _guardar(app_client, tid_b, allowed_origins=["https://otro.example"]))["key"]
 
     r = await app_client.get(_publico(key_a, "config"))
-    assert r.status_code == 200 and r.json() == {"enabled": True, "allowed_origins": [ORIGEN], "turnstile": False, "marca_propia": False}
+    assert r.status_code == 200 and r.json() == {
+        "enabled": True,
+        "allowed_origins": [ORIGEN],
+        "turnstile": False,
+        "turnstile_site_key": "",
+        "marca_propia": False,
+    }
 
     visitante = uniq("vis")
     r = await app_client.post(
@@ -189,7 +202,7 @@ async def test_turnstile_lo_lee_solo_el_post_y_falla_cerrado(app_client, monkeyp
     import core.api.routers.web_chat as web_chat
 
     tid = await _negocio()
-    key = (await _guardar(app_client, tid, turnstile_secret="ts-ok"))["key"]
+    key = (await _guardar(app_client, tid, turnstile_site_key=SITE_KEY, turnstile_secret="ts-ok"))["key"]
     vistos: list[str] = []
 
     async def _verificar(token: str, secret: str, ip: str | None) -> bool:
@@ -197,7 +210,8 @@ async def test_turnstile_lo_lee_solo_el_post_y_falla_cerrado(app_client, monkeyp
         return token == "bueno"
 
     monkeypatch.setattr(web_chat, "_verify_turnstile", _verificar)
-    assert (await app_client.get(_publico(key, "config"))).json()["turnstile"] is True
+    config = (await app_client.get(_publico(key, "config"))).json()
+    assert config["turnstile"] is True and config["turnstile_site_key"] == SITE_KEY
     cuerpo = {"content": "hola", "visitor_id": uniq("vis")}
     r = await app_client.post(_publico(key, "messages"), headers={"Origin": ORIGEN}, json=cuerpo | {"turnstile_token": "malo"})
     assert r.status_code == 403
@@ -216,6 +230,28 @@ async def test_turnstile_lo_lee_solo_el_post_y_falla_cerrado(app_client, monkeyp
     assert (await backfill_conexiones(dry_run=False, tenant_id=tid)).chat_web["sincronizada"] == 1
     r = await app_client.post(_publico(key, "messages"), headers={"Origin": ORIGEN}, json=cuerpo | {"turnstile_token": "bueno"})
     assert r.status_code == 200
+
+
+async def test_turnstile_exige_site_key_y_secreto_y_publica_solo_la_site_key(app_client) -> None:
+    """El widget necesita la site key para pedir el token; sin ella la protección deja el chat
+    inutilizable. El guardado rechaza media configuración y `/config` publica solo la site key."""
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    base = {"enabled": True, "allowed_origins": [ORIGEN]}
+
+    for parcial in ({"turnstile_site_key": SITE_KEY}, {"turnstile_secret": "ts-ok"}):
+        r = await app_client.put(SETTINGS, headers=h, json=base | parcial)
+        assert r.status_code == 422 and r.json()["error"]["code"] == "turnstile_incompleta"
+
+    salida = await _guardar(app_client, tid, turnstile_site_key=SITE_KEY, turnstile_secret="ts-ok")
+    config = (await app_client.get(_publico(salida["key"], "config"))).json()
+    assert (config["turnstile"], config["turnstile_site_key"]) == (True, SITE_KEY)
+    assert "ts-ok" not in json.dumps(config)  # el secreto nunca sale
+
+    salida = await _guardar(app_client, tid, turnstile_site_key="", turnstile_secret="")
+    config = (await app_client.get(_publico(salida["key"], "config"))).json()
+    assert (salida["turnstile_configured"], salida["turnstile_site_key"]) == (False, "")
+    assert (config["turnstile"], config["turnstile_site_key"]) == (False, "")
 
 
 async def test_dos_widgets_un_visitante_no_ve_la_conversacion_del_otro(app_client) -> None:

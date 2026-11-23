@@ -164,8 +164,9 @@ class AppSettings(Base):
 
     # Chat web embebible (HU-CHAN-02). JSONB con:
     # {"enabled": bool, "key": "<clave pública>", "allowed_origins": [...],
-    #  "turnstile_secret": "<opcional>"}. La `key` es pública (va en el
-    # fragmento del widget); el `turnstile_secret` NUNCA se expone al cliente.
+    #  "turnstile_site_key": "<pública, opcional>", "turnstile_secret": "<opcional>"}.
+    # La `key` y la site key de Turnstile son públicas (el widget las necesita); el
+    # `turnstile_secret` NUNCA se expone al cliente.
     web_chat_config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
 
     # Plantillas por evento (HU-ARCH-13, ADR-0108, migración 0057):

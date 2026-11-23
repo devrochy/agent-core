@@ -6,8 +6,10 @@ El widget de un negocio es una fila de `channel_connections` de tipo `webchat`:
   por el servidor, nunca derivada del negocio ni elegida por él. El índice `uq_cc_webchat_key`
   (0071) es global e incluye las borradas: el endpoint público resuelve sin negocio
   (`webchat_resolve`, 0086).
-- `active` es "habilitado"; los dominios permitidos van en `settings` (`{"allowed_origins": [...]}`)
-  y el secreto de Turnstile, cifrado, en `credentials_encrypted` (`{"turnstile_secret": ...}`).
+- `active` es "habilitado"; los dominios permitidos y la site key pública de Turnstile van en
+  `settings` (`{"allowed_origins": [...], "turnstile_site_key": "..."}`) y el secreto de
+  Turnstile, cifrado, en `credentials_encrypted` (`{"turnstile_secret": ...}`). La site key y el
+  secreto van juntos: media configuración dejaría el widget sin poder pedir el token.
 - Sin cuenta de Meta (`meta_connection_id` NULL), nunca primaria y fuera de las conexiones
   manuales (`connections.ES_MANUAL`): se administra desde Configuración → Chat web.
 
@@ -49,6 +51,17 @@ class WidgetDesincronizado(Exception):
     widget): no se pausa ni se repara en silencio; lo arregla `backfill-conexiones`."""
 
 
+class TurnstileIncompleto(Exception):
+    """La protección anti-bots necesita site key y secret key: o las dos o ninguna.
+
+    La site key es pública y viaja en `/config`; la secret key nunca sale del backend. Sin la
+    site key el widget no puede pedir el token, y con el secreto el POST lo exige: guardar solo
+    una de las dos dejaría el chat inutilizable, así que se rechaza."""
+
+    def __init__(self, mensaje: str = "Turnstile necesita site key y secret key.") -> None:
+        super().__init__(mensaje)
+
+
 def nueva_clave() -> str:
     """Clave pública del widget: 24 bytes aleatorios en base64url (192 bits)."""
     return secrets.token_urlsafe(24)
@@ -61,6 +74,7 @@ class ConfigWidget:
     enabled: bool
     key: str
     allowed_origins: list[str] = field(default_factory=list)
+    turnstile_site_key: str = ""
     turnstile_secret: str = ""
     connection_id: uuid.UUID | None = None
 
@@ -69,6 +83,7 @@ class ConfigWidget:
             "enabled": self.enabled,
             "key": self.key,
             "allowed_origins": list(self.allowed_origins),
+            "turnstile_site_key": self.turnstile_site_key,
             "turnstile_secret": self.turnstile_secret,
         }
 
@@ -87,6 +102,7 @@ def desde_app_settings(config: dict[str, Any] | None) -> ConfigWidget | None:
         enabled=bool(config.get("enabled")),
         key=key,
         allowed_origins=_origenes(config.get("allowed_origins")),
+        turnstile_site_key=str(config.get("turnstile_site_key", "") or "").strip(),
         turnstile_secret=str(config.get("turnstile_secret", "") or "").strip(),
     )
 
@@ -122,6 +138,7 @@ def config_de_conexion(conexion: ChannelConnection) -> ConfigWidget:
         enabled=bool(conexion.active),
         key=conexion.external_id,
         allowed_origins=_origenes(ajustes.get("allowed_origins")),
+        turnstile_site_key=str(ajustes.get("turnstile_site_key", "") or "").strip(),
         turnstile_secret=_secreto(conexion),
         connection_id=conexion.id,
     )
@@ -180,6 +197,9 @@ async def sincronizar(
     if actual is None:
         if not aplicar:
             return "creada", None
+        ajustes: dict[str, Any] = {"allowed_origins": list(config.allowed_origins)}
+        if config.turnstile_site_key:
+            ajustes["turnstile_site_key"] = config.turnstile_site_key
         conexion = ChannelConnection(
             tenant_id=tenant_id,
             channel=CANAL,
@@ -191,7 +211,7 @@ async def sincronizar(
             is_primary=False,
             external_id=config.key,
             credentials_encrypted=_cifrar(config.turnstile_secret),
-            settings={"allowed_origins": list(config.allowed_origins)},
+            settings=ajustes,
         )
         session.add(conexion)
         await session.flush()
@@ -204,10 +224,17 @@ async def sincronizar(
         # `app_settings` manda: se vuelve a cifrar desde ahí, sin tumbar el guardado ni el backfill.
         log.warning("conexion_webchat_secreto_ilegible", tenant_id=str(tenant_id), connection_id=str(actual.id))
         previa = ConfigWidget(enabled=bool(actual.active), key=actual.external_id, turnstile_secret="\0ilegible")
-    if (previa.enabled, previa.key, previa.allowed_origins, previa.turnstile_secret) == (
+    if (
+        previa.enabled,
+        previa.key,
+        previa.allowed_origins,
+        previa.turnstile_site_key,
+        previa.turnstile_secret,
+    ) == (
         config.enabled,
         config.key,
         list(config.allowed_origins),
+        config.turnstile_site_key,
         config.turnstile_secret,
     ):
         return "ya_estaba", actual.id
@@ -217,7 +244,12 @@ async def sincronizar(
         if previa.turnstile_secret != config.turnstile_secret:
             actual.credentials_encrypted = _cifrar(config.turnstile_secret)
         # Se fusiona: `settings` es de la conexión y otras HU pueden guardar ahí sus claves.
-        actual.settings = dict(actual.settings or {}) | {"allowed_origins": list(config.allowed_origins)}
+        ajustes = dict(actual.settings or {}) | {"allowed_origins": list(config.allowed_origins)}
+        if config.turnstile_site_key:
+            ajustes["turnstile_site_key"] = config.turnstile_site_key
+        else:
+            ajustes.pop("turnstile_site_key", None)
+        actual.settings = ajustes
         actual.updated_at = utcnow()
         await session.flush()
     return "sincronizada", actual.id
@@ -230,13 +262,18 @@ async def guardar_widget(
     enabled: bool,
     allowed_origins: list[str],
     rotar_clave: bool = False,
+    turnstile_site_key: str | None = None,
     turnstile_secret: str | None = None,
 ) -> tuple[dict[str, Any], Resultado, uuid.UUID | None]:
     """Guarda el widget en `app_settings.web_chat_config` y, en la misma sesión, en la conexión
     `webchat` (doble escritura hasta el *contract*). La clave la genera el servidor si no hay o si
     se pide rotarla. Si la conexión es nueva, le pone las instancias de agentes cuando el negocio
     ya las tiene (HU-AOS-11 parte 2). La usan `PUT /settings/web-chat` y el centro de pruebas
-    (HU-QA-09); permisos y validación de entrada quedan en el llamador."""
+    (HU-QA-09); permisos y validación de entrada quedan en el llamador.
+
+    `turnstile_site_key` y `turnstile_secret` con `None` significan "no tocar"; `""` borra. La
+    protección anti-bots exige las dos: guardar una sola deja el widget inutilizable y se rechaza
+    con `TurnstileIncompleto` (el llamador lo traduce a 422)."""
     from core.agents.instancias import instancias_de_conexion_nueva
     from core.db.models import AppSettings
 
@@ -245,21 +282,48 @@ async def guardar_widget(
     if app_settings is None:
         app_settings = AppSettings(tenant_id=tenant_id)
         session.add(app_settings)
+    actual = await conexion_del_negocio(session, tenant_id)
     config = dict(app_settings.web_chat_config or {})
     if not config.get("key") or rotar_clave:
         # La genera el servidor (nunca el panel): aleatoria, 192 bits (ADR-0115 §4).
         config["key"] = nueva_clave()
     config["enabled"] = bool(enabled)
     config["allowed_origins"] = list(allowed_origins)
+    if turnstile_site_key is not None:
+        site_key = turnstile_site_key.strip()
+        if site_key:
+            config["turnstile_site_key"] = site_key
+        else:
+            config.pop("turnstile_site_key", None)
     if turnstile_secret is not None:
-        config["turnstile_secret"] = turnstile_secret.strip()
-    if enabled:
-        actual = await conexion_del_negocio(session, tenant_id)
-        if actual is None or not actual.active:
-            # Habilitar el widget (nuevo o pausado) es un alta para el plan (ADR-0208 §8-9, HU-BILL-19): exige
-            # `web` en el plan y el tope `conexiones` antes de escribir nada. No va en `sincronizar`, que
-            # también usa el backfill (reconstruye lo que el negocio ya tenía).
-            await exigir_alta_de_conexion(session, tenant_id, CANAL)
+        secreto = turnstile_secret.strip()
+        if secreto:
+            config["turnstile_secret"] = secreto
+        else:
+            config.pop("turnstile_secret", None)
+
+    # Solo se valida cuando el llamador toca Turnstile: los guardados que no lo mencionan (p.
+    # ej. el centro de pruebas o cambiar solo los dominios) conservan el estado que haya, aunque
+    # venga incompleto de una versión anterior. La conexión puede tener el secreto ya cifrado
+    # aunque `app_settings` no lo traiga; para validar el par se mira también la conexión, salvo
+    # que el llamador acabe de borrar ese lado.
+    if turnstile_site_key is not None or turnstile_secret is not None:
+        site_key = str(config.get("turnstile_site_key", "") or "").strip()
+        if not site_key and turnstile_site_key is None and actual is not None:
+            site_key = (
+                str((actual.settings or {}).get("turnstile_site_key", "") or "").strip()
+            )
+        secreto = str(config.get("turnstile_secret", "") or "").strip()
+        if not secreto and turnstile_secret is None and actual is not None:
+            secreto = "presente" if actual.credentials_encrypted else ""
+        if bool(site_key) != bool(secreto):
+            raise TurnstileIncompleto()
+
+    if enabled and (actual is None or not actual.active):
+        # Habilitar el widget (nuevo o pausado) es un alta para el plan (ADR-0208 §8-9, HU-BILL-19): exige
+        # `web` en el plan y el tope `conexiones` antes de escribir nada. No va en `sincronizar`, que
+        # también usa el backfill (reconstruye lo que el negocio ya tenía).
+        await exigir_alta_de_conexion(session, tenant_id, CANAL)
     app_settings.web_chat_config = config
     resultado, conexion = await sincronizar(session, tenant_id, desde_app_settings(config))
     if resultado == "creada" and conexion is not None:
@@ -330,6 +394,7 @@ __all__ = [
     "CANAL",
     "PROVEEDOR",
     "ConfigWidget",
+    "TurnstileIncompleto",
     "WidgetDesincronizado",
     "conexion_del_negocio",
     "config_de_conexion",
