@@ -2,8 +2,8 @@
 
 Cada pack de especialidad declara su tipo en `pack_<x>/tipo_de_agente.json` (`AgentTypeManifest`). Este módulo:
 - lo lee del paquete de la clase del módulo (`manifiesto_del_modulo`, detrás de `BaseModule.tipo_de_agente`);
-- arma el registro `key → manifiesto` con los packs de la plataforma ya cargados por `plugin_manager`
-  (`tipos_de_agente`); un plugin de un negocio nunca define tipos;
+- arma el registro `key → manifiesto` con los packs de la plataforma (`tipos_de_agente`): de los archivos de
+  `packages/` o de los módulos que se le pasen; un plugin de un negocio nunca define tipos;
 - lo traduce a `PlantillaAgente` (`a_plantilla`), la forma que siguen leyendo el editor, el alta, los presets y QA
   desde `load_plantilla` (antes `core/presets/plantillas/*.json`, que se retiraron).
 """
@@ -70,23 +70,28 @@ def manifiesto_del_modulo(module: Any) -> AgentTypeManifest | None:
     return _leer(str(ruta))
 
 
-def _modulos() -> list[Any]:
-    from core.plugin_manager import plugin_manager
+_PACKAGES = Path(__file__).resolve().parent.parent.parent / "packages"
 
-    return plugin_manager.list_modules() or plugin_manager.scan()
+
+def _desde_archivos() -> list[AgentTypeManifest]:
+    """Los manifiestos de `packages/pack-*/pack_*/tipo_de_agente.json`, sin depender de qué cargó el
+    `plugin_manager` en este proceso (mismo criterio que `load_fragment` con los fragmentos de presets)."""
+    return [_leer(str(ruta)) for ruta in sorted(_PACKAGES.glob(f"pack-*/pack_*/{ARCHIVO}"))]
 
 
 def tipos_de_agente(modules: Iterable[Any] | None = None) -> dict[str, AgentTypeManifest]:
-    """`key → manifiesto` de los packs de especialidad de la plataforma, ordenado por key."""
+    """`key → manifiesto` de los packs de especialidad de la plataforma, ordenado por key.
+
+    Sin `modules` lee los archivos de `packages/` (lo que usa `load_plantilla`); con `modules` mira solo esos
+    módulos (lo que usa `validar_catalogo` al arrancar)."""
     from core.releases.packs import es_de_plataforma
 
+    if modules is None:
+        manifiestos = _desde_archivos()
+    else:
+        manifiestos = [m for m in (manifiesto_del_modulo(x) for x in modules if es_de_plataforma(x)) if m is not None]
     tipos: dict[str, AgentTypeManifest] = {}
-    for module in _modulos() if modules is None else modules:
-        if not es_de_plataforma(module):
-            continue
-        manifiesto = manifiesto_del_modulo(module)
-        if manifiesto is None:
-            continue
+    for manifiesto in manifiestos:
         if manifiesto.key in tipos:
             raise TipoDeAgenteInvalido(f"dos packs declaran el tipo de agente {manifiesto.key!r}")
         tipos[manifiesto.key] = manifiesto

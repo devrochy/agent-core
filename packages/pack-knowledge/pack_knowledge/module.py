@@ -27,7 +27,7 @@ class KnowledgeModule(BaseModule):
     tipo = "transversal"  # ADR-0190 §1
     id = PLUGIN_ID
     name = "Conocimiento"
-    version = "0.3.0"
+    version = "0.4.0"  # 0.4: efecto y grupo de buscar_conocimiento (ADR-0207, HU-AOS-92)
     description = "Documentos del negocio por agente (preguntas frecuentes, catálogos, políticas) para responder con ellos"
     display_name = "Conocimiento"
     category = "Conocimiento"

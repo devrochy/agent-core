@@ -193,6 +193,7 @@ def validar_catalogo(modules: Iterable[Any]) -> list[str]:
 
     Solo mira el core y los packs de la plataforma: un plugin de un negocio nunca bloquea el arranque."""
     from core.agents.tipos_de_agente import tipos_de_agente
+    from core.kernel.procedures.de_pack import cargar
     from core.releases.packs import es_de_plataforma
 
     modulos = [m for m in modules if es_de_plataforma(m)]
@@ -226,8 +227,6 @@ def validar_catalogo(modules: Iterable[Any]) -> list[str]:
         for h in sorted(propias - habilidades):
             problemas.append(f"el tipo {tipo.key!r} declara la habilidad {h!r}, que no existe")
         # Las acciones de un procedimiento por defecto tienen que estar en las habilidades del tipo o en el core.
-        from core.kernel.procedures.de_pack import cargar
-
         for proc_id in tipo.procedimientos_por_defecto:
             proc = next((p for p in cargar(proc_id.partition(".")[0]) if p.id == proc_id), None)
             if proc is None:

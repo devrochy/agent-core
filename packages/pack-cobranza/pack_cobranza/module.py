@@ -68,7 +68,7 @@ class CobranzaModule(BaseModule):
     etiquetas_de_grupos_de_procedimientos: ClassVar[dict[str, str]] = {"cobranza": "Cobranza"}
     id = PLUGIN_ID
     name = "Cobranza"
-    version = "0.8.0"
+    version = "0.9.0"  # 0.9: tipo de agente en el pack y efecto de cada acción (ADR-0207, HU-AOS-92)
     description = "Carteras, clientes, préstamos y negociación de cobranza por WhatsApp"
     display_name = "Cobranza"
     category = "Cobros"

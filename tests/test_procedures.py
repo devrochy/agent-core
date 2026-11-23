@@ -147,9 +147,9 @@ def test_irreversible_con_confirmacion_pasa(catalogo) -> None:
     assert revisar(raw, con_irreversible) == []
 
 
-def test_catalogo_real_no_marca_irreversibles_todavia(catalogo) -> None:
-    """El efecto de cada acción llega con el manifiesto v2 (HU-AOS-34)."""
-    assert {info.side_effect for info in catalogo.values()} == {None}
+def test_catalogo_real_declara_el_efecto_de_cada_accion(catalogo) -> None:
+    """ADR-0207 §2 (HU-AOS-92): cada acción del binario declara su efecto; ninguna queda en `None`."""
+    assert {info.side_effect for info in catalogo.values()} == {"read", "write", "irreversible"}
 
 
 def _mutar(raw: dict[str, Any], cambio: str) -> None:
@@ -247,10 +247,10 @@ def test_irreversible_confirmada_por_accion(catalogo) -> None:
 
 def test_accion_de_otra_habilidad_por_nombre_con_requires(catalogo) -> None:
     raw = fixture("contratar_plan")
-    raw["stages"][3]["actions"].append("cob_registrar_abono")
+    raw["stages"][3]["actions"].append("cob_registrar_promesa_pago")  # `write`: el caso es el `requires`
     issues = revisar(raw, catalogo)
     assert {i.code for i in issues} == {"habilidad_no_declarada"}
-    assert "'cob_registrar_abono' es de 'pack_cobranza'" in issues[0].message
+    assert "'cob_registrar_promesa_pago' es de 'pack_cobranza'" in issues[0].message
     raw["requires"] = ["pack_cobranza"]
     assert revisar(raw, catalogo) == []
 
@@ -423,8 +423,10 @@ async def test_conversion_del_flujo_compuesto_real_sin_cambiar_acciones(
         assert proc.stages[0].actions == section.tools
         assert proc.stages[0].exitWhen is None and proc.slots == {} and proc.claims == []
         assert proc.title == section.label and proc.stages[0].goal == section.purpose
-        # Linter completo: acciones existentes y de habilidades declaradas en `requires`.
-        assert lint(proc, catalogo) == [], proc.id
+        # Linter completo: acciones existentes y de habilidades declaradas en `requires`. Desde HU-AOS-92 las acciones
+        # declaran su efecto y un abierto sin binding v2 no confirma sus irreversibles; no importa en V3, porque los
+        # abiertos (`0.0.0`) solo resuelven nombres y nunca se ofrecen en un turno (`ReleaseCongelada.procedimientos_de`).
+        assert {i.code for i in lint(proc, catalogo)} <= {"irreversible_sin_confirmacion"}, proc.id
     cotizacion = next(p for p in procedures if p.id == "pack_commerce.cotizacion")
     assert "consultar_inventario" in cotizacion.stages[0].actions
     pedido = next(p for p in procedures if p.id == "pack_commerce.pedido")
@@ -456,7 +458,7 @@ async def test_conversion_hereda_la_confirmacion_del_binding_v2(
     procedures = flow_to_procedures(flow.sections, catalogo=catalogo, confirmed_actions=confirmed_actions_v2(spec))
     pedido = next(p for p in procedures if p.id == "pack_commerce.pedido")
     assert pedido.stages[0].confirmActions == ["crear_pedido"]  # el binding deshabilitado no cuenta
-    assert all(lint(p, con_irreversible) == [] for p in procedures)
+    assert lint(pedido, con_irreversible) == []
 
     sin_binding = flow_to_procedures(flow.sections, catalogo=catalogo)
     pedido = next(p for p in sin_binding if p.id == "pack_commerce.pedido")
