@@ -241,7 +241,7 @@ async def test_turnstile_exige_site_key_y_secreto_y_publica_solo_la_site_key(app
 
     for parcial in ({"turnstile_site_key": SITE_KEY}, {"turnstile_secret": "ts-ok"}):
         r = await app_client.put(SETTINGS, headers=h, json=base | parcial)
-        assert (r.status_code, r.json()["code"]) == (422, "turnstile_incompleta")
+        assert r.status_code == 422 and r.json()["error"]["code"] == "turnstile_incompleta"
 
     salida = await _guardar(app_client, tid, turnstile_site_key=SITE_KEY, turnstile_secret="ts-ok")
     config = (await app_client.get(_publico(salida["key"], "config"))).json()
