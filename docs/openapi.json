@@ -47544,6 +47544,330 @@
           }
         }
       }
+    },
+    "/api/v1/admin/agents/{agent_id}/guardrails": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Agent Guardrails",
+        "description": "Las reglas de respuesta del borrador del agente. El Coordinador no tiene (lista vacía).",
+        "operationId": "get_agent_guardrails_api_v1_admin_agents__agent_id__guardrails_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentGuardrailsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Save Agent Guardrails",
+        "description": "Reemplaza las reglas del borrador (frase prohibida, tool obligatoria ante una frase, largo máximo; con\n`retry` o `escalate`). Valen al publicar. 422 por campo (`guardrails[i]...`); 409 `coordinador_inmutable`\npara el Coordinador y `stale_lock_version` si otro guardó antes.",
+        "operationId": "save_agent_guardrails_api_v1_admin_agents__agent_id__guardrails_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentGuardrailsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentGuardrailsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/declarative-tools": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Agent Declarative Tools",
+        "description": "Las tools HTTP del borrador del agente, los secretos del negocio (nombres y dominios, nunca valores) y las\ntools que el turno no ofrecerá. El Coordinador no tiene tools (lista vacía).",
+        "operationId": "get_agent_declarative_tools_api_v1_admin_agents__agent_id__declarative_tools_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDeclarativeToolsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Save Agent Declarative Tools",
+        "description": "Reemplaza las tools HTTP del borrador. Valida todo antes de escribir: un header sensible con valor literal,\nun dominio interno, un secreto sin valor o un valor que ninguna tool usa dan 422 por campo y no se guarda nada.\nLuego cifra los secretos nuevos en la instalación `core` del negocio, atados a los dominios de las tools que los\nusan (más los que ya tenían), y por último guarda el borrador. Si el borrador choca con otra edición (409) los\nsecretos ya quedaron escritos (un valor rotado ya vale para las tools publicadas que lo usan); reintentar con\nel borrador al día termina de guardar.",
+        "operationId": "save_agent_declarative_tools_api_v1_admin_agents__agent_id__declarative_tools_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentDeclarativeToolsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDeclarativeToolsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -85724,6 +86048,317 @@
           "paquete"
         ],
         "title": "TopUpRequest"
+      },
+      "AgentDeclarativeToolsIn": {
+        "properties": {
+          "tools": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Tools"
+          },
+          "secrets": {
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 8000,
+              "format": "password",
+              "writeOnly": true
+            },
+            "propertyNames": {
+              "maxLength": 60
+            },
+            "type": "object",
+            "maxProperties": 50,
+            "title": "Secrets"
+          },
+          "lock_version": {
+            "type": "integer",
+            "exclusiveMaximum": 2147483648.0,
+            "minimum": 0.0,
+            "title": "Lock Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tools",
+          "lock_version"
+        ],
+        "title": "AgentDeclarativeToolsIn"
+      },
+      "AgentDeclarativeToolsOut": {
+        "properties": {
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/DeclarativeTool"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "secrets": {
+            "items": {
+              "$ref": "#/components/schemas/ConfiguredSecret"
+            },
+            "type": "array",
+            "title": "Secrets"
+          },
+          "omitted": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Omitted"
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tools",
+          "secrets",
+          "omitted",
+          "lock_version"
+        ],
+        "title": "AgentDeclarativeToolsOut"
+      },
+      "AgentGuardrailsIn": {
+        "properties": {
+          "guardrails": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Guardrails"
+          },
+          "lock_version": {
+            "type": "integer",
+            "exclusiveMaximum": 2147483648.0,
+            "minimum": 0.0,
+            "title": "Lock Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "guardrails",
+          "lock_version"
+        ],
+        "title": "AgentGuardrailsIn"
+      },
+      "AgentGuardrailsOut": {
+        "properties": {
+          "guardrails": {
+            "items": {
+              "$ref": "#/components/schemas/GuardrailRule"
+            },
+            "type": "array",
+            "title": "Guardrails"
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "guardrails",
+          "lock_version"
+        ],
+        "title": "AgentGuardrailsOut"
+      },
+      "ConfiguredSecret": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "domains"
+        ],
+        "title": "ConfiguredSecret",
+        "description": "Un secreto del negocio: su nombre y los dominios a los que puede viajar. Nunca el valor."
+      },
+      "DeclarativeTool": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_]{1,60}$",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 400,
+            "title": "Description",
+            "default": ""
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST"
+            ],
+            "title": "Method",
+            "default": "GET"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^https?://",
+            "title": "Url"
+          },
+          "allowedDomains": {
+            "items": {
+              "type": "string",
+              "maxLength": 253,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Alloweddomains",
+            "default": []
+          },
+          "headers": {
+            "patternProperties": {
+              "^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,80}$": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8000,
+                    "pattern": "^[^\\r\\n\\x00]*$"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SecretRef"
+                  }
+                ]
+              }
+            },
+            "type": "object",
+            "maxProperties": 30,
+            "title": "Headers",
+            "default": {}
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "body": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Body",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "url"
+        ],
+        "title": "DeclarativeTool"
+      },
+      "GuardrailRule": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "forbidden_phrase",
+              "required_tool",
+              "max_length"
+            ],
+            "title": "Kind"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "retry",
+              "escalate"
+            ],
+            "title": "Action",
+            "default": "retry"
+          },
+          "phrases": {
+            "items": {
+              "type": "string",
+              "maxLength": 1000,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Phrases",
+            "default": []
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_]{1,80}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "title": "GuardrailRule"
+      },
+      "SecretRef": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,60}$",
+            "title": "Secret"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "secret"
+        ],
+        "title": "SecretRef"
       }
     }
   }

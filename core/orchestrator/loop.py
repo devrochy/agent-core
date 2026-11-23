@@ -851,7 +851,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
             borrador, veredicto = largo_guardado
             entrega_guardada = True
         elif not verdict.passed:
-            if guardrail_retries < guardrail_max_retries:
+            if guardrail_retries < guardrail_max_retries and not _regla_que_escala(verdict, spec):
                 guardrail_retries += 1
                 if politica is not None and persona_verdict is None and veredicto is not None and not veredicto.passed:
                     politica.reintento_del_verificador()  # el reintento usa el respaldo (HU-AOS-09)
@@ -1059,6 +1059,18 @@ async def _registrar_largo_excedido(
         action="persona_max_length_excedido",
         conversation_id=conversation_id,
         input_data={"largo": largo, "tope": spec.persona.maxLength, "entregado": entregado},
+    )
+
+
+def _regla_que_escala(verdict: GuardrailResult, spec: Any) -> bool:
+    """ADR-0051: una regla del agente con `action: escalate` no gasta reintentos correctivos; va directo a la acción
+    de falla del negocio (escalar o neutral). `run_guardrails` la reporta como `regla:<nombre>`."""
+    if not verdict.reason.startswith("regla:"):
+        return False
+    nombre = verdict.reason.removeprefix("regla:")
+    return any(
+        isinstance(g, dict) and g.get("name") == nombre and g.get("action") == "escalate"
+        for g in (getattr(spec, "guardrails", None) or [])
     )
 
 
