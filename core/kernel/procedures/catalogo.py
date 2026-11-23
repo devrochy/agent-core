@@ -114,7 +114,12 @@ def _tools_del_modulo(module: Any) -> list[MCPTool]:
 
 
 def _armar(modules: list[Any]) -> dict[str, ActionInfo]:
+    from core.releases.packs import es_de_plataforma
+
     catalogo: dict[str, ActionInfo] = {}
+    # Los packs de la plataforma primero: si el plugin de un negocio repite el nombre de una tool, el efecto que rige
+    # (cambio de release, linter) es el del pack, nunca el que declare ese plugin (auditoría de HU-AOS-92).
+    modules = sorted(modules, key=lambda m: not es_de_plataforma(m))
     for skill in _core_skills():
         for tool in skill.get_tools():
             catalogo[tool.name] = _item(tool, CORE_OWNER, _grupo_del_core(tool.name))

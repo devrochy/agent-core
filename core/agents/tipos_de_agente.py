@@ -62,7 +62,10 @@ def _leer(ruta: str) -> AgentTypeManifest:
 
 
 def manifiesto_del_modulo(module: Any) -> AgentTypeManifest | None:
-    if getattr(module, "tipo", "") != "especialidad":
+    from core.releases.packs import es_de_plataforma
+
+    # Solo un pack de especialidad de la plataforma define un tipo; un plugin de un negocio nunca.
+    if getattr(module, "tipo", "") != "especialidad" or not es_de_plataforma(module):
         return None
     ruta = _ruta(module)
     if ruta is None or not ruta.is_file():
