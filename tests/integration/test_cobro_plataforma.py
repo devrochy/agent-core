@@ -497,7 +497,7 @@ async def _pagar_por_el_panel(negocio: uuid.UUID, pasarela: _Pasarela, plan: str
 
     assert await _link_del_panel(negocio, plan)
     link = pasarela.links[-1]
-    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=_CENTAVOS[plan]) is True
+    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=_CENTAVOS[plan], transaction_id=str(uuid.uuid4())) is True
     [pago] = [p for p in await _pagos(negocio) if p.provider_reference == link]
     return pago
 
@@ -678,7 +678,7 @@ async def test_pago_por_el_panel_deja_pagado_el_cargo_del_asistente(
     # Pedirlo otra vez no crea un segundo link vivo para el mismo período.
     otra = await app_client.post("/api/v1/admin/plan/subscribe", json={"plan_id": "premium"}, headers=headers)
     assert otra.json()["checkout_url"] == r.json()["checkout_url"] and len(pasarela.links) == 1
-    assert await apply_payment(provider_reference=pasarela.links[-1], status="aprobado", amount_in_cents=_CENTAVOS["premium"]) is True
+    assert await apply_payment(provider_reference=pasarela.links[-1], status="aprobado", amount_in_cents=_CENTAVOS["premium"], transaction_id=str(uuid.uuid4())) is True
     [pago] = [p for p in await _pagos(esc.negocio) if p.provider_reference == pasarela.links[-1]]
     assert (pago.periodo, pago.status, pago.provider) == (referencia, "aprobado", "wompi")
     negocio = await _suscripcion_de(esc.negocio)

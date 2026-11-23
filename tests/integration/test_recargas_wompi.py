@@ -377,6 +377,56 @@ async def test_una_recarga_por_otro_monto_no_se_acredita(app_client, sandbox, al
 
 
 @pytest.mark.aislamiento
+async def test_una_transaccion_aprobada_reenviada_con_el_link_de_otro_negocio_no_le_acredita(
+    app_client, sandbox, alertas
+) -> None:
+    """Revisión de seguridad de SPEC-51: la firma de Wompi no cubre `payment_link_id`. El mismo evento aprobado
+    y firmado de la recarga de A, reenviado con el link de B (mismo monto), no le acredita nada a B: el índice
+    único de `provider_transaction_id` lo frena aunque la RLS no deje ver el pago de A desde B."""
+    a = await _negocio("basic")
+    b = await _negocio("basic")
+    assert (await _comprar(app_client, a, "recarga_20000")).status_code == 200
+    assert (await _comprar(app_client, b, "recarga_20000")).status_code == 200
+    link_a, link_b = sandbox.links[-2:]
+
+    evento = _evento_wompi(link_a, centavos=19_900_000)
+    r = await app_client.post("/webhooks/billing/wompi", json=evento)
+    assert (r.status_code, r.json()["status"], r.json()["updated"]) == (200, "ok", True)
+    [pago_a] = await _pagos(a)
+    assert (pago_a.status, pago_a.provider_transaction_id) == ("aprobado", evento["data"]["transaction"]["id"])
+
+    evento["data"]["transaction"]["payment_link_id"] = link_b  # no está firmado: la firma sigue válida
+    r = await app_client.post("/webhooks/billing/wompi", json=evento)
+    assert (r.status_code, r.json()["status"]) == (200, "ignored")
+    [pago_b] = await _pagos(b)
+    assert (pago_b.status, pago_b.provider_transaction_id) == ("pendiente", None)
+    assert await _abonos(b) == []
+    assert len(await _abonos(a)) == 1
+    assert [x for x in alertas if x["severity"] == "critical" and "ya usada" in x["title"]]
+
+
+@pytest.mark.aislamiento
+async def test_un_evento_aprobado_cuya_firma_no_cubre_el_id_se_rechaza(app_client, sandbox, alertas) -> None:
+    import hashlib as _hashlib
+
+    tid = await _negocio("basic")
+    assert (await _comprar(app_client, tid, "recarga_20000")).status_code == 200
+    evento = _evento_wompi(sandbox.links[-1], centavos=19_900_000)
+    tx = evento["data"]["transaction"]
+    evento["signature"] = {
+        "properties": ["transaction.status", "transaction.amount_in_cents"],
+        "checksum": _hashlib.sha256(
+            f"{tx['status']}{tx['amount_in_cents']}{evento['timestamp']}{_SECRETO_DE_EVENTOS}".encode()
+        ).hexdigest(),
+    }
+    r = await app_client.post("/webhooks/billing/wompi", json=evento)
+    assert r.status_code == 401
+    [pago] = await _pagos(tid)
+    assert pago.status == "pendiente"
+    assert await _abonos(tid) == []
+
+
+@pytest.mark.aislamiento
 async def test_un_negocio_no_ve_ni_aplica_las_recargas_de_otro(app_client, produccion) -> None:
     from core.billing.checkout import apply_payment, tenant_del_pago
     from core.db.models import CreditGrant, SubscriptionPayment
@@ -388,13 +438,13 @@ async def test_un_negocio_no_ve_ni_aplica_las_recargas_de_otro(app_client, produ
     assert await tenant_del_pago(link) == a
 
     # Con el negocio B en el contexto, el pago de A no existe y no se aplica.
-    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=4_675_000, tenant_id=b) is False
+    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=4_675_000, transaction_id=str(uuid.uuid4()), tenant_id=b) is False
     async with _scope(b) as s:
         assert (await s.execute(select(SubscriptionPayment).where(SubscriptionPayment.provider_reference == link))).first() is None
     headers_b = await api_headers(app_client, b)
     assert (await app_client.get("/api/v1/admin/plan", headers=headers_b)).json()["payments"] == []
 
-    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=4_675_000) is True
+    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=4_675_000, transaction_id=str(uuid.uuid4())) is True
     assert len(await _abonos(a)) == 1
     async with _scope(b) as s:
         assert (await s.execute(select(CreditGrant))).first() is None
@@ -413,7 +463,7 @@ async def test_cambiar_de_plan_no_anula_el_link_de_recarga(app_client, produccio
     async with tenant_scope(tid):
         assert await start_subscription("premium")
     link_plan = produccion.links[-1]
-    assert await apply_payment(provider_reference=link_plan, status="aprobado", amount_in_cents=29_900_000) is True
+    assert await apply_payment(provider_reference=link_plan, status="aprobado", amount_in_cents=29_900_000, transaction_id=str(uuid.uuid4())) is True
     assert (await _suscripcion(tid)).plan_id == "premium"
 
     pagos = {p.provider_reference: p for p in await _pagos(tid)}
@@ -423,7 +473,7 @@ async def test_cambiar_de_plan_no_anula_el_link_de_recarga(app_client, produccio
     assert await _abonos(tid) == []
 
     # El link de recarga (comprado en Basic, sin descuento) sigue valiendo con el plan nuevo.
-    assert await apply_payment(provider_reference=link_recarga, status="aprobado", amount_in_cents=5_500_000) is True
+    assert await apply_payment(provider_reference=link_recarga, status="aprobado", amount_in_cents=5_500_000, transaction_id=str(uuid.uuid4())) is True
     [abono] = await _abonos(tid)
     assert (abono.tipo, abono.creditos) == ("recarga", Decimal("5000.0"))
     assert (await _suscripcion(tid)).plan_id == "premium"
@@ -471,7 +521,7 @@ async def test_una_recarga_revertida_despues_de_acreditarse_alerta_y_no_toca_el_
     tid = await _negocio("premium")
     assert (await _comprar(app_client, tid, "recarga_5000")).status_code == 200
     link = produccion.links[-1]
-    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=4_675_000) is True
+    assert await apply_payment(provider_reference=link, status="aprobado", amount_in_cents=4_675_000, transaction_id=str(uuid.uuid4())) is True
     # Wompi anula la transacción después (VOIDED → rechazado): el abono queda y se alerta.
     assert await apply_payment(provider_reference=link, status="rechazado", amount_in_cents=4_675_000) is False
     [pago] = await _pagos(tid)

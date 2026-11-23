@@ -29,6 +29,7 @@ depende del ambiente.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -42,6 +43,7 @@ from core.payments.wompi_minimo import (  # noqa: F401 (reexportados: admin, pay
 )
 from core.shared.exceptions import PluginError
 from core.shared.logger import get_logger
+from core.shared.wompi_firma import firma_cubre_lo_obligatorio
 from pack_payments.providers.base import (
     BasePaymentProvider,
     MontoBajoMinimo,
@@ -154,6 +156,10 @@ class WompiProvider(BasePaymentProvider):
         data = payload.get("data") or {}
         if not properties or not checksum or timestamp is None:
             return False
+        # Sin el id, el estado y el monto de la transacción firmados, el checksum no autentica lo que decide el
+        # pago (hallazgo de seguridad de SPEC-51, `core.shared.wompi_firma`).
+        if not firma_cubre_lo_obligatorio(payload):
+            return False
 
         parts: list[str] = []
         for dotted_path in properties:
@@ -168,7 +174,8 @@ class WompiProvider(BasePaymentProvider):
 
         concatenated = "".join(parts) + str(timestamp) + self.events_secret
         computed = hashlib.sha256(concatenated.encode()).hexdigest()
-        return computed.lower() == str(checksum).lower()
+        # Comparación en tiempo constante, como el webhook de la plataforma.
+        return hmac.compare_digest(computed.lower(), str(checksum).lower())
 
     def parse_webhook_event(self, payload: dict[str, Any]) -> WebhookEvent:
         transaction = (payload.get("data") or {}).get("transaction") or {}
