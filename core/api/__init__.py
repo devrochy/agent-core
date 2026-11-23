@@ -27,6 +27,7 @@ from core.api.routers import (
     connections,
     conversation_tasks,
     conversations,
+    coordinator,
     costs,
     crons,
     dashboard,
@@ -106,6 +107,7 @@ api_router.include_router(datos_de_prueba.router)
 api_router.include_router(datos_de_prueba.modulos_router)
 api_router.include_router(agents.router)
 api_router.include_router(agent_editor.router)
+api_router.include_router(coordinator.router)
 # ADR-0186: antes que `connections` (su `/{connection_id}` capturaría `/twilio`).
 api_router.include_router(twilio_connections.router)
 # ADR-0199: antes que `connections` (su `/{connection_id}` capturaría `/telegram`).

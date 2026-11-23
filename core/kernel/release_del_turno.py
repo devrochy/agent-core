@@ -696,7 +696,7 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
         # `active_agent_instance_id` y las decisiones siguen con la instancia real (mismos ids).
         from core.agents.recepcion import vista_de_recepcion
 
-        foco = vista_de_recepcion(foco)
+        foco = vista_de_recepcion(foco, recepcion=release.recepcion)
     release_vigente.fijar(release.artefactos(asignacion.lane, foco=foco))
     release_vigente.fijar_pausados(tenant_id, asignacion.pausados)
     anotar_release(
