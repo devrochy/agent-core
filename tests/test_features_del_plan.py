@@ -189,6 +189,8 @@ def test_celda_neutraliza_formulas() -> None:
 
     assert celda("=HYPERLINK(1)") == "'=HYPERLINK(1)"
     assert celda("@x") == "'@x"
+    assert celda("\n=1+1") == "'\n=1+1"
+    assert celda("\r=1") == "'\r=1"
     assert celda("hola") == "hola"
     assert celda(None) == ""
 

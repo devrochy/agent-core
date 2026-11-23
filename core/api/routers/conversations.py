@@ -37,6 +37,7 @@ from core.api.plan_limits import plan_feature_responses, plan_limit_error
 from core.billing.tipos_de_uso import EVAL
 from core.db.models import (
     Admin,
+    AuditLog,
     ChannelConnection,
     Conversation,
     Customer,
@@ -588,6 +589,19 @@ async def export_conversations_csv(
     async with get_session() as session:
         total = int(
             (await session.execute(select(func.count()).select_from(consulta.subquery()))).scalar() or 0
+        )
+        # Sacar todas las conversaciones del negocio deja rastro: quién, cuántos mensajes y desde cuándo.
+        session.add(
+            AuditLog(
+                tenant_id=tenant_id,
+                actor=f"admin:{principal.admin.email}",
+                action="conversations.export",
+                input={
+                    "mensajes": min(total, EXPORTAR_MAX_MENSAJES),
+                    "truncado": total > EXPORTAR_MAX_MENSAJES,
+                    "desde": historial.desde.isoformat() if historial.desde else None,
+                },
+            )
         )
 
     async def filas():  # type: ignore[no-untyped-def]

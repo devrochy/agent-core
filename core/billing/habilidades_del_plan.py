@@ -63,10 +63,13 @@ async def exigir_min_plan(tenant_id: uuid.UUID, packs: Iterable[str], *, session
     escribe nada; quien llama lo hace ANTES de activar, configurar o instalar. Un pack que el despliegue
     no trae se ignora aquí (lo rechaza quien llama con su propio error)."""
     from core.billing.service import get_active_subscription
+    from core.shared.tenant import exigir_tenant_scope
 
     min_planes = _min_planes(packs)
     if not min_planes:
         return
+    if session is not None:
+        exigir_tenant_scope(tenant_id, "candado del plan")
     sub = await get_active_subscription(tenant_id, session=session)
     plan = get_plan(sub.plan_id) if sub is not None else None
     if plan is None:
