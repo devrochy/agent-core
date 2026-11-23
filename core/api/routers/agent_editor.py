@@ -69,6 +69,7 @@ from core.api.routers.agents import (
     _puede_escribir,
     _summary,
     _tenant,
+    _ve_modelo,
     _version,
 )
 from core.billing.enforcement import QuotaExceeded
@@ -377,7 +378,7 @@ async def create_from_template(
     except versiones.ErroresDeContrato as exc:
         raise _contrato_422(exc.issues) from None
     return FromTemplateOut(
-        agent=_summary(agente, None), draft=_draft(borrador), warnings=avisos, enabled_skills=habilitadas
+        agent=_summary(agente, None), draft=_draft(borrador, ve_modelo=_ve_modelo(principal)), warnings=avisos, enabled_skills=habilitadas
     )
 
 
@@ -416,7 +417,7 @@ async def create_from_script(
     )
     return FromScriptOut(
         agent=_summary(agente, None),
-        draft=_draft(borrador),
+        draft=_draft(borrador, ve_modelo=_ve_modelo(principal)),
         warnings=avisos,
         enabled_skills=habilitadas,
         requirements=[_requirement(r) for r in pendientes.get(payload.template_key, [])],
