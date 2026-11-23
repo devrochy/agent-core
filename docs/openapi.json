@@ -34331,7 +34331,7 @@
           "admin · configuración"
         ],
         "summary": "Save Web Chat Settings",
-        "description": "Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave\no cambia el secreto de Turnstile. Se guarda en `app_settings.web_chat_config`\n(JSONB, migración 0047) y, en la misma transacción, en la conexión `webchat` del\nnegocio (ADR-0115 §4, doble escritura hasta el *contract*: `chat_web_conexion`). El\nprimer guardado crea la conexión con sus instancias de agentes si el negocio ya las\ntiene (HU-AOS-11 parte 2).",
+        "description": "Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave\no cambia la protección de Turnstile (site key + secret key). Se guarda en\n`app_settings.web_chat_config` (JSONB, migración 0047) y, en la misma transacción, en\nla conexión `webchat` del negocio (ADR-0115 §4, doble escritura hasta el *contract*:\n`chat_web_conexion`). El primer guardado crea la conexión con sus instancias de agentes\nsi el negocio ya las tiene (HU-AOS-11 parte 2).",
         "operationId": "save_web_chat_settings_api_v1_admin_settings_web_chat_put",
         "parameters": [
           {
@@ -84692,6 +84692,11 @@
             "title": "Turnstile Configured",
             "default": false
           },
+          "turnstile_site_key": {
+            "type": "string",
+            "title": "Turnstile Site Key",
+            "default": ""
+          },
           "snippet": {
             "type": "string",
             "title": "Snippet",
@@ -84700,7 +84705,7 @@
         },
         "type": "object",
         "title": "WebChatSettings",
-        "description": "Configuración del chat web embebible (HU-CHAN-02). El secreto de Turnstile\nNUNCA se devuelve; solo si está configurado (`turnstile_configured`)."
+        "description": "Configuración del chat web embebible (HU-CHAN-02). El secreto de Turnstile\nNUNCA se devuelve; solo si está configurado (`turnstile_configured`). La site key\nes pública (la necesita el widget para pedir el token)."
       },
       "WebChatUpdate": {
         "properties": {
@@ -84716,6 +84721,17 @@
             "type": "array",
             "title": "Allowed Origins",
             "default": []
+          },
+          "turnstile_site_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turnstile Site Key"
           },
           "turnstile_secret": {
             "anyOf": [

@@ -131,10 +131,10 @@ async def _resolve_by_key(key: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
     `channel_connections` y `app_settings` tienen RLS forzada y la ruta pública no tiene tenant
     fijado: se resuelve con funciones `SECURITY DEFINER` que no permiten enumerar.
 
-    1. La conexión `webchat` (ADR-0115 §4): `webchat_resolve(text)` (0086) devuelve solo lo no
-       secreto (negocio, conexión, habilitada, dominios y si hay secreto de Turnstile). `config`
-       lleva `connection_id` y `turnstile` (bool); el secreto lo lee el POST con RLS
-       (`_secreto_turnstile`).
+    1. La conexión `webchat` (ADR-0115 §4): `webchat_resolve(text)` (0086/0159) devuelve solo lo
+       no secreto (negocio, conexión, habilitada, dominios, si hay secreto de Turnstile y su site
+       key pública). `config` lleva `connection_id`, `turnstile` (bool) y `turnstile_site_key`; el
+       secreto lo lee el POST con RLS (`_secreto_turnstile`).
     2. Si el negocio nunca tuvo una conexión `webchat` (antes del backfill), `web_chat_resolve`
        (0048) sobre `app_settings`, como antes; `config` trae ahí el secreto. Se retira en el
        *contract*.
@@ -145,7 +145,8 @@ async def _resolve_by_key(key: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
         fila = (
             await session.execute(
                 text(
-                    "select tenant_id, connection_id, active, allowed_origins, has_secret from webchat_resolve(:k)"
+                    "select tenant_id, connection_id, active, allowed_origins, has_secret, "
+                    "turnstile_site_key from webchat_resolve(:k)"
                 ),
                 {"k": key},
             )
@@ -156,6 +157,7 @@ async def _resolve_by_key(key: str) -> tuple[uuid.UUID, dict[str, Any]] | None:
             "enabled": bool(fila[2]),
             "allowed_origins": [str(o) for o in origenes if o] if isinstance(origenes, list) else [],
             "turnstile": bool(fila[4]),
+            "turnstile_site_key": _norm(fila[5]),
             "connection_id": fila[1],
         }
 
@@ -212,6 +214,9 @@ async def web_chat_config(key: str) -> JSONResponse:
             "enabled": True,
             "allowed_origins": list(config.get("allowed_origins", [])),
             "turnstile": bool(config.get("turnstile") or config.get("turnstile_secret")),
+            # Pública: el widget la necesita para renderizar Turnstile. Vacía = el negocio no
+            # tiene la protección configurada (o le falta la site key: el panel lo avisa).
+            "turnstile_site_key": _norm(config.get("turnstile_site_key")),
             "marca_propia": await _marca_propia(tenant_id),
         }
     )

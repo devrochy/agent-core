@@ -269,18 +269,21 @@ class SkillsUpdate(BaseModel):
 
 class WebChatSettings(BaseModel):
     """Configuración del chat web embebible (HU-CHAN-02). El secreto de Turnstile
-    NUNCA se devuelve; solo si está configurado (`turnstile_configured`)."""
+    NUNCA se devuelve; solo si está configurado (`turnstile_configured`). La site key
+    es pública (la necesita el widget para pedir el token)."""
 
     enabled: bool = False
     key: str = ""  # clave pública que va en el fragmento del widget
     allowed_origins: list[str] = []
     turnstile_configured: bool = False
+    turnstile_site_key: str = ""  # site key pública de Turnstile ("" = sin protección)
     snippet: str = ""  # fragmento <script> listo para pegar
 
 
 class WebChatUpdate(BaseModel):
     enabled: bool = False
     allowed_origins: list[str] = []
+    turnstile_site_key: str | None = None  # None = no tocar; "" = borrar
     turnstile_secret: str | None = None  # None = no tocar; "" = borrar
     rotate_key: bool = False
 
@@ -310,6 +313,24 @@ def _available_guardrails(enabled: set[str]) -> list[str]:
     verificador del core (ADR-0119): sin ellos, guardar la configuración borraría lo que el negocio había
     apagado."""
     return sorted({g.name for g in mcp_host.get_guardrails() if g.plugin_id in enabled} | set(TOGGLES))
+
+
+_TURNSTILE_SITE_KEY = re.compile(r"^0x[0-9A-Za-z_-]{10,80}$")
+
+
+def _normalize_turnstile_site_key(value: str | None) -> str | None:
+    """Site key pública de Turnstile: `None` = no tocar, `""` = borrar. Se valida el
+    formato para no guardar cualquier texto que luego se pinte como atributo."""
+    if value is None:
+        return None
+    site_key = value.strip()
+    if not site_key:
+        return ""
+    if not _TURNSTILE_SITE_KEY.fullmatch(site_key):
+        raise ApiError(
+            422, "turnstile_site_key", "La site key de Turnstile no tiene un formato válido."
+        )
+    return site_key
 
 
 def _normalize_origins(origins: list[str]) -> list[str]:
@@ -344,6 +365,7 @@ def _web_chat_out(app_settings: AppSettings | None) -> WebChatSettings:
         key=key,
         allowed_origins=list(config.get("allowed_origins", []) or []),
         turnstile_configured=bool(str(config.get("turnstile_secret", "") or "").strip()),
+        turnstile_site_key=str(config.get("turnstile_site_key", "") or "").strip(),
         snippet=snippet,
     )
 
@@ -992,17 +1014,18 @@ async def save_web_chat_settings(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
 ) -> WebChatSettings:
     """Habilita/deshabilita el chat web, edita dominios permitidos, rota la clave
-    o cambia el secreto de Turnstile. Se guarda en `app_settings.web_chat_config`
-    (JSONB, migración 0047) y, en la misma transacción, en la conexión `webchat` del
-    negocio (ADR-0115 §4, doble escritura hasta el *contract*: `chat_web_conexion`). El
-    primer guardado crea la conexión con sus instancias de agentes si el negocio ya las
-    tiene (HU-AOS-11 parte 2)."""
+    o cambia la protección de Turnstile (site key + secret key). Se guarda en
+    `app_settings.web_chat_config` (JSONB, migración 0047) y, en la misma transacción, en
+    la conexión `webchat` del negocio (ADR-0115 §4, doble escritura hasta el *contract*:
+    `chat_web_conexion`). El primer guardado crea la conexión con sus instancias de agentes
+    si el negocio ya las tiene (HU-AOS-11 parte 2)."""
     from sqlalchemy.exc import IntegrityError
 
     from core.gateway import chat_web_conexion
 
     if principal.tenant_id is None:
         raise ApiError.bad_request("Selecciona un negocio.", code="no_tenant")
+    site_key = _normalize_turnstile_site_key(payload.turnstile_site_key)
     try:
         async with get_session() as session:
             # Estado previo y nuevo dentro de la misma transacción, bajo el candado de `app_settings`.
@@ -1013,9 +1036,12 @@ async def save_web_chat_settings(
                 enabled=bool(payload.enabled),
                 allowed_origins=_normalize_origins(payload.allowed_origins),
                 rotar_clave=bool(payload.rotate_key),
+                turnstile_site_key=site_key,
                 turnstile_secret=payload.turnstile_secret,
             )
             despues = await chat_web_conexion.estado_bajo_candado(session, principal.tenant_id)
+    except chat_web_conexion.TurnstileIncompleto as exc:
+        raise ApiError(422, "turnstile_incompleta", str(exc)) from None
     except (QuotaExceeded, PlanNoIncluye) as exc:
         # Habilitar el widget es un alta de conexión (ADR-0208 §8-9, HU-BILL-19): no se guardó nada.
         raise plan_limit_error(exc) from None
