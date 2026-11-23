@@ -231,6 +231,7 @@ def _tool(nombre: str, descripcion: str, propiedades: dict[str, Any], requeridos
         plugin_id="core",
         # El comando no escribe: abre una tarea/procedimiento; sus acciones pasan por el sandbox.
         solo_lectura=True,
+        side_effect="read",
     )
 
 

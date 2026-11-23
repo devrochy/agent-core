@@ -38,6 +38,7 @@ class KnowledgeModule(BaseModule):
         "`buscar_conocimiento` y a sus playbooks `conocimiento`: responderá con esos documentos."
     )
     declared_skills: ClassVar[list[type]] = [KnowledgeSkill]
+    grupos_de_acciones: ClassVar[dict[str, str]] = {"buscar_conocimiento": "conocimiento"}
 
     def admin_api_routes(self) -> list[Any]:
         return [admin_api_router]

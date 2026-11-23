@@ -1,7 +1,7 @@
 """Presets v2: agentes especialistas desde plantillas y reglas del Coordinador (ADR-0139, HU-AOS-46).
 
 `aplicar_agentes(tenant_id, manifest, ...)` instala en un negocio del Agent OS los agentes «para un
-fin» de un preset v2 (`PresetManifest.agentes`, plantillas en `core/presets/plantillas/`):
+fin» de un preset v2 (`PresetManifest.agentes`, tipos de agente en el manifiesto de cada pack, ADR-0207 §1):
 
 1. Un manifiesto sin `agentes` (v1) no hace nada (no-op con motivo).
 2. **Precondiciones (D-35: un agente publicado tiene al menos una conexión):** el Coordinador y el

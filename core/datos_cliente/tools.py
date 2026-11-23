@@ -114,6 +114,7 @@ class DatosClienteSkill(BaseSkill):
                 handler=self.consultar,
                 connection_predicate=_hay_acciones,
                 solo_lectura=True,
+                side_effect="read",
             )
         ]
 

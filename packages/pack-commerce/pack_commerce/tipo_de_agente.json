@@ -2,23 +2,38 @@
   "key": "ventas",
   "nombre": "Ventas",
   "descripcion": "Vende el catálogo del negocio: pedidos, cotizaciones y links de pago.",
-  "captar_leads": true,
   "seccion": "Ventas",
-  "habilidades": [
+  "habilidades_obligatorias": [
     "pack_commerce"
   ],
-  "opcionales": [
+  "habilidades_opcionales": [
     "pack_payments"
   ],
-  "procedimientos": [
+  "captar_leads": true,
+  "procedimientos_por_defecto": [
     "pack_commerce.tomar_pedido",
     "pack_commerce.pago_en_linea",
     "pack_commerce.comprobar_transferencia"
   ],
-  "playbooks": [
+  "playbooks_por_defecto": [
     "ventas",
     "seguimiento",
     "pagos"
+  ],
+  "flujo_por_defecto": [],
+  "reglas": [
+    {
+      "id": "preset_ventas_palabras",
+      "when": {
+        "keywordAny": [
+          "comprar",
+          "hacer un pedido",
+          "precio",
+          "cotización",
+          "link de pago"
+        ]
+      }
+    }
   ],
   "preguntas": [
     {
@@ -50,19 +65,5 @@
   ],
   "preguntas_retiradas": [
     "que_vendes"
-  ],
-  "reglas": [
-    {
-      "id": "preset_ventas_palabras",
-      "when": {
-        "keywordAny": [
-          "comprar",
-          "hacer un pedido",
-          "precio",
-          "cotización",
-          "link de pago"
-        ]
-      }
-    }
   ]
 }

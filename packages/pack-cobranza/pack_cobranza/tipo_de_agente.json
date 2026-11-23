@@ -3,9 +3,31 @@
   "nombre": "Cobranza",
   "descripcion": "Atiende la cartera: saldo, estado de cuenta y promesas de pago.",
   "seccion": "Cobranza",
-  "habilidades": ["pack_cobranza"],
-  "procedimientos": ["pack_cobranza.promesa_de_pago"],
-  "playbooks": ["cobranza", "seguimiento-cobranza"],
+  "habilidades_obligatorias": [
+    "pack_cobranza"
+  ],
+  "procedimientos_por_defecto": [
+    "pack_cobranza.promesa_de_pago"
+  ],
+  "playbooks_por_defecto": [
+    "cobranza",
+    "seguimiento-cobranza"
+  ],
+  "flujo_por_defecto": [],
+  "reglas": [
+    {
+      "id": "preset_cobranza_palabras",
+      "when": {
+        "keywordAny": [
+          "saldo",
+          "deuda",
+          "estado de cuenta",
+          "mora",
+          "abono"
+        ]
+      }
+    }
+  ],
   "preguntas": [
     {
       "id": "largo_respuesta",
@@ -33,8 +55,5 @@
         }
       ]
     }
-  ],
-  "reglas": [
-    {"id": "preset_cobranza_palabras", "when": {"keywordAny": ["saldo", "deuda", "estado de cuenta", "mora", "abono"]}}
   ]
 }

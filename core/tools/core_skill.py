@@ -339,6 +339,7 @@ class CoreSkill(BaseSkill):
                 handler=self._escalate_to_human,
                 side_effects=True,
                 simular=sandbox_prueba.simular_escalar,
+                side_effect="irreversible",
             ),
             MCPTool(
                 name="get_customer_profile",
@@ -349,6 +350,7 @@ class CoreSkill(BaseSkill):
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self._get_customer_profile,
                 solo_lectura=True,
+                side_effect="read",
             ),
             MCPTool(
                 name="update_customer_profile",
@@ -369,6 +371,7 @@ class CoreSkill(BaseSkill):
                 handler=self._update_customer_profile,
                 side_effects=True,
                 permite_en_prueba=True,
+                side_effect="write",
             ),
             MCPTool(
                 name="remember_fact",
@@ -385,6 +388,7 @@ class CoreSkill(BaseSkill):
                 handler=self._remember_fact,
                 side_effects=True,
                 permite_en_prueba=True,
+                side_effect="write",
             ),
             MCPTool(
                 name="search_memories",
@@ -402,6 +406,7 @@ class CoreSkill(BaseSkill):
                 },
                 handler=self._search_memories,
                 solo_lectura=True,
+                side_effect="read",
             ),
             MCPTool(
                 name="load_playbook",
@@ -417,6 +422,7 @@ class CoreSkill(BaseSkill):
                 },
                 handler=self._load_playbook,
                 solo_lectura=True,
+                side_effect="read",
             ),
             MCPTool(
                 name="get_conversation_usage",
@@ -427,6 +433,7 @@ class CoreSkill(BaseSkill):
                 parameters={"type": "object", "properties": {}, "required": []},
                 handler=self._get_conversation_usage,
                 solo_lectura=True,
+                side_effect="read",
             ),
             MCPTool(
                 name="set_conversation_note",
@@ -442,6 +449,7 @@ class CoreSkill(BaseSkill):
                 handler=self._set_conversation_note,
                 side_effects=True,
                 permite_en_prueba=True,
+                side_effect="write",
             ),
             MCPTool(
                 name="send_email",
@@ -463,6 +471,7 @@ class CoreSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_email,
                 requires_connection_types=["email_smtp"],
+                side_effect="irreversible",
             ),
             MCPTool(
                 name="enviar_plantilla_opciones",
@@ -490,7 +499,8 @@ class CoreSkill(BaseSkill):
                 # Solo se ofrece (y se ejecuta) con la bandera `opciones_directas` del negocio encendida.
                 connection_predicate=oferta_habilitada,
                 # NO `apta_para_opcion` (default False): una opción no puede enviar otra plantilla de opciones
-                # (evita bucles de botón que envía botones), y el lint la rechaza como `tool_no_apta`.
+                # (evita bucles de botón que envía botones), y el lint la rechaza como `tool_no_apta`.,
+                side_effect="irreversible",
             ),
             MCPTool(
                 name="pedir_telefono",
@@ -522,6 +532,7 @@ class CoreSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_pedir_telefono,
                 connection_predicate=hay_canal_que_pide_contacto,
+                side_effect="irreversible",
             ),
         ]
 

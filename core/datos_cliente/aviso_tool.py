@@ -43,6 +43,7 @@ class AvisoDatosSkill(BaseSkill):
                 side_effects=True,
                 permite_en_prueba=True,
                 connection_predicate=_aviso_encendido,
+                side_effect="write",
             )
         ]
 

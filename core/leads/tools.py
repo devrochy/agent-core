@@ -152,6 +152,7 @@ class LeadSkill(BaseSkill):
                 crea_registro=RegistroCreado(
                     kind="lead", id_key="lead_id", es_nuevo=lambda r: r.get("status") == "created"
                 ),
+                side_effect="write",
             ),
             MCPTool(
                 name="calificar_lead",
@@ -172,6 +173,7 @@ class LeadSkill(BaseSkill):
                 handler=self.calificar_lead,
                 side_effects=True,
                 simular=sandbox_prueba.simular_calificar_lead,
+                side_effect="write",
             ),
             MCPTool(
                 name="actualizar_lead",
@@ -208,6 +210,7 @@ class LeadSkill(BaseSkill):
                 handler=self.actualizar_lead,
                 side_effects=True,
                 simular=sandbox_prueba.simular_actualizar_lead,
+                side_effect="write",
             ),
         ]
 

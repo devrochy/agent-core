@@ -1070,6 +1070,7 @@ class CRMModule(BaseModule):
         "consultar_estado_pedido": "pedidos",
         "confirmar_pago_pedido": "pagos",
         "verificar_pago_pedido": "pagos",
+        "comprobar_comprobante": "pagos",
         "consultar_inventario": "catalogo",
         "recomendar_producto": "catalogo",
         "aplicar_promocion": "catalogo",

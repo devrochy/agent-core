@@ -578,6 +578,7 @@ class CalendarSkill(BaseSkill):
                     kind="cita", id_key="event_id", es_nuevo=lambda r: r.get("status") == "created"
                 ),
                 connection_predicate=self._connections_ok,
+                side_effect="write",
             ),
             MCPTool(
                 name="check_availability",
@@ -611,6 +612,7 @@ class CalendarSkill(BaseSkill):
                 handler=self.check_availability,
                 solo_lectura=True,
                 connection_predicate=self._connections_ok,
+                side_effect="read",
             ),
             MCPTool(
                 name="find_next_available",
@@ -646,6 +648,7 @@ class CalendarSkill(BaseSkill):
                 handler=self.find_next_available,
                 solo_lectura=True,
                 connection_predicate=self._connections_ok,
+                side_effect="read",
             ),
             MCPTool(
                 name="update_calendar_event",
@@ -686,6 +689,7 @@ class CalendarSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_update_event,
                 connection_predicate=self._connections_ok,
+                side_effect="write",
             ),
             MCPTool(
                 name="list_client_appointments",
@@ -718,6 +722,7 @@ class CalendarSkill(BaseSkill):
                 # procedimiento la nombra, así que (a diferencia de `find_next_available`) la regla de «tool gobernada
                 # por un procedimiento» no la deja fuera.
                 apta_para_opcion=True,
+                side_effect="read",
             ),
             MCPTool(
                 name="cancel_calendar_event",
@@ -755,6 +760,7 @@ class CalendarSkill(BaseSkill):
                 simular=sandbox_prueba.simular_cancel_event,
                 sensible=True,
                 connection_predicate=self._connections_ok,
+                side_effect="irreversible",
             ),
             MCPTool(
                 name="list_calendars",
@@ -769,6 +775,7 @@ class CalendarSkill(BaseSkill):
                 handler=self.list_calendars,
                 solo_lectura=True,
                 connection_predicate=self._predicado_multi,
+                side_effect="read",
             ),
             MCPTool(
                 name="list_appointment_types",
@@ -781,6 +788,7 @@ class CalendarSkill(BaseSkill):
                 handler=self.list_appointment_types,
                 solo_lectura=True,
                 connection_predicate=self._connections_ok,
+                side_effect="read",
             ),
         ]
 
