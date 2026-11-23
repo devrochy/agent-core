@@ -47,7 +47,7 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.0",
     "questionary>=2.0",
-    "sentry-sdk>=2.69.2",
+    "sentry-sdk>=2.69.2,<3",
     # Utilidades (QR de pago, ADR-0067)
     "qrcode[png]>=7.4",
     # Catálogo del centro de pruebas (SPEC-30): YAML de solvershub-docs
