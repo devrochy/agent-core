@@ -49,7 +49,7 @@ import json
 import uuid
 from typing import Annotated, Any, Literal
 
-from agentcore_contracts import AgentSpecV3, DeclarativeTool, GuardrailRule
+from agentcore_contracts import DeclarativeTool, GuardrailRule
 from fastapi import APIRouter, Depends, Path, Query, status
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -995,13 +995,14 @@ def _guardrails_out(borrador: Any) -> AgentGuardrailsOut:
 
 
 async def _declarativas_out(tid: uuid.UUID, borrador: Any) -> AgentDeclarativeToolsOut:
+    from core.agents.credenciales import referencias_en_body, referencias_en_url
     from core.agents.secretos import secretos_configurados
-    from core.agents.turno import declarativas_omitidas
 
     contenido = dict(borrador.content or {})
     tools = [DeclarativeTool.model_validate(t) for t in contenido.get("declarativeTools") or []]
     configurados = await secretos_configurados(tid)
-    omitidas = declarativas_omitidas(AgentSpecV3.model_validate(contenido)) if tools else []
+    # El mismo criterio que `turno.declarativas_omitidas`, sin validar el resto del borrador.
+    omitidas = sorted(t.name for t in tools if referencias_en_url(t.url) or referencias_en_body(t.body))
     return AgentDeclarativeToolsOut(
         tools=tools,
         secrets=[ConfiguredSecret(name=n, domains=d) for n, d in sorted(configurados.items())],
