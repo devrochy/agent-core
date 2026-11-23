@@ -1590,6 +1590,15 @@ class SubscriptionPayment(Base):
         CheckConstraint(
             "concepto <> 'recarga' OR periodo IS NULL", name="ck_subscription_payments_recarga_sin_periodo"
         ),
+        # Migración 0158: una transacción aprobada del proveedor se aplica a UN solo pago. Global a propósito
+        # (sin `tenant_id`): el reenvío que frena es entre negocios y la RLS no deja ver la fila ajena.
+        Index(
+            "uq_subscription_payments_transaccion",
+            "provider",
+            "provider_transaction_id",
+            unique=True,
+            postgresql_where=text("provider_transaction_id is not null"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -1601,6 +1610,8 @@ class SubscriptionPayment(Base):
     status: Mapped[str] = mapped_column(Text, default="pendiente")
     provider: Mapped[str] = mapped_column(Text)
     provider_reference: Mapped[str] = mapped_column(Text)
+    # `transaction.id` FIRMADO del evento que aprobó el pago (migración 0158); null mientras no se aprueba.
+    provider_transaction_id: Mapped[str | None] = mapped_column(Text, default=None)
     periodo: Mapped[str | None] = mapped_column(Text, default=None)
     # ADR-0209 §4 (HU-BILL-23): `plan` (pago del plan) | `recarga` (paquete de créditos). Una recarga lleva
     # `periodo` null, `plan_id` = el plan vigente al comprar y `creditos` > 0; un pago del plan, `creditos`

@@ -43,6 +43,7 @@ from core.gateway.webhook_verify import constant_time_equal
 from core.memory.working import get_redis
 from core.shared.logger import get_logger
 from core.shared.tenant import tenant_scope
+from core.shared.wompi_firma import firma_cubre_lo_obligatorio
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
@@ -952,6 +953,17 @@ async def receive_billing_wompi(request: Request) -> Response:
 
     if not provider.verify_webhook_signature(payload):
         log.warning("billing_webhook_signature_invalid")
+        if isinstance(payload, dict) and payload.get("signature") and not firma_cubre_lo_obligatorio(payload):
+            # Si Wompi dejara de firmar el id, el estado o el monto, ningún pago entraría: que se vea.
+            from core.shared.alerts import send_alert_once
+
+            await send_alert_once(
+                "billing_webhook_firma_incompleta",
+                "Evento de Wompi con firma incompleta",
+                "Llegó un evento cuya firma no cubre transaction.id, transaction.status y "
+                "transaction.amount_in_cents. Se rechazó (401): revisar si Wompi cambió las propiedades firmadas.",
+                severity="critical",
+            )
         return Response(status_code=401)
 
     event = provider.parse_webhook_event(payload)
@@ -959,7 +971,7 @@ async def receive_billing_wompi(request: Request) -> Response:
         log.warning("billing_webhook_sin_referencia")
         return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
 
-    from core.billing.checkout import apply_payment, tenant_del_pago
+    from core.billing.checkout import TransaccionYaAplicada, apply_payment, tenant_del_pago
 
     try:
         tenant_id = await tenant_del_pago(event.provider_reference)
@@ -979,7 +991,21 @@ async def receive_billing_wompi(request: Request) -> Response:
             status=event.status,
             tenant_id=tenant_id,
             amount_in_cents=_monto_firmado(payload, event.amount_in_cents),
+            transaction_id=event.transaction_id,
         )
+    except TransaccionYaAplicada as exc:
+        # Un evento aprobado de una transacción que ya aprobó otro pago, reenviado con otro link: no se aplica
+        # y no se reintenta (200). Se alerta: o es un reenvío malicioso o el proveedor cambió algo.
+        from core.shared.alerts import send_alert
+
+        log.error("billing_webhook_transaccion_repetida", tenant_id=str(exc.tenant_id))
+        await send_alert(
+            "Pago de plataforma con una transacción ya usada",
+            f"Negocio {exc.tenant_id}, link {event.provider_reference}: llegó aprobada la transacción "
+            f"{exc.transaction_id}, que ya había aprobado otro pago. No se aplicó: revisarlo.",
+            severity="critical",
+        )
+        return Response(status_code=200, content=json.dumps({"status": "ignored"}), media_type="application/json")
     except Exception:
         log.exception("billing_webhook_apply_failed")
         # 500 a propósito: Wompi reintenta el evento.

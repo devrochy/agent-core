@@ -36,22 +36,48 @@ def _signed_payload(properties: list[str], data: dict, timestamp: int, secret: s
     }
 
 
+_FIRMADAS = ["transaction.id", "transaction.status", "transaction.amount_in_cents"]
+_TX = {"id": "tx-1", "status": "APPROVED", "amount_in_cents": 12_900_000, "payment_link_id": "link-1"}
+
+
 def test_verify_webhook_signature_valida():
     provider = _provider()
-    payload = _signed_payload(
-        ["transaction.status"],
-        {"transaction": {"status": "APPROVED", "payment_link_id": "link-1"}},
-        timestamp=1700000000,
-        secret="events_secret",
-    )
+    payload = _signed_payload(_FIRMADAS, {"transaction": dict(_TX)}, timestamp=1700000000, secret="events_secret")
     assert provider.verify_webhook_signature(payload) is True
+
+
+@pytest.mark.parametrize("falta", _FIRMADAS)
+def test_verify_webhook_signature_exige_id_estado_y_monto_firmados(falta):
+    """Un checksum válido que no cubre el id, el estado o el monto no autentica el pago (revisión de SPEC-51)."""
+    provider = _provider()
+    propiedades = [p for p in _FIRMADAS if p != falta]
+    payload = _signed_payload(propiedades, {"transaction": dict(_TX)}, timestamp=1700000000, secret="events_secret")
+    assert provider.verify_webhook_signature(payload) is False
+
+
+def test_verify_webhook_signature_rechaza_estado_cambiado():
+    """Con el estado firmado, cambiar DECLINED por APPROVED rompe la firma."""
+    provider = _provider()
+    payload = _signed_payload(
+        _FIRMADAS, {"transaction": {**_TX, "status": "DECLINED"}}, timestamp=1700000000, secret="events_secret"
+    )
+    payload["data"]["transaction"]["status"] = "APPROVED"
+    assert provider.verify_webhook_signature(payload) is False
+
+
+def test_parse_webhook_trae_el_id_solo_si_esta_firmado():
+    provider = _provider()
+    firmado = _signed_payload(_FIRMADAS, {"transaction": dict(_TX)}, timestamp=1700000000, secret="events_secret")
+    assert provider.parse_webhook_event(firmado).transaction_id == "tx-1"
+    sin_id = _signed_payload(_FIRMADAS[1:], {"transaction": dict(_TX)}, timestamp=1700000000, secret="events_secret")
+    assert provider.parse_webhook_event(sin_id).transaction_id is None
 
 
 def test_verify_webhook_signature_rechaza_secret_incorrecto():
     provider = _provider()
     payload = _signed_payload(
-        ["transaction.status"],
-        {"transaction": {"status": "APPROVED"}},
+        _FIRMADAS,
+        {"transaction": dict(_TX)},
         timestamp=1700000000,
         secret="otro-secret",
     )
