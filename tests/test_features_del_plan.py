@@ -73,6 +73,7 @@ async def test_config_publica_del_widget_expone_marca_propia(monkeypatch) -> Non
         "enabled": True,
         "allowed_origins": ["https://a.test"],
         "turnstile": False,
+        "turnstile_site_key": "",
         "marca_propia": True,
     }
     estado["plan"] = "basic"
