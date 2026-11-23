@@ -220,6 +220,15 @@ def validar_catalogo(modules: Iterable[Any]) -> list[str]:
             _ver(tool, str(module.id), grupos.get(tool.name, ""))
 
     textos = _textos_del_core()
+    # Toda tool del core (salvo las que despacha un pack) está en una habilidad `core:*`: si no, el catálogo la
+    # dejaría fuera sin aviso.
+    from core.mcp.host import TOOLS_DEL_CORE_POR_PACK
+
+    con_habilidad = {t for h in textos.values() for t in h.get("tools", ())}
+    for skill in [*_core_skills(), *_skills_del_core_fuera_del_linter()]:
+        for tool in skill.get_tools():
+            if tool.name not in con_habilidad and not tool.name.startswith(tuple(TOOLS_DEL_CORE_POR_PACK)):
+                problemas.append(f"la tool del core {tool.name!r} no está en ninguna habilidad del core")
     habilidades = {*textos, *(str(m.id) for m in modulos)}
     catalogo = catalogo_de_acciones(modulos)
     for tipo in tipos_de_agente(modulos).values():

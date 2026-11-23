@@ -125,3 +125,7 @@ admite y obligue a tocar el core, o que la validación de arranque bloquee un de
   (`core:datos_cliente`), pero no al catálogo del linter: así no cambia qué acciones admite un procedimiento.
 - La validación de arranque solo mira el core y los packs de la plataforma (`es_de_plataforma`). Un plugin de un
   negocio nunca frena un despliegue.
+- Los comandos del hilo (`core/kernel/procedures/comandos.py`) no están en `core:operacion`: se arman por
+  procedimiento en cada turno y no caben en un catálogo estático. Igual declaran `side_effect = "read"`.
+- `validar_catalogo` también falla si una tool del core (salvo las `sub_*`, que despacha un pack) no está en ninguna
+  habilidad `core:*`. Así una tool nueva del core no queda fuera del catálogo sin aviso.

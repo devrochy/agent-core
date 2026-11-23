@@ -93,10 +93,10 @@ def test_flujo_por_defecto_con_una_seccion_inexistente_falla(tmp_path) -> None:
 
 
 def test_el_manifiesto_no_admite_campos_desconocidos() -> None:
-    with pytest.raises(ValueError):
-        AgentTypeManifest.model_validate(
-            {**load_plantilla("cobranza").model_dump(), "prompt": "Eres el mejor cobrador"}
-        )
+    base = tipos_de_agente()["cobranza"].model_dump()
+    AgentTypeManifest.model_validate(base)  # el manifiesto real es válido: el error es solo por `prompt`
+    with pytest.raises(ValueError, match="prompt"):
+        AgentTypeManifest.model_validate({**base, "prompt": "Eres el mejor cobrador"})
 
 
 # ------------------------------------------------------------- cada habilidad declara sus tools
@@ -169,6 +169,15 @@ def test_validacion_detecta_procedimiento_con_accion_ajena(modulos, monkeypatch)
     roto = reales["agenda"].model_copy(update={"procedimientos_por_defecto": ["pack_commerce.tomar_pedido"]})
     monkeypatch.setattr(tipos_mod, "tipos_de_agente", lambda _m=None: {**reales, "agenda": roto})
     assert any("no está en las habilidades del tipo" in p for p in validar_catalogo(modulos))
+
+
+def test_validacion_detecta_tool_del_core_sin_habilidad(modulos, monkeypatch) -> None:
+    import core.kernel.procedures.catalogo as catalogo_mod
+
+    textos = catalogo_mod._textos_del_core()
+    sin_leads = {k: ({**v, "tools": []} if k == "core:leads" else v) for k, v in textos.items()}
+    monkeypatch.setattr(catalogo_mod, "_textos_del_core", lambda: sin_leads)
+    assert any("'crear_lead'" in p and "ninguna habilidad del core" in p for p in validar_catalogo(modulos))
 
 
 def test_validacion_ignora_los_plugins_de_un_negocio(modulos) -> None:
