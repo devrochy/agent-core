@@ -33,6 +33,7 @@ from core.billing.providers.base import (
 )
 from core.payments.wompi_minimo import min_amount_cop
 from core.shared.logger import get_logger
+from core.shared.wompi_firma import firma_cubre_lo_obligatorio, transaccion_firmada
 
 log = get_logger(__name__)
 
@@ -130,6 +131,10 @@ class WompiBillingProvider(BaseBillingProvider):
         data = payload.get("data") or {}
         if not properties or not checksum or timestamp is None:
             return False
+        # Un checksum válido sobre otras propiedades no autentica el id, el estado ni el monto (hallazgo de
+        # SPEC-51): sin las tres firmadas, el evento no vale.
+        if not firma_cubre_lo_obligatorio(payload):
+            return False
 
         parts: list[str] = []
         for dotted_path in properties:
@@ -155,4 +160,5 @@ class WompiBillingProvider(BaseBillingProvider):
             status=_STATUS_MAP.get(raw_status, "pendiente"),
             amount_in_cents=transaction.get("amount_in_cents"),
             raw=payload,
+            transaction_id=transaccion_firmada(payload),
         )

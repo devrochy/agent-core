@@ -18,11 +18,14 @@ Es el **canal panel** del cobro de la plataforma (HU-SH-04, ADR-0123):
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 
 from core.billing.periodos import Periodo, periodo_a_cobrar, referencia_del_periodo, ventana_mensual
 from core.billing.plans import (
@@ -420,12 +423,35 @@ async def _acreditar_recarga(session, tid: uuid.UUID, payment: SubscriptionPayme
     return "acreditada" if resultado.rowcount else "ya_acreditada"
 
 
+class TransaccionYaAplicada(Exception):
+    """La transacción del proveedor ya aprobó otro pago (índice `uq_subscription_payments_transaccion`): el evento
+    se reenvió con otro link. No se aplicó nada; el webhook responde 200 (reintentar no lo arregla) y alerta."""
+
+    def __init__(self, tenant_id: uuid.UUID, transaction_id: str | None) -> None:
+        super().__init__(f"transacción {transaction_id} ya aplicada a otro pago (negocio {tenant_id})")
+        self.tenant_id = tenant_id
+        self.transaction_id = transaction_id
+
+
+@asynccontextmanager
+async def _transaccion_unica(tid: uuid.UUID, transaction_id: str | None) -> AsyncIterator[None]:
+    """Traduce la violación del índice único de la transacción a `TransaccionYaAplicada`; cualquier otro
+    `IntegrityError` sigue igual."""
+    try:
+        yield
+    except IntegrityError as exc:
+        if "uq_subscription_payments_transaccion" not in str(exc.orig):
+            raise
+        raise TransaccionYaAplicada(tid, transaction_id) from None
+
+
 async def apply_payment(
     *,
     provider_reference: str,
     status: str,
     amount_in_cents: int | None,
     tenant_id: uuid.UUID | None = None,
+    transaction_id: str | None = None,
 ) -> bool:
     """Aplica un evento de pago (idempotente). True si actualizó algo.
 
@@ -435,6 +461,11 @@ async def apply_payment(
     (no el cobro de la renovación ni un pago del asistente). `amount_in_cents` es el monto
     FIRMADO por el proveedor: si falta o no es el del link, queda `monto_distinto` y se alerta
     (como en `pack_payments`).
+
+    `transaction_id` es el id FIRMADO de la transacción del proveedor: se guarda en el pago que aprueba y un
+    índice único global (migración 0158) impide que la misma transacción apruebe otro pago, de este negocio o
+    de otro. Si ya aprobó otro, no se aplica nada y se lanza `TransaccionYaAplicada`. Sin él, un evento aprobado
+    no se aplica (el webhook ya exige que la firma lo cubra).
     """
     if not provider_reference:
         return False
@@ -456,7 +487,7 @@ async def apply_payment(
         recarga: str | None = None
         recarga_revertida: str | None = None
         monto_es_recarga = False
-        async with tenant_scope(tid):
+        async with tenant_scope(tid), _transaccion_unica(tid, transaction_id):
             async with get_session() as session:
                 # Mismo orden de candados que el canal asistente (`aplicar_pago_de_periodo`):
                 # primero la suscripción, después el pago. Al revés, los dos podían trabarse.
@@ -486,6 +517,15 @@ async def apply_payment(
                         payment.status = "rechazado"
                         return True
                     return False
+                if recarga_revertida is None:
+                    if not transaction_id:
+                        # Aprobado sin id de transacción firmado: no se puede garantizar que se aplique una sola vez.
+                        log.error("subscription_payment_sin_transaccion", tenant_id=str(tid))
+                        return False
+                    # Se guarda en toda rama que sigue (aplicado, duplicado o monto distinto) y se escribe YA: si la
+                    # transacción ya aprobó otro pago, el índice único salta aquí y no dentro de otro paso.
+                    payment.provider_transaction_id = transaction_id
+                    await session.flush()
                 if recarga_revertida is not None:
                     pass  # no se toca nada: se alerta fuera de la transacción
                 elif amount_in_cents is None or int(amount_in_cents) != round(float(payment.amount_cop) * 100):

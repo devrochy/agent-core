@@ -274,3 +274,10 @@ def test_parse_webhook_event_amount_accepts_numeric_string():
     payload = _make_payload()
     payload["data"]["transaction"]["amount_in_cents"] = "4490000"
     assert _provider().parse_webhook_event(payload).amount == 44_900.0
+
+
+@pytest.mark.parametrize("falta", ["transaction.id", "transaction.status", "transaction.amount_in_cents"])
+def test_firma_que_no_cubre_id_estado_y_monto_no_vale(falta):
+    """Como el webhook de la plataforma: un checksum válido sobre menos propiedades no autentica el pago."""
+    propiedades = [p for p in ["transaction.id", "transaction.status", "transaction.amount_in_cents"] if p != falta]
+    assert _provider().verify_webhook_signature(_make_payload(properties=propiedades)) is False

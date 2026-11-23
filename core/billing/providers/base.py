@@ -47,6 +47,8 @@ class BillingWebhookEvent:
     status: str  # normalizado: pendiente | aprobado | rechazado
     amount_in_cents: int | None
     raw: dict[str, Any]
+    # Id de la transacción del proveedor, solo si la firma lo cubre: un mismo pago aprobado no se aplica dos veces.
+    transaction_id: str | None = None
 
 
 class BaseBillingProvider(ABC):

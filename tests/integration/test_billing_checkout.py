@@ -116,7 +116,7 @@ async def test_apply_payment_aprobado_activa(monkeypatch):
                 )
             ).scalar_one()
 
-    updated = await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["premium"])
+    updated = await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["premium"], transaction_id=str(uuid.uuid4()))
     assert updated is True
     sub = await get_active_subscription(tid)
     assert sub.plan_id == "premium"
@@ -146,9 +146,9 @@ async def test_apply_payment_idempotente(monkeypatch):
                 )
             ).scalar_one()
 
-    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["basic"]) is True
+    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["basic"], transaction_id=str(uuid.uuid4())) is True
     # Segundo intento del webhook con el MISMO evento: no reaplica.
-    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["basic"]) is False
+    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=_CENTAVOS_POR_PLAN["basic"], transaction_id=str(uuid.uuid4())) is False
     async with tenant_scope(tid):
         async with get_session() as session:
             payment = (
@@ -213,16 +213,25 @@ async def test_payment_aislado_entre_tenants(monkeypatch):
 def _signed_wompi_payload(
     payment_link_id: str, status: str, secret: str, amount_in_cents: int = 12_900_000
 ) -> dict:
-    """Como Wompi: la firma cubre el estado y el monto (ADR-0123 exige el monto firmado)."""
+    """Como Wompi: la firma cubre el id, el estado y el monto (ADR-0123 y la revisión de seguridad de SPEC-51)."""
     timestamp = 1700000000
+    tx = f"tx-{uuid.uuid4().hex[:8]}"
     data = {
-        "transaction": {"payment_link_id": payment_link_id, "status": status, "amount_in_cents": amount_in_cents}
+        "transaction": {
+            "id": tx,
+            "payment_link_id": payment_link_id,
+            "status": status,
+            "amount_in_cents": amount_in_cents,
+        }
     }
     checksum = hashlib.sha256(
-        (str(status) + str(amount_in_cents) + str(timestamp) + secret).encode()
+        (tx + str(status) + str(amount_in_cents) + str(timestamp) + secret).encode()
     ).hexdigest()
     return {
-        "signature": {"properties": ["transaction.status", "transaction.amount_in_cents"], "checksum": checksum},
+        "signature": {
+            "properties": ["transaction.id", "transaction.status", "transaction.amount_in_cents"],
+            "checksum": checksum,
+        },
         "timestamp": timestamp,
         "data": data,
     }
@@ -321,7 +330,7 @@ async def test_apply_payment_sin_monto_firmado_no_activa(monkeypatch):
                     select(SubscriptionPayment.provider_reference).where(SubscriptionPayment.tenant_id == tid)
                 )
             ).scalar_one()
-    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=None) is False
+    assert await checkout.apply_payment(provider_reference=ref, status="aprobado", amount_in_cents=None, transaction_id=str(uuid.uuid4())) is False
     sub = await get_active_subscription(tid)
     assert sub.plan_id == "free"
     async with tenant_scope(tid):
