@@ -32,6 +32,13 @@ def set_current_tenant_id(tenant_id: uuid.UUID | None) -> None:
     _current_tenant_id.set(str(tenant_id) if tenant_id is not None else None)
 
 
+def exigir_tenant_scope(tenant_id: uuid.UUID, que: str) -> None:
+    """Falla si el `tenant_scope` activo no es el de `tenant_id`. Para quien lee con la sesión de otro: con otro
+    negocio en contexto la RLS devolvería vacío en silencio y el candado se abriría ("sin suscripción")."""
+    if get_current_tenant_id() != tenant_id:
+        raise RuntimeError(f"{que}: fuera del tenant_scope del negocio")
+
+
 @asynccontextmanager
 async def tenant_scope(tenant_id: uuid.UUID | str | None) -> AsyncIterator[None]:
     token = _current_tenant_id.set(str(tenant_id) if tenant_id is not None else None)
