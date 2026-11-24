@@ -105,6 +105,7 @@ class HistorialClienteSkill(BaseSkill):
                 handler=self.consultar,
                 connection_predicate=_hay_modulos,
                 solo_lectura=True,
+                side_effect="read",
             )
         ]
 

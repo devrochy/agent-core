@@ -89,6 +89,7 @@ class KnowledgeSkill(BaseSkill):
         return [
             MCPTool(
                 name=TOOL,
+                side_effect="read",
                 description=(
                     "Busca en los documentos del negocio (preguntas frecuentes, catálogos, políticas) "
                     "la información para responder una pregunta del cliente. Úsala ANTES de responder "

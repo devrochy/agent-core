@@ -1,0 +1,45 @@
+{
+  "_comentario": "Habilidades del core (ADR-0207 §3, HU-AOS-92). Textos de UI para el catálogo: no entran al prompt. Las tools sub_* son de la habilidad pack_subscriptions (TOOLS_DEL_CORE_POR_PACK).",
+  "habilidades": [
+    {
+      "id": "core:datos_cliente",
+      "nombre": "Datos del cliente",
+      "descripcion": "Consulta y guarda los datos y recuerdos del cliente, y pide su teléfono cuando hace falta.",
+      "tools": [
+        "get_customer_profile",
+        "update_customer_profile",
+        "remember_fact",
+        "search_memories",
+        "pedir_telefono",
+        "consultar_datos_cliente",
+        "consultar_historial_cliente",
+        "responder_aviso_datos"
+      ]
+    },
+    {
+      "id": "core:operacion",
+      "nombre": "Operación",
+      "descripcion": "Escala a una persona, deja notas, envía correos y opciones, y consulta playbooks y consumo.",
+      "tools": [
+        "escalate_to_human",
+        "set_conversation_note",
+        "send_email",
+        "enviar_plantilla_opciones",
+        "load_playbook",
+        "get_conversation_usage"
+      ]
+    },
+    {
+      "id": "core:leads",
+      "nombre": "Captar leads",
+      "descripcion": "Crea, califica y actualiza el lead del cliente.",
+      "tools": ["crear_lead", "calificar_lead", "actualizar_lead"]
+    },
+    {
+      "id": "core:recepcion",
+      "nombre": "Recepción del Coordinador",
+      "descripcion": "Las tools fijas con que el Coordinador atiende cuando no hay especialistas.",
+      "tools": []
+    }
+  ]
+}

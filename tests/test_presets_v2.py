@@ -73,7 +73,7 @@ def test_plantillas_validan_procedimientos_y_habilidades_reales() -> None:
 
 
 def test_plantilla_rechaza_prompts_keys_reservadas_y_procedimientos_ajenos() -> None:
-    base = json.loads((presets_mod.PLANTILLAS_DIR / "agenda.json").read_text(encoding="utf-8"))
+    base = load_plantilla("agenda").model_dump(mode="json", by_alias=True, exclude_none=True)
     with pytest.raises(ValidationError):
         PlantillaAgente.model_validate({**base, "prompt": "Eres el mejor vendedor"})
     with pytest.raises(ValidationError):
@@ -352,8 +352,8 @@ def test_acciones_opcionales_de_las_plantillas_existen_en_su_habilidad() -> None
     from core.plugin_manager import plugin_manager
 
     catalogo = catalogo_de_acciones(plugin_manager.scan())
-    for archivo in sorted(presets_mod.PLANTILLAS_DIR.glob("*.json")):
-        plantilla = load_plantilla(archivo.stem)
+    for key in presets_mod.keys_de_plantillas():
+        plantilla = load_plantilla(key)
         for pack, acciones in plantilla.acciones_opcionales.items():
             for accion in acciones:
                 info = catalogo.get(accion)

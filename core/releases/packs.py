@@ -84,7 +84,10 @@ def _tools(module: Any) -> list[dict[str, Any]]:
     tools: dict[str, dict[str, Any]] = {}
     for skill_cls in getattr(module, "declared_skills", None) or []:
         for tool in skill_cls().get_tools():
-            tools.setdefault(tool.name, {"name": tool.name, "scopes": sorted(tool.scopes or ())})
+            # `side_effect` (ADR-0207 §2, ADR-0118 §4): el efecto de cada acción queda en el manifiesto congelado.
+            tools.setdefault(
+                tool.name, {"name": tool.name, "scopes": sorted(tool.scopes or ()), "side_effect": tool.side_effect}
+            )
     return [tools[n] for n in sorted(tools)]
 
 
@@ -112,6 +115,14 @@ def _procedimientos(module: Any) -> list[Any]:
     return crudos(str(module.id))
 
 
+def _tipo_de_agente(module: Any) -> list[dict[str, Any]]:
+    """El tipo de agente que define el pack (ADR-0207 §1), si es de especialidad."""
+    from core.agents.tipos_de_agente import manifiesto_del_modulo
+
+    manifiesto = manifiesto_del_modulo(module)
+    return [manifiesto.model_dump(mode="json")] if manifiesto is not None else []
+
+
 def manifiesto_de_pack(module: Any) -> ManifiestoDePack:
     """Manifiesto de la versión del binario de una habilidad. Determinista: el mismo código
     da el mismo texto y el mismo hash en cualquier proceso."""
@@ -123,7 +134,7 @@ def manifiesto_de_pack(module: Any) -> ManifiestoDePack:
             "flow": _flujo(carpeta),
             "procedures": _procedimientos(module),
             "consultas": [],
-            "agent_templates": [],
+            "agent_templates": _tipo_de_agente(module),
         },
         "requires": {},
     }

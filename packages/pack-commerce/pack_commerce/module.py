@@ -1070,6 +1070,7 @@ class CRMModule(BaseModule):
         "consultar_estado_pedido": "pedidos",
         "confirmar_pago_pedido": "pagos",
         "verificar_pago_pedido": "pagos",
+        "comprobar_comprobante": "pagos",
         "consultar_inventario": "catalogo",
         "recomendar_producto": "catalogo",
         "aplicar_promocion": "catalogo",
@@ -1080,7 +1081,7 @@ class CRMModule(BaseModule):
     config_agente = config_de_agente(CRMConfig, ("scoring_mode", "monto_alto_threshold", "order_status_visible", "order_confirmed_message", "order_confirmed_transfer_message", "completion_claims_disabled", "completion_claims_custom", "payment_forms", "transfer_accounts", "transfer_proof_required", "transfer_ocr_enabled",), "ConfigDeAgenteDeVentas")
     id = PLUGIN_ID
     name = "CRM"
-    version = "4.5.0"  # 4.5: ventas.md remite a las reglas de Captar leads ante un dato que contradice (HU-AOS-70). 4.4: el intake público de leads pasa al core (ADR-0193 §5). 4.3: pago_en_linea no atiende la mensualidad de una suscripción. SPEC-48: segundo comprobante (4.1 instrucciones, 4.2 la acción en «resultado»). ADR-0193: los leads pasan al core (LeadSkill, crons y provider de leads salen del pack)
+    version = "4.6.0"  # 4.6: tipo de agente en el pack y efecto de cada acción (ADR-0207, HU-AOS-92). 4.5: ventas.md remite a las reglas de Captar leads ante un dato que contradice (HU-AOS-70). 4.4: el intake público de leads pasa al core (ADR-0193 §5). 4.3: pago_en_linea no atiende la mensualidad de una suscripción. SPEC-48: segundo comprobante (4.1 instrucciones, 4.2 la acción en «resultado»). ADR-0193: los leads pasan al core (LeadSkill, crons y provider de leads salen del pack)
     description = "Catálogo (menú), promociones, cotizaciones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"

@@ -708,6 +708,7 @@ class CatalogSkill(BaseSkill):
                 },
                 handler=self.consultar_inventario,
                 solo_lectura=True,
+                side_effect="read",
             ),
             MCPTool(
                 name="recomendar_producto",
@@ -725,6 +726,7 @@ class CatalogSkill(BaseSkill):
                 },
                 handler=self.recomendar_producto,
                 solo_lectura=True,
+                side_effect="read",
             ),
         ]
 
@@ -935,6 +937,7 @@ class OrderSkill(BaseSkill):
                 handler=self.generar_cotizacion,
                 side_effects=True,
                 simular=sandbox_prueba.simular_generar_cotizacion,
+                side_effect="write",
             ),
             MCPTool(
                 name="aplicar_promocion",
@@ -953,6 +956,7 @@ class OrderSkill(BaseSkill):
                 handler=self.aplicar_promocion,
                 side_effects=True,
                 simular=sandbox_prueba.simular_aplicar_promocion,
+                side_effect="write",
             ),
             MCPTool(
                 name="confirmar_cotizacion",
@@ -974,6 +978,7 @@ class OrderSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_confirmar_cotizacion,
                 sensible=True,
+                side_effect="irreversible",
             ),
             MCPTool(
                 name="crear_pedido",
@@ -1036,6 +1041,7 @@ class OrderSkill(BaseSkill):
                     label_key="public_order_number",
                     es_nuevo=lambda r: r.get("status") == "confirmed",
                 ),
+                side_effect="write",
             ),
             MCPTool(
                 name="agregar_item_pedido",
@@ -1069,6 +1075,7 @@ class OrderSkill(BaseSkill):
                 handler=self.agregar_item_pedido,
                 side_effects=True,
                 simular=sandbox_prueba.simular_agregar_item_pedido,
+                side_effect="write",
             ),
             MCPTool(
                 name="consultar_estado_pedido",
@@ -1086,6 +1093,7 @@ class OrderSkill(BaseSkill):
                 handler=self.consultar_estado_pedido,
                 solo_lectura=True,
                 simular=sandbox_prueba.simular_consultar_estado_pedido,
+                side_effect="read",
             ),
             MCPTool(
                 name="confirmar_pago_pedido",
@@ -1109,6 +1117,7 @@ class OrderSkill(BaseSkill):
                 handler=self.confirmar_pago_pedido,
                 side_effects=True,
                 simular=sandbox_prueba.simular_confirmar_pago_pedido,
+                side_effect="write",
             ),
             # Solo la ofrece el motor de procedimientos, en la etapa `esperar_pago` de
             # `tomar_pedido` (HU-AOS-07, cierre por pago): ninguna sección de
@@ -1131,6 +1140,7 @@ class OrderSkill(BaseSkill):
                 solo_lectura=True,
                 simular=sandbox_prueba.simular_verificar_pago_pedido,
                 connection_predicate=solo_con_motor_activo(),
+                side_effect="read",
             ),
             # SPEC-48, HU-COM-24: solo la ofrece el motor, en `pack_commerce.comprobar_transferencia`.
             MCPTool(
@@ -1152,6 +1162,7 @@ class OrderSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_comprobar_comprobante,
                 connection_predicate=solo_con_motor_activo(),
+                side_effect="write",
             ),
         ]
 

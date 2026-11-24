@@ -27,7 +27,6 @@ from pydantic import (
 )
 
 PRESETS_DIR = Path(__file__).resolve().parent
-PLANTILLAS_DIR = PRESETS_DIR / "plantillas"
 REPO_ROOT = PRESETS_DIR.parent.parent
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 
@@ -92,8 +91,8 @@ class PresetManifest(BaseModel):
     # HU-SH-01: proveedor de suscripciones que fija el preset (HU-SUB-09); debe ser
     # uno de sus packs. Solo se guarda si queda habilitado.
     proveedor_suscripciones: str | None = None
-    # Presets v2 (ADR-0139, HU-AOS-46): keys de las plantillas de agente especialista
-    # (`core/presets/plantillas/<key>.json`) que el preset instala en el negocio.
+    # Presets v2 (ADR-0139, HU-AOS-46): keys de los tipos de agente especialista (el manifiesto del pack,
+    # ADR-0207 §1) que el preset instala en el negocio.
     # Sin `agentes` el manifiesto es v1 y no instala especialistas.
     agentes: list[Annotated[str, Field(pattern=r"^[a-z0-9_]{2,40}$")]] = Field(default_factory=list, max_length=10)
 
@@ -234,18 +233,25 @@ class PlantillaAgente(BaseModel):
 
 
 def load_plantilla(key: str) -> PlantillaAgente:
+    """La plantilla del tipo de agente `key`, leída del manifiesto de su pack (ADR-0207 §1, HU-AOS-92)."""
+    from core.agents.tipos_de_agente import TipoDeAgenteInvalido, a_plantilla, tipos_de_agente
+
     if not re.fullmatch(r"[a-z0-9_]{2,40}", key):
         raise PresetError(f"Key de plantilla inválida: {key!r}")
-    path = PLANTILLAS_DIR / f"{key}.json"
-    if not path.exists():
-        raise PresetError(f"No existe la plantilla de agente {key!r}")
     try:
-        plantilla = PlantillaAgente.model_validate(json.loads(path.read_text(encoding="utf-8")))
-    except (ValidationError, json.JSONDecodeError) as exc:
+        manifiesto = tipos_de_agente().get(key)
+    except TipoDeAgenteInvalido as exc:
         raise PresetError(f"Plantilla inválida {key!r}: {exc}") from exc
-    if plantilla.key != key:
-        raise PresetError(f"La plantilla {path.name} declara key {plantilla.key!r}")
-    return plantilla
+    if manifiesto is None:
+        raise PresetError(f"No existe la plantilla de agente {key!r}")
+    return a_plantilla(manifiesto)
+
+
+def keys_de_plantillas() -> list[str]:
+    """Keys de los tipos de agente de los packs de la plataforma, ordenadas."""
+    from core.agents.tipos_de_agente import tipos_de_agente
+
+    return list(tipos_de_agente())
 
 
 def plantillas_del_preset(manifest: PresetManifest) -> list[PlantillaAgente]:
@@ -346,6 +352,7 @@ __all__ = [
     "PresetError",
     "PresetManifest",
     "ReglaDePlantilla",
+    "keys_de_plantillas",
     "list_presets",
     "load_fragment",
     "load_plantilla",

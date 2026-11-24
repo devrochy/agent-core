@@ -1,6 +1,6 @@
 # ADR-0207 — El pack declara su tipo de agente y cada habilidad declara sus tools
 
-- **Estado:** aceptado (2026-11-21, por decisión del dueño; documento mergeado en agent-core#860, plan en solvershub-docs#282). Sin código todavía; el código va en HU-AOS-92, HU-AOS-93 y HU-AOS-94.
+- **Estado:** aceptado (2026-11-21, por decisión del dueño; documento mergeado en agent-core#860, plan en solvershub-docs#282). §1–§4 implementados en HU-AOS-92 (2026-11-23); §5 va en HU-AOS-93 y §6 en HU-AOS-94.
 - **Fecha:** 2026-11-20
 - **Contexto:** [D-78](https://github.com/devrochy/solvershub-docs/blob/main/02-vision-y-decisiones/decisiones.md#d-78--corazón-v3-puro-coordinador-receptor-con-captura-de-lead-base-y-manifiesto-pack--habilidad--tools), [SPEC-50](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-50-corazon-v3-coordinador-y-matriz/spec.md) (REQ-AOS-29), [HU-AOS-92](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-50-corazon-v3-coordinador-y-matriz/hu/HU-AOS-92-manifiesto-de-tipo-y-tools-por-habilidad.md), [HU-AOS-93](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-50-corazon-v3-coordinador-y-matriz/hu/HU-AOS-93-datos-cliente-vs-modulo-en-especialistas.md) y [HU-AOS-94](https://github.com/devrochy/solvershub-docs/blob/main/04-fase-1-competir/SPEC-50-corazon-v3-coordinador-y-matriz/hu/HU-AOS-94-api-catalogo-tipos-habilidades-y-tools.md); reemplaza la mudanza pendiente de HU-AOS-64.
 - **Enmienda:** [ADR-0190](0190-habilidades-por-agente.md) §1 (el pack de especialidad define el tipo de agente: ahora lo declara en un manifiesto propio, no en `core/presets/plantillas/*.json`), §8 (grupos de acciones) y §9 (API del agente).
@@ -105,3 +105,38 @@ admite y obligue a tocar el core, o que la validación de arranque bloquee un de
 - `packages/pack-{commerce,calendar,cobranza,subscriptions}` (manifiesto del tipo) y
   `packages/pack-{payments,knowledge,voice}` (catálogo); `packages/pack-cobranza/.../datos.py`.
 - `core/api/routers/agent_editor.py` (rutas nuevas y 409), `docs/openapi.json` y los tipos del panel y la APK.
+
+## Adenda HU-AOS-92 (2026-11-23): cómo quedó
+- El manifiesto vive en `packages/pack-<x>/pack_<x>/tipo_de_agente.json`. `load_plantilla` lo lee de los archivos de
+  `packages/`, no de los módulos cargados, para que no dependa de qué escaneó cada proceso (API, worker, CLI). El
+  arranque lo valida con los módulos cargados. `flujo_por_defecto` se declara y se valida contra el `flow.json`; lo
+  consumen HU-AOS-94 y HU-AOS-95.
+- `requires_confirmation_default` sale de `MCPTool.sensible`, no es un campo nuevo.
+- Clasificación del efecto: `irreversible` = mueve dinero, envía algo fuera (correo, mensaje, aviso a una persona) o
+  cancela; `write` = escribe algo reversible en la base del negocio. Generar un link de pago (`sub_link_pago`,
+  `confirmar_pago_pedido`) o inscribir tras una etapa confirmada (`sub_inscribir`) es `write`: el dinero lo mueve el
+  cliente en la pasarela. Si fueran irreversibles, los procedimientos `tomar_pedido`, `pago_en_linea` y
+  `contratar_plan` dejarían de pasar el linter. Como las releases ya publicadas se vuelven a lintear en cada
+  despliegue (`registro._valido`), los agentes de Ventas y Suscripciones perderían esos recorridos.
+- Los procedimientos abiertos (`0.0.0`) que se derivan de los `flow.json` ahora sí ven irreversibles sin confirmar
+  (por ejemplo `cancel_calendar_event` o `escalate_to_human`). No cambia nada en V3: solo resuelven nombres y nunca
+  se ofrecen en un turno.
+- Las tools de datos del cliente, del aviso de datos y del historial entran al catálogo de habilidades
+  (`core:datos_cliente`), pero no al catálogo del linter: así no cambia qué acciones admite un procedimiento.
+- La validación de arranque solo mira el core y los packs de la plataforma (`es_de_plataforma`). Un plugin de un
+  negocio nunca frena un despliegue.
+- Los comandos del hilo (`core/kernel/procedures/comandos.py`) no están en `core:operacion`: se arman por
+  procedimiento en cada turno y no caben en un catálogo estático. Igual declaran `side_effect = "read"`.
+- `validar_catalogo` también falla si una tool del core (salvo las `sub_*`, que despacha un pack) no está en ninguna
+  habilidad `core:*`. Así una tool nueva del core no queda fuera del catálogo sin aviso.
+- Un tipo puede nombrar habilidades `core:*`, pero `load_plantilla` las saca de `PlantillaAgente`. Esa forma solo
+  lleva packs, que son lo que se habilita e instala, y todo agente ya trae las del core.
+- La regla de los procedimientos por defecto revisa `actions` y `preconditions`, y acepta cualquier tool cuyo dueño
+  en runtime sea el core, también las `sub_*`. `pack_commerce.pago_en_linea` (Ventas) usa `sub_link_pago` sin
+  `requires`, como ya lo admite el linter.
+- Al criterio de `irreversible` se suman los puntos donde el cliente compromete algo o donde se registra dinero
+  recibido: `confirmar_cotizacion`, `sub_confirmar_inscripcion` y `cob_registrar_abono`. Al cambiar la release, una
+  tarea que pasó por uno de ellos se escala a una persona y no se cancela en silencio.
+- Si un pack de la plataforma no carga (por ejemplo `pack_payments`, opcional de Ventas), la API no arranca, porque
+  el tipo nombra una habilidad que no existe. Es lo buscado: el despliegue se queda en la versión anterior en vez de
+  arrancar degradado sin avisar.

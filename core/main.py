@@ -60,6 +60,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 1. Detectar y registrar plugins (entry_points)
     plugin_manager.scan()
+    # 1a. Registro de habilidades y tipos de agente íntegro (ADR-0207 §4): un pack de la plataforma con una tool sin
+    # efecto o sin grupo, o un tipo que nombra algo que no existe, no arranca (el despliegue queda en la versión vieja).
+    from core.kernel.procedures.catalogo import validar_catalogo
+
+    problemas = validar_catalogo(plugin_manager.list_modules())
+    if problemas:
+        raise RuntimeError("Registro de habilidades inválido (ADR-0207 §4): " + "; ".join(problemas[:20]))
     await plugin_manager.sync_registry()
     # 1b. Espejar el catálogo de planes a la tabla `plans` (ADR-0045)
     from core.billing.plans import sync_plans

@@ -3,10 +3,30 @@
   "nombre": "Agenda",
   "descripcion": "Agenda citas, demos y reuniones en los horarios disponibles del negocio.",
   "seccion": "Agenda",
-  "habilidades": ["pack_calendar"],
+  "habilidades_obligatorias": [
+    "pack_calendar"
+  ],
   "captar_leads": true,
-  "procedimientos": ["pack_calendar.agendar_cita"],
-  "playbooks": ["citas"],
+  "procedimientos_por_defecto": [
+    "pack_calendar.agendar_cita"
+  ],
+  "playbooks_por_defecto": [
+    "citas"
+  ],
+  "flujo_por_defecto": [],
+  "reglas": [
+    {
+      "id": "preset_agenda_palabras",
+      "when": {
+        "keywordAny": [
+          "agendar",
+          "cita",
+          "reservar",
+          "demo"
+        ]
+      }
+    }
+  ],
   "preguntas": [
     {
       "id": "largo_respuesta",
@@ -34,8 +54,5 @@
         }
       ]
     }
-  ],
-  "reglas": [
-    {"id": "preset_agenda_palabras", "when": {"keywordAny": ["agendar", "cita", "reservar", "demo"]}}
   ]
 }

@@ -4,7 +4,7 @@ Lo que necesita el panel para que un dueño arme un especialista sin ayuda técn
 piezas que ya existen (borrador y versiones de HU-AOS-12, instancias de HU-AOS-13, releases de
 HU-AOS-14 y plantillas de HU-AOS-46):
 
-- `plantillas(habilitados)`: las plantillas de `core/presets/plantillas/` con sus superpoderes
+- `plantillas(habilitados)`: los tipos de agente de los packs (ADR-0207 §1) con sus superpoderes
   (procedimientos publicados) y las frases de la habilidad. Elegir una plantilla HABILITA sus
   `habilidades` (`will_enable`, `habilitacion.asegurar_habilidades`): estar habilitadas ya no es
   precondición; solo no se ofrece si el despliegue no las trae.
@@ -154,9 +154,16 @@ class PlantillaVista:
 
 
 def keys_de_plantillas() -> list[str]:
-    from core.presets import PLANTILLAS_DIR
+    """Keys de los tipos de agente (ADR-0207 §1): las declara cada pack de especialidad en su manifiesto."""
+    from core.agents.tipos_de_agente import TipoDeAgenteInvalido
+    from core.presets import keys_de_plantillas as _keys
 
-    return sorted(p.stem for p in PLANTILLAS_DIR.glob("*.json"))
+    try:
+        return _keys()
+    except TipoDeAgenteInvalido:
+        # Un manifiesto roto (un deploy defectuoso) no tumba la lista: el CI y el arranque ya lo frenan.
+        log.error("tipos_de_agente_invalidos", exc_info=True)
+        return []
 
 
 def plantillas(habilitados: Iterable[str], instalados: Collection[str] | None = None) -> list[PlantillaVista]:

@@ -27,9 +27,10 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict, create_model
+from agentcore_contracts import SideEffect
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from core.shared.logger import get_logger
 
@@ -431,6 +432,11 @@ class MCPTool:
     # aunque la definición de la opción o el binding no lo pidan. En el bucle solo aplica a las
     # tools registradas: las declarativas POST nacen `sensible` (para opciones) y quedan fuera.
     sensible: bool = False
+    # ADR-0207 §2 (HU-AOS-92): efecto de la acción para procedimientos, cambio de release y catálogo: `read` (solo
+    # lee), `write` (escribe algo reversible en la base del negocio) o `irreversible` (mueve dinero, envía algo fuera
+    # o cancela). Se declara a mano: NO se deduce de `side_effects`, que es otra cosa (el canal `test`). `None` se
+    # trata como irreversible (fail-closed) y el test de contrato exige que ninguna tool de la plataforma lo deje así.
+    side_effect: SideEffect | None = None
 
 
 @dataclass
@@ -634,6 +640,14 @@ class BaseModule(ABC):
     # Grupo de cada acción del pack, por lo que hace (ADR-0190 §8): `{nombre_de_la_tool: clave}`. Solo la clave; la
     # etiqueta la pone el panel. Una acción sin grupo cae en `otras`.
     grupos_de_acciones: ClassVar[dict[str, str]] = {}
+
+    @property
+    def tipo_de_agente(self) -> AgentTypeManifest | None:
+        """Manifiesto del tipo de agente del pack (ADR-0207 §1): `pack_<x>/tipo_de_agente.json`, solo en los packs
+        de especialidad. `None` en los demás."""
+        from core.agents.tipos_de_agente import manifiesto_del_modulo
+
+        return manifiesto_del_modulo(self)
     # Dominio de cada procedimiento del pack (SPEC-48, HU-AOS-83): `{id del procedimiento: clave}`.
     # La etiqueta sale de `etiquetas_de_grupos_de_procedimientos` o, si falta, del `display_name` del pack.
     grupos_de_procedimientos: ClassVar[dict[str, str]] = {}
@@ -848,6 +862,70 @@ class BaseModule(ABC):
 
     def on_deactivate(self) -> None:
         """Limpieza opcional al desactivar. El MCPHost retira los registros automáticamente."""
+
+
+@dataclass(frozen=True)
+class ToolCatalogItem:
+    """Una acción del binario con sus metadatos (ADR-0207 §2). Es una VISTA que arma el host desde lo que ya
+    declaran `MCPTool` y `BaseModule.grupos_de_acciones`, no un segundo lugar donde declarar. La leen el linter
+    de procedimientos, el cambio de release y el catálogo de habilidades (`ActionInfo` es el mismo tipo)."""
+
+    name: str
+    owner: str
+    side_effect: SideEffect | None = None
+    # Scopes que la acción exige a su binding (`MCPTool.scopes`, HU-AOS-12).
+    scopes: tuple[str, ...] = ()
+    # `MCPTool.solo_lectura` (HU-AOS-19): solo una acción de lectura responde una consulta.
+    solo_lectura: bool = False
+    group: str = ""
+    description: str = ""
+    # `MCPTool.sensible`: el cliente confirma antes de que corra aunque el binding no lo pida.
+    requires_confirmation_default: bool = False
+
+
+@dataclass(frozen=True)
+class SkillCatalogItem:
+    """Una habilidad con sus tools (ADR-0207 §3): un pack (`pack_commerce`) o una del core (`core:leads`)."""
+
+    id: str
+    nombre: str
+    descripcion: str
+    tools: tuple[ToolCatalogItem, ...] = ()
+
+
+_ID_HABILIDAD = r"^(core:[a-z_]{2,40}|pack_[a-z0-9_]{1,40})$"
+_ID_PROCEDIMIENTO = r"^[a-z0-9_]{1,60}\.[a-z0-9_]{1,40}$"
+
+
+class AgentTypeManifest(BaseModel):
+    """Tipo de agente que define un pack de especialidad (ADR-0207 §1, HU-AOS-92). Vive como JSON versionado en el
+    pack (`pack_<x>/tipo_de_agente.json`) porque lleva textos de UI; nunca prompts (invariante 3). Las habilidades se
+    nombran por id (`pack_payments`, `core:leads`): ningún pack importa a otro (invariante 5).
+
+    El guion del asistente de creación (`preguntas`, `preguntas_retiradas`, `reglas`) se guarda tal cual y lo valida
+    `PlantillaAgente` (`core/presets`), la forma que siguen leyendo el editor, el alta y los presets."""
+
+    model_config = ConfigDict(extra="forbid")
+    key: str = Field(pattern=r"^[a-z0-9_]{2,40}$")
+    nombre: str = Field(min_length=1, max_length=80)
+    descripcion: str = Field(default="", max_length=300)
+    seccion: str = Field(default="", max_length=40)
+    habilidades_obligatorias: list[Annotated[str, Field(pattern=_ID_HABILIDAD)]] = Field(min_length=1, max_length=10)
+    habilidades_opcionales: list[Annotated[str, Field(pattern=_ID_HABILIDAD)]] = Field(default_factory=list, max_length=10)
+    # Acota una habilidad opcional a algunas de sus acciones (HU-AOS-22).
+    acciones_opcionales: dict[str, list[str]] = Field(default_factory=dict, max_length=10)
+    captar_leads: bool = False
+    procedimientos_por_defecto: list[Annotated[str, Field(pattern=_ID_PROCEDIMIENTO)]] = Field(min_length=1, max_length=20)
+    playbooks_por_defecto: list[Annotated[str, Field(pattern=r"^[a-zA-Z0-9_-]{1,80}$")]] = Field(
+        default_factory=list, max_length=20
+    )
+    # Ids de secciones del `flow.json` del pack con que nace el agente; vacío = todas. Se declara y se valida contra
+    # el `flow.json`; lo consumen HU-AOS-94/95 (revisión del arquitecto de HU-AOS-92).
+    flujo_por_defecto: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=40)
+    datos_de_prueba: str | None = Field(default=None, pattern=_ID_PROCEDIMIENTO)
+    preguntas: list[dict[str, Any]] = Field(default_factory=list, max_length=8)
+    preguntas_retiradas: list[str] = Field(default_factory=list, max_length=8)
+    reglas: list[dict[str, Any]] = Field(default_factory=list, max_length=5)
 
 
 @dataclass

@@ -429,7 +429,7 @@ class GoogleCalendarModule(BaseModule):
     config_agente = config_de_agente(CalendarConfig, ("multi_agenda_modo", "slot_minutes", "appointments_cancelled_summary", "confirmacion_texto", "completion_claims_disabled", "completion_claims_custom",), "ConfigDeAgenteDeAgenda")
     id = PLUGIN_ID
     name = "Calendario y citas"
-    version = "2.6.0"
+    version = "2.7.0"  # 2.7: tipo de agente en el pack y efecto de cada acción (ADR-0207, HU-AOS-92)
     description = "Agendamiento con agenda interna (sin Google) o Google Calendar (ADR-0084)"
     display_name = "Agenda"
     category = "Agenda"

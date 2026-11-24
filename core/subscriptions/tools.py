@@ -149,6 +149,7 @@ class SubscriptionSkill(BaseSkill):
                 connection_predicate=predicate,
                 # Solo lee la suscripción y su próximo cargo (HU-AOS-19: puede responder consultas).
                 solo_lectura=True,
+                side_effect="read",
             ),
             MCPTool(
                 name="sub_link_pago",
@@ -161,6 +162,7 @@ class SubscriptionSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_link_pago,
                 connection_predicate=predicate,
+                side_effect="write",
             ),
             MCPTool(
                 name="sub_pausar",
@@ -173,6 +175,7 @@ class SubscriptionSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_pausar,
                 connection_predicate=predicate,
+                side_effect="write",
             ),
             MCPTool(
                 name="sub_cancelar",
@@ -187,6 +190,7 @@ class SubscriptionSkill(BaseSkill):
                 simular=sandbox_prueba.simular_cancelar,
                 connection_predicate=predicate,
                 sensible=True,
+                side_effect="irreversible",
             ),
             MCPTool(
                 name="sub_cambiar_plan",
@@ -214,6 +218,7 @@ class SubscriptionSkill(BaseSkill):
                 # monto del servidor): esta tool no se ofrece (HU-AOS-08). Sin la bandera, igual.
                 connection_predicate=sin_motor_activo(predicate),
                 sensible=True,
+                side_effect="irreversible",
             ),
             MCPTool(
                 name="sub_cotizar_cambio_plan",
@@ -236,6 +241,7 @@ class SubscriptionSkill(BaseSkill):
                 handler=self.cotizar_cambio_plan,
                 solo_lectura=True,
                 connection_predicate=solo_con_motor_activo(predicate),
+                side_effect="read",
             ),
             MCPTool(
                 name="sub_aplicar_cambio_plan",
@@ -263,6 +269,7 @@ class SubscriptionSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_aplicar_cambio_plan,
                 connection_predicate=solo_con_motor_activo(predicate),
+                side_effect="irreversible",
             ),
             *self._tools_de_inscripcion(solo_con_motor_activo(predicate)),
         ]
@@ -290,6 +297,7 @@ class SubscriptionSkill(BaseSkill):
                 handler=self.listar_planes,
                 connection_predicate=predicate,
                 solo_lectura=True,
+                side_effect="read",
             ),
             MCPTool(
                 name="sub_cotizar_inscripcion",
@@ -306,6 +314,7 @@ class SubscriptionSkill(BaseSkill):
                 handler=self.cotizar_inscripcion,
                 solo_lectura=True,
                 connection_predicate=predicate,
+                side_effect="read",
             ),
             MCPTool(
                 name="sub_confirmar_inscripcion",
@@ -327,6 +336,7 @@ class SubscriptionSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_confirmar_inscripcion,
                 connection_predicate=predicate,
+                side_effect="irreversible",
             ),
             MCPTool(
                 name="sub_inscribir",
@@ -369,6 +379,7 @@ class SubscriptionSkill(BaseSkill):
                 side_effects=True,
                 simular=sandbox_prueba.simular_inscribir,
                 connection_predicate=predicate,
+                side_effect="write",
             ),
         ]
 
