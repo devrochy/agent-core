@@ -268,7 +268,7 @@ class PaymentsModule(BaseModule):
     description = "Links de pago en línea con confirmación automática por webhook"
     display_name = "Pagos en línea"
     category = "Cobros"
-    min_plan = "basic"
+    min_plan = "free"
     action_summary: ClassVar[list[str]] = ["Generar links de pago", "Confirmar pagos por webhook"]
     setup_guide = "Configura tus llaves de Wompi (sandbox o producción)."
     # ADR-0190 §6: se activa sin formulario; las llaves van en las cuentas Wompi (Conexiones › Pagos).

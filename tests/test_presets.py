@@ -20,7 +20,7 @@ def test_catalogo_inicial_comercio_restaurante_y_cobranza() -> None:
     assert {p.id for p in list_presets()} >= {"comercio", "restaurante", "cobranza"}
     restaurante = load_preset("restaurante")
     assert restaurante.packs == ["pack_commerce", "pack_payments"]
-    assert restaurante.plan_minimo == "basic"
+    assert restaurante.plan_minimo == "free"
 
 
 def test_manifiesto_rechaza_campos_desconocidos_como_un_prompt() -> None:
@@ -115,7 +115,7 @@ def test_preset_suscripciones_fija_su_proveedor_y_agenda_interna() -> None:
     assert set(preset.packs) == {"pack_commerce", "pack_calendar", "pack_payments", "pack_subscriptions"}
     assert preset.proveedor_suscripciones == "pack_subscriptions"
     assert preset.proveedor_suscripciones in preset.packs
-    assert preset.plan_minimo == "premium"  # 4 habilidades: basic permite 3
+    assert preset.plan_minimo == "free"  # todo free: el candado es de superpoderes, no de tipos (ADR-0208 §10, enmendado)
     agenda = load_fragment("pack_calendar", "suscripciones", CalendarConfig)
     assert CalendarConfig.model_validate(agenda.config).source == "interno"
 

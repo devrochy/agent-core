@@ -19,7 +19,7 @@
     "odontología",
     "veterinaria"
   ],
-  "plan_minimo": "basic",
+  "plan_minimo": "free",
   "packs": [
     "pack_calendar",
     "pack_commerce"

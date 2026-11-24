@@ -1085,7 +1085,7 @@ class CRMModule(BaseModule):
     description = "Catálogo (menú), promociones, cotizaciones y pedidos para el negocio"
     display_name = "Comercio"
     category = "Ventas"
-    min_plan = "basic"
+    min_plan = "free"
     action_summary: ClassVar[list[str]] = ["Cotizar", "Tomar pedidos", "Aplicar promociones"]
     # Dominios de superpoderes (SPEC-48, HU-AOS-83): "Pago en línea" y "Comprobar transferencia"
     # no son poderes sueltos, son del dominio Formas de pago. Los dos nacen en HU-COM-23/24.

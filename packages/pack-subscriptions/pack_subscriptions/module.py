@@ -66,7 +66,7 @@ class SubscriptionsModule(BaseModule):
     description = "Suscripción de cliente final activada por pago de un plan (ADR-0083)"
     display_name = "Suscripciones"
     category = "Cobros"
-    min_plan = "basic"
+    min_plan = "free"
     required_connections: ClassVar[list[str]] = ["pack_payments"]
     action_summary: ClassVar[list[str]] = ["Cobrar el período", "Enviar link", "Gestionar estado"]
     setup_guide = "Define tus planes con periodicidad y activa los cobros recurrentes."

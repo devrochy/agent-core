@@ -72,7 +72,7 @@ class CobranzaModule(BaseModule):
     description = "Carteras, clientes, préstamos y negociación de cobranza por WhatsApp"
     display_name = "Cobranza"
     category = "Cobros"
-    min_plan = "premium"
+    min_plan = "free"
     action_summary: ClassVar[list[str]] = ["Consultar saldo y mora", "Registrar pagos y promesas", "Cobrar en campo"]
     setup_guide = "Crea tus carteras y clientes; los gestores usan la app de campo."
     requires_config = True
