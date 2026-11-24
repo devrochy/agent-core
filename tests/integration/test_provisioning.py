@@ -438,7 +438,7 @@ async def test_auditoria_con_actor_provisioning_referencia_plan_y_preset(vendedo
 
 
 async def test_free_crea_el_negocio_en_prueba_de_30_dias(vendedores, correos) -> None:
-    """Gherkin «Free» (D-16). Ningún preset cabe en Free: queda pendiente, no rompe el alta."""
+    """Gherkin «Free» (D-16). Todos los presets caben en Free (decisión 2026-11-24): el preset se aplica en el alta."""
     vendedor = await _vendedor()
     vendedores(vendedor)
     antes = datetime.now(UTC)
@@ -450,8 +450,7 @@ async def test_free_crea_el_negocio_en_prueba_de_30_dias(vendedores, correos) ->
     sub = await _suscripcion_de(registro.negocio_tenant_id)
     assert (sub.plan_id, sub.status) == ("free", "trialing")
     assert timedelta(days=29, hours=23) < sub.trial_ends_at - antes < timedelta(days=30, minutes=5)
-    assert registro.detalle["preset"]["estado"] == "pendiente"
-    assert "plan" in registro.detalle["preset"]["detalle"]
+    assert registro.detalle["preset"]["estado"] == "aplicado"
     assert len(await _invitaciones(registro.negocio_tenant_id)) == 1
 
 

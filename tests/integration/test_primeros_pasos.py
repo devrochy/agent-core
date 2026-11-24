@@ -283,11 +283,14 @@ async def test_una_habilidad_pendiente_de_configurar_aparece_como_paso(app_clien
     assert (pagos["estado"], pagos["motivo"]) == ("completo", None)
 
 
-async def test_el_tipo_de_negocio_que_espera_un_plan_aparece_como_paso(app_client) -> None:
+async def test_el_tipo_de_negocio_que_espera_un_plan_aparece_como_paso(app_client, monkeypatch) -> None:
     """Un Free del alta automática con el vertical `comercio`: el preset quedó pendiente porque
     pide Basic (ADR-0121 § 3.7). Aparece como paso que lleva al plan."""
     from datetime import UTC, datetime
 
+    from _habilidades import pack_de_pago
+
+    pack_de_pago(monkeypatch, "pack_commerce", "basic")  # hoy todos son Free; se simula un pack de pago
     tenant_id, email = await _negocio()
     await _settings(
         tenant_id,

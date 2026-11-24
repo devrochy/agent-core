@@ -95,8 +95,12 @@ async def test_no_pisa_la_config_que_el_negocio_cambio() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_insuficiente_no_cambia_nada() -> None:
+async def test_plan_insuficiente_no_cambia_nada(monkeypatch) -> None:
+    from _habilidades import pack_de_pago
+
     from core.presets import PresetError
+
+    pack_de_pago(monkeypatch, "pack_cobranza", "premium")  # hoy todos son Free; se simula un pack de pago
 
     with pytest.raises(PresetError, match="plan más alto"):
         await _alta("cobranza", None)  # free < premium
