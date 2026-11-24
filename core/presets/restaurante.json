@@ -16,7 +16,7 @@
     "bar",
     "food truck"
   ],
-  "plan_minimo": "basic",
+  "plan_minimo": "free",
   "packs": [
     "pack_commerce",
     "pack_payments"

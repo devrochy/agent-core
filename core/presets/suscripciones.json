@@ -12,7 +12,7 @@
     "clases",
     "servicios por plan"
   ],
-  "plan_minimo": "premium",
+  "plan_minimo": "free",
   "packs": [
     "pack_commerce",
     "pack_calendar",

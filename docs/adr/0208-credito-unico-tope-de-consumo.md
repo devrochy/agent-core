@@ -89,6 +89,7 @@ D-79 fija que el plan concede créditos y que todo lo que gasta el negocio los c
     - **Revierte** la nota «NO valida `min_plan`» de `core/agents/habilitacion.py:156`.
     - **Sale la cuota `plugins`:** `habilitacion.py:173-175`, `core/presets/apply.py:72`, `enforcement.py:198` y la fila de `core/admin/templates/plan.html:86`.
     - **Cambio de contrato:** desaparece el 409 `plan_limit_plugins`, que el panel consume, y se registra en `docs/openapi.json`.
+    - **Enmienda 2026-11-24 (decisión del dueño):** hoy todos los packs declaran `min_plan = "free"` (también los presets), porque Ventas, Agenda, Suscripciones y Cobranza son tipos de agente (D-68) y deben estar en cualquier plan; los superpoderes también por ahora. El mecanismo de este punto sigue vigente para limitar un superpoder por plan más adelante; los topes de agentes, conexiones, clientes, créditos, canales y nivel de IA no cambian.
 
 ### Todo el gasto cuenta: tarifario `v2`
 11. **Cada gasto escribe su fila con créditos congelados al escribir** (ADR-0144 §3):

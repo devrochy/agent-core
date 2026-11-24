@@ -21,7 +21,7 @@
     "venta de productos",
     "ventas por whatsapp"
   ],
-  "plan_minimo": "basic",
+  "plan_minimo": "free",
   "packs": [
     "pack_commerce",
     "pack_payments"

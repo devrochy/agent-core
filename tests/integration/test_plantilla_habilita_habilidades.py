@@ -4,8 +4,8 @@ Un negocio nuevo en Free no tiene ningún pack (`spec.packs == []`). Antes las 4
 `available=false` y `from-script` daba 409 `template_unavailable`: el dueño no podía elegir el tipo de
 negocio. Ahora la plantilla trae `will_enable`, crear el agente habilita las habilidades que pide (en una
 sola versión de spec), y quien no tiene `plugins:write` recibe 403 sin efectos. Desde HU-BILL-19 (ADR-0208 §10) crear
-el agente exige el `min_plan` de sus habilidades: Free crea Agenda, pero Ventas pide Basic (409
-`plan_plugin_not_included`, sin escribir nada).
+el agente exige el `min_plan` de sus habilidades: con el candado de un pack de pago simulado, Free no lo crea (409
+`plan_plugin_not_included`, sin escribir nada). Hoy todos los packs son Free.
 Sin LLM ni red.
 """
 
@@ -200,9 +200,20 @@ async def test_el_dueno_del_negocio_puede_habilitar_sin_permisos_explicitos(app_
     assert r.json()["enabled_skills"] == ["pack_subscriptions"]
 
 
-async def test_free_no_crea_un_agente_cuya_habilidad_pide_otro_plan(app_client) -> None:
-    """HU-BILL-19: Ventas (`pack_commerce`, `min_plan = basic`) en Free es 409 `plan_plugin_not_included` y no se
+
+def _con_candado(monkeypatch, **min_planes: str) -> None:
+    """Pone `min_plan` a packs concretos: hoy todos son Free (el candado es de superpoderes), pero el
+    mecanismo (HU-BILL-19, ADR-0208 §10) sigue vivo y se prueba con un pack «de pago» simulado."""
+    from core.billing import habilidades_del_plan as hdp
+
+    real = hdp._min_planes
+    monkeypatch.setattr(hdp, "_min_planes", lambda packs: {**real(packs), **{p: m for p, m in min_planes.items() if p in set(packs)}})
+
+
+async def test_free_no_crea_un_agente_cuya_habilidad_pide_otro_plan(app_client, monkeypatch) -> None:
+    """HU-BILL-19: con un pack que pide Basic (aquí `pack_commerce` simulado; hoy todos son Free), Free es 409 `plan_plugin_not_included` y no se
     escribe nada; Agenda (`pack_calendar`, Free) sí entra."""
+    _con_candado(monkeypatch, pack_commerce="basic")
     tid = await _negocio_sin_packs()
     h = await _usuario(app_client, tid, secciones={"settings": "write", "plugins": "write"}, dueno=True)
     huella = await _huella(tid)

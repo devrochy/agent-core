@@ -5,7 +5,7 @@
 - Basic con un correo conectado: conectar otro da 409 `plan_limit_correos` (`POST /connections/manual`).
 - Basic no conecta Instagram ni Messenger y Free no conecta Telegram: 409 `plan_channel_not_included`.
 - WhatsApp y el chat web se permiten en todos los planes.
-- Basic no habilita Cobranza (`min_plan = premium`): 409 `plan_plugin_not_included` y nada queda escrito.
+- Basic no habilita un pack que pide Premium (aquí Cobranza simulado; hoy todos son Free): 409 `plan_plugin_not_included` y nada queda escrito.
 - Un negocio por encima del tope conserva sus conexiones (edita y pausa) y solo no crece.
 - Concurrencia: dos altas simultáneas con un solo cupo, entra una (`enforce_growth` y su lock).
 - Aislamiento: el conteo y el tope de un negocio no ven las conexiones de otro.
@@ -255,7 +255,18 @@ async def test_premium_al_tope_no_abre_el_popup_de_meta(app_client, monkeypatch)
 
 
 # ------------------------------------------------------------------ habilidades
-async def test_basic_no_habilita_cobranza_y_nada_queda_escrito(app_client) -> None:
+
+def _con_candado(monkeypatch, **min_planes: str) -> None:
+    """Pone `min_plan` a packs concretos: hoy todos son Free (el candado es de superpoderes), pero el
+    mecanismo (HU-BILL-19, ADR-0208 §10) sigue vivo y se prueba con un pack «de pago» simulado."""
+    from core.billing import habilidades_del_plan as hdp
+
+    real = hdp._min_planes
+    monkeypatch.setattr(hdp, "_min_planes", lambda packs: {**real(packs), **{p: m for p, m in min_planes.items() if p in set(packs)}})
+
+
+async def test_basic_no_habilita_cobranza_y_nada_queda_escrito(app_client, monkeypatch) -> None:
+    _con_candado(monkeypatch, pack_cobranza="premium")
     from core.agents.habilitacion import asegurar_habilidades
     from core.billing.habilidades_del_plan import HabilidadNoIncluida
     from core.plugin_manager import plugin_manager

@@ -11,7 +11,7 @@
     "cobros",
     "recaudo"
   ],
-  "plan_minimo": "premium",
+  "plan_minimo": "free",
   "packs": [
     "pack_cobranza"
   ],
