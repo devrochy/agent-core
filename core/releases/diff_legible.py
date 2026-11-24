@@ -151,8 +151,13 @@ def _otros(candidata: ReleaseCongelada, base: ReleaseCongelada | None) -> dict[s
     a_ahora = candidata.app_settings
     pb_antes = base.playbooks if base else {}
     pb_ahora = candidata.playbooks
+    ajustes = sorted(k for k in set(a_antes) | set(a_ahora) if a_antes.get(k) != a_ahora.get(k))
+    # ADR-0211: las reglas y el nivel de IA de la recepción del Coordinador se ven como un ajuste más (no marcan
+    # procedimientos: la recepción no tiene).
+    if _canon(base.recepcion if base else {}) != _canon(candidata.recepcion):
+        ajustes.append("recepcion")
     return {
-        "ajustes": sorted(k for k in set(a_antes) | set(a_ahora) if a_antes.get(k) != a_ahora.get(k)),
+        "ajustes": ajustes,
         "playbooks": sorted(n for n in set(pb_antes) | set(pb_ahora) if pb_antes.get(n) != pb_ahora.get(n)),
         "flujo": _canon(base.flow_tenant if base else None) != _canon(candidata.flow_tenant),
     }

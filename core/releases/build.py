@@ -471,6 +471,28 @@ def _overrides(slug: str | None, nombres: Iterable[str]) -> dict[str, str]:
     return salida
 
 
+async def _recepcion(tenant_id: uuid.UUID) -> dict[str, Any]:
+    """Reglas y nivel de IA de la recepción del Coordinador (ADR-0211). Una regla guardada que ya no pasa el contrato
+    es dato malo (invariante 7): el build la rechaza para que el turno nunca lance por ella."""
+    from core.coordinador.recepcion_config import ReglasInvalidas, para_release
+
+    async with get_session() as session:
+        fila = (
+            await session.execute(
+                text("SELECT behavior_config FROM app_settings WHERE tenant_id = :t AND deleted_at IS NULL"),
+                {"t": tenant_id},
+            )
+        ).first()
+    try:
+        return para_release(fila[0] if fila is not None else None)
+    except ReglasInvalidas as exc:
+        raise ErrorDelBuild(
+            "reglas_recepcion_invalidas",
+            "Las reglas de la recepción del Coordinador no se pueden congelar.",
+            [f"{r}: {m}" for r, m in exc.problemas][:10],
+        ) from exc
+
+
 async def _app_settings(tenant_id: uuid.UUID) -> dict[str, str | None]:
     from core.config import get_settings
 
@@ -591,6 +613,7 @@ async def armar_con_instancias(
         app_settings=await _app_settings(tenant_id),
         built_with=_built_with(),
         a2a_graph=grafo,
+        recepcion=await _recepcion(tenant_id),
     )
 
 

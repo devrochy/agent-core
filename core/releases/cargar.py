@@ -135,6 +135,11 @@ class ReleaseCongelada:
         return dict(self.manifest.get("app_settings") or {})
 
     @property
+    def recepcion(self) -> dict[str, Any]:
+        """Reglas y nivel de IA de la recepción del Coordinador congelados (ADR-0211); `{}` en una release anterior."""
+        return copy.deepcopy(dict(self.manifest.get("recepcion") or {}))
+
+    @property
     def playbooks(self) -> dict[str, str]:
         return {p["name"]: p["text"] for p in self.manifest.get("playbook_overrides", [])}
 
@@ -278,6 +283,7 @@ class ReleaseCongelada:
             lane=lane,
             idle_minutes=self.idle_minutes,
             app_settings=self.app_settings,
+            recepcion=self.recepcion,
             playbooks=self.playbooks,
             # Copia: lo de la caché es de todos los turnos de la release y nadie debe mutarlo.
             flow_tenant=copy.deepcopy(self.flow_tenant),
