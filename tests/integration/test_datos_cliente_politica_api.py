@@ -342,3 +342,165 @@ async def test_las_herramientas_del_agente_nacen_apagadas_y_se_encienden_sin_toc
     assert r.json()["herramientas_del_agente"] is False
     async with tenant_scope(tid):
         assert await herramientas_activas(agent_id) is False
+
+
+# ------------------------------------------------------------------ cierre de HU-CRM-28
+async def _otro_especialista(tid, key: str, tool: str) -> uuid.UUID:
+    """Un segundo especialista del mismo tipo en el mismo negocio (otro Ventas con otra key)."""
+    from core.db.models import AgentDraftRecord, AgentRecord
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tid), get_session() as session:
+        agente = AgentRecord(id=uuid.uuid4(), tenant_id=tid, key=key, kind="specialist", name=key.title())
+        session.add(agente)
+        await session.flush()
+        session.add(
+            AgentDraftRecord(tenant_id=tid, agent_id=agente.id, content={"tools": [{"tool": tool, "enabled": True}]})
+        )
+    return agente.id
+
+
+async def test_dos_agentes_de_ventas_del_mismo_negocio_con_politicas_distintas(app_client) -> None:
+    """Gherkin «Dos agentes del mismo tipo»: cada uno exige lo suyo, en la API y en la evaluación del turno."""
+    from core.datos_cliente.servicio import evaluar_accion
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    mostrador = await _agente(tid, "ventas")
+    mayoristas = await _otro_especialista(tid, "ventas_mayoristas", "crear_pedido")
+    r = await app_client.put(
+        _url(mostrador), headers=h, json={"politica": {"ventas.pedido_domicilio": {"id_document": "no_pedir"}}}
+    )
+    assert r.status_code == 200, r.text
+    r = await app_client.put(
+        _url(mayoristas), headers=h, json={"politica": {"ventas.pedido_domicilio": {"email": "requerido"}}}
+    )
+    assert r.status_code == 200, r.text
+
+    del_mostrador = (await app_client.get(_url(mostrador), headers=h)).json()
+    de_mayoristas = (await app_client.get(_url(mayoristas), headers=h)).json()
+    assert _campo(del_mostrador, "ventas.pedido_domicilio", "id_document")["nivel"] == "no_pedir"
+    assert _campo(del_mostrador, "ventas.pedido_domicilio", "email")["ajustado"] is False
+    assert _campo(de_mayoristas, "ventas.pedido_domicilio", "id_document")["nivel"] == "requerido"
+    assert _campo(de_mayoristas, "ventas.pedido_domicilio", "email")["nivel"] == "requerido"
+
+    datos = {"full_name": "Ana", "phone": "3001112233", "address": "Calle 1", "municipality": "Manizales", "city": "Manizales"}
+    async with tenant_scope(tid):
+        a = await evaluar_accion("ventas.pedido_domicilio", datos, agent_id=mostrador)
+        b = await evaluar_accion("ventas.pedido_domicilio", datos, agent_id=mayoristas)
+    assert a is not None and a.faltan == []
+    assert b is not None and set(b.faltan) == {"id_document", "email"}
+
+
+async def test_crear_pedido_y_el_resolver_rechazan_el_metodo_de_entrega_apagado(app_client) -> None:
+    """Gherkin «Métodos de entrega»: con solo «recoger en tienda», ni la tool ni el procedimiento aceptan domicilio."""
+    from pack_commerce.procedimientos import metodo_de_entrega
+    from pack_commerce.skills import OrderSkill
+
+    from core.shared.tenant import tenant_scope
+
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    agent_id = await _agente(tid)
+    r = await app_client.put(_url(agent_id), headers=h, json={"metodos_entrega": ["recoger_en_tienda"]})
+    assert r.status_code == 200, r.text
+    ctx = SimpleNamespace(agent_id=agent_id, customer_id=uuid.uuid4())
+    otro = SimpleNamespace(agent_id=await _agente(tid, "agenda"), customer_id=uuid.uuid4())
+    async with tenant_scope(tid):
+        res = await OrderSkill().crear_pedido(
+            {
+                "quote_id": str(uuid.uuid4()),
+                "payment_method": "efectivo_contraentrega",
+                "delivery_method": "domicilio",
+                "customer_data": {},
+            },
+            ctx,
+        )
+        rechazo = await metodo_de_entrega("domicilio", ctx, {})
+        acepta = await metodo_de_entrega("recoger_en_tienda", ctx, {})
+        # Otro agente del negocio sin ajuste sigue con los dos métodos.
+        sin_ajuste = await metodo_de_entrega("domicilio", otro, {})
+    assert res.get("error") == "Ese método de entrega no está habilitado.", res
+    assert res["metodos_disponibles"] == ["recoger_en_tienda"]
+    assert rechazo.ok is False and "recoger en tienda" in (rechazo.error or "")
+    assert acepta.ok is True
+    assert sin_ajuste.ok is True
+
+
+async def test_un_agente_de_otro_negocio_es_404(app_client) -> None:
+    """Gherkin «Permisos y aislamiento»: el agente de otro negocio no existe para este."""
+    a, b = await _negocio(), await _negocio()
+    ha = await api_headers(app_client, a)
+    ajeno = await _agente(b)
+    assert (await app_client.get(_url(ajeno), headers=ha)).status_code == 404
+    r = await app_client.put(_url(ajeno), headers=ha, json={"politica": {}})
+    assert r.status_code == 404
+    assert _campo(
+        (await app_client.get(_url(ajeno), headers=await api_headers(app_client, b))).json(),
+        "ventas.pedido_domicilio",
+        "id_document",
+    )["ajustado"] is False
+
+
+async def test_script_de_migracion_copia_la_politica_global_a_cada_agente(app_client) -> None:
+    """Gherkin «Migración»: dry-run no escribe; `--apply` copia a cada especialista solo sus operaciones, conserva el
+    aviso del negocio, deja auditoría y es idempotente."""
+    import importlib.util
+    from pathlib import Path
+
+    from core.db.models import AgentRecord, AppSettings, AuditLog
+    from core.db.session import get_session
+    from core.shared.tenant import tenant_scope
+
+    ruta = Path(__file__).resolve().parents[2] / "scripts" / "migrar_datos_cliente_agentes.py"
+    spec = importlib.util.spec_from_file_location("migrar_datos_cliente_agentes", ruta)
+    assert spec is not None and spec.loader is not None
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    tid = await _negocio()
+    ventas, agenda = await _agente(tid, "ventas"), await _agente(tid, "agenda")
+    global_ = {
+        "politica": {"ventas.pedido_domicilio": {"id_document": "no_pedir"}, "agenda.agendar_cita": {"phone": "no_pedir"}},
+        "herramientas": False,
+        "aviso": {"activo": True, "texto": "Tratamos tus datos según la ley."},
+    }
+    async with tenant_scope(tid), get_session() as s:
+        settings = (await s.execute(select(AppSettings).where(AppSettings.tenant_id == tid))).scalar_one()
+        settings.behavior_config = {**(settings.behavior_config or {}), "datos_cliente": global_}
+
+    async def _estado():
+        async with tenant_scope(tid), get_session() as s:
+            agentes = {
+                a.id: a.data_policy
+                for a in (await s.execute(select(AgentRecord).where(AgentRecord.tenant_id == tid))).scalars()
+            }
+            settings = (await s.execute(select(AppSettings).where(AppSettings.tenant_id == tid))).scalar_one()
+            auditoria = list(
+                (
+                    await s.execute(
+                        select(AuditLog.action).where(
+                            AuditLog.tenant_id == tid, AuditLog.actor == "script:migrar_datos_cliente_agentes"
+                        )
+                    )
+                ).scalars()
+            )
+        return agentes, dict(settings.behavior_config or {}), auditoria
+
+    script._preparar_registro()
+    simulado = await script._migrar_negocio(tid, aplicar=False)
+    assert simulado["politica_global"] == 2 and {a["key"] for a in simulado["agentes"]} == {"ventas", "agenda"}
+    agentes, behavior, auditoria = await _estado()
+    assert not (agentes[ventas] or {}).get("politica") and behavior["datos_cliente"] == global_ and auditoria == []
+
+    await script._migrar_negocio(tid, aplicar=True)
+    agentes, behavior, auditoria = await _estado()
+    assert agentes[ventas]["politica"] == {"ventas.pedido_domicilio": {"id_document": "no_pedir"}}
+    assert agentes[agenda]["politica"] == {"agenda.agendar_cita": {"phone": "no_pedir"}}
+    assert behavior["datos_cliente"] == {"aviso": global_["aviso"]}  # el aviso sigue siendo del negocio
+    assert sorted(auditoria) == ["agent.datos_cliente_migrado"] * 2 + ["settings.datos_cliente_migrado"]
+
+    otra_vez = await script._migrar_negocio(tid, aplicar=True)  # idempotente: ya no hay política global
+    assert otra_vez["agentes"] == [] and (await _estado())[2] == auditoria
