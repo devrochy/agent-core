@@ -2590,6 +2590,19 @@ def _agente_del_turno_id() -> uuid.UUID | None:
     return agente.instance_id
 
 
+def packs_del_turno(release: Any, agente_en_foco: Any) -> frozenset[str]:
+    """Habilidades que puede usar el turno con una release `release/2` (ADR-0118 enmendado, ADR-0190, HU-AOS-63).
+
+    Manda conexión › agente › negocio: lo congelado en la release de la conexión (`release.skills`) acota lo que el
+    agente en foco tiene instalado (`agente_en_foco.packs`); lo habilitado en el negocio ya no cuenta. Los plugins
+    propios del negocio (`release.tenant_plugins`) siempre entran. Sin agente en foco o sin instalaciones congeladas
+    (releases anteriores a ADR-0190) rige la release entera."""
+    packs = frozenset((*release.skills, *release.tenant_plugins))
+    if agente_en_foco is not None and agente_en_foco.packs is not None:
+        packs = (frozenset(release.skills) & agente_en_foco.packs) | frozenset(release.tenant_plugins)
+    return packs
+
+
 async def contexto_del_motor(
     conversation_id: uuid.UUID,
     *,
@@ -2627,11 +2640,7 @@ async def contexto_del_motor(
         # (scope de la conexión) y la oferta es fail-closed por el agente en foco.
         from core.kernel.oferta import declaradas_por
 
-        packs = frozenset((*release.skills, *release.tenant_plugins))
-        agente_en_foco = release_vigente.agente_del_turno()
-        if agente_en_foco is not None and agente_en_foco.packs is not None:
-            # ADR-0190: el agente solo usa las habilidades que tiene instaladas (y los plugins propios del negocio).
-            packs = (frozenset(release.skills) & agente_en_foco.packs) | frozenset(release.tenant_plugins)
+        packs = packs_del_turno(release, release_vigente.agente_del_turno())
         comunes["permitidos"] = frozenset((packs | {CORE_OWNER}) - set(disabled))
         comunes["de_la_release"] = {
             pid: p for pid, p in release.procedimientos.items() if p.version != "0.0.0"
