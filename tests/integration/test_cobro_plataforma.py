@@ -973,8 +973,12 @@ async def test_plan_del_alta_vencido_se_desbloquea_pagando_por_el_panel(vendedor
     assert (await _cargo(esc, f"{vencio:%Y-%m}")).estado == "pagado"
 
 
-async def test_free_que_compra_un_plan_pago_cambia_de_plan_y_aplica_el_preset(vendedores, correos, alertas) -> None:
-    """Gherkin «Cambio de plan desde el asistente»: sin otro negocio y con el preset pendiente."""
+async def test_free_que_compra_un_plan_pago_cambia_de_plan_y_aplica_el_preset(vendedores, correos, alertas, monkeypatch) -> None:
+    """Gherkin «Cambio de plan desde el asistente»: sin otro negocio y con el preset pendiente (hoy todos los packs son
+    Free: se simula que `pack_commerce` pide Basic para que el preset quede pendiente)."""
+    from _habilidades import pack_de_pago
+
+    pack_de_pago(monkeypatch, "pack_commerce", "basic")
     from core.agents.instalaciones_agente import packs_del_negocio
     from core.db.models import ProvisioningRequest, Tenant
     from core.db.session import get_session
@@ -986,7 +990,7 @@ async def test_free_que_compra_un_plan_pago_cambia_de_plan_y_aplica_el_preset(ve
     assert (antes.plan_id, antes.status) == ("free", "trialing")
     async with get_session() as s:
         alta = (await s.get(Tenant, esc.negocio)).settings["alta"]
-    assert alta["preset"]["estado"] == "pendiente"  # ningún preset cabe en Free
+    assert alta["preset"]["estado"] == "pendiente"  # el pack simulado pide Basic
 
     premium = await _variante(esc.vendedor, "premium", 299_000)
     await _inscribir_y_pagar(esc, premium)

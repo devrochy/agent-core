@@ -88,3 +88,13 @@ async def quitar_habilidades(tenant_id: uuid.UUID, packs: Iterable[str], *, key:
                 await desinstalar_de_agente(tenant_id, agent_id, pack)
             except InstalacionNoEncontrada:  # ya no estaba: quitar es idempotente
                 pass
+
+
+def pack_de_pago(monkeypatch: Any, pack: str, plan: str) -> None:
+    """Hace que `pack` pida `plan` como mínimo (D-79, ADR-0208 §10). Hoy todos los packs son Free (el candado es de
+    superpoderes, decisión 2026-11-24): quien prueba el candado o el preset «pendiente por plan» simula un pack de pago."""
+    from core.plugin_manager import plugin_manager
+
+    if plugin_manager.get(pack) is None:
+        plugin_manager.scan()
+    monkeypatch.setattr(type(plugin_manager.get(pack)), "min_plan", plan)
