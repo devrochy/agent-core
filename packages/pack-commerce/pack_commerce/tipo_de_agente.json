@@ -65,5 +65,10 @@
   ],
   "preguntas_retiradas": [
     "que_vendes"
+  ],
+  "habilidades_transversales": [
+    "pack_knowledge",
+    "pack_payments",
+    "pack_voice"
   ]
 }

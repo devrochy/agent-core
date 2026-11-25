@@ -140,3 +140,21 @@ admite y obligue a tocar el core, o que la validación de arranque bloquee un de
 - Si un pack de la plataforma no carga (por ejemplo `pack_payments`, opcional de Ventas), la API no arranca, porque
   el tipo nombra una habilidad que no existe. Es lo buscado: el despliegue se queda en la versión anterior en vez de
   arrancar degradado sin avisar.
+
+## Adenda HU-AOS-94 (2026-11-25): API del catálogo y de los tipos
+
+- **Campo nuevo `habilidades_transversales` en el manifiesto.** Lista las transversales que el tipo admite
+  (`pack_knowledge`, `pack_payments`, `pack_voice`). Gobierna solo la compatibilidad y el catálogo: no entra en los
+  requisitos del asistente de creación, que siguen saliendo de `habilidades_opcionales`. `validar_catalogo` exige que
+  cada una exista y sea `tipo = "transversal"`, y que toda transversal de la plataforma la declare algún tipo.
+- **Rutas.** `GET /admin/agent-types` (superconjunto de `agent-templates`, con el Coordinador aparte),
+  `GET /admin/skill-catalog`, `GET /admin/agents/{id}/posibles` y `POST /admin/agent-types/{key}/agents` (alias de la
+  creación por plantilla). Las rutas `agent-templates` quedan `deprecated` y con la misma salida.
+- **Permisos.** Las lecturas nuevas piden la sección `agents`; crear sigue pidiendo `settings:write`. El panel debe
+  tratar 403 en `/agent-types` como «sin permiso».
+- **Tipo del agente.** Sale de su `source_template` y, si no, de su `key`. Un agente sin tipo recibe 200 con listas
+  vacías y `type_key = null`; el Coordinador (`kind = core`) recibe 200 con `type_key = "coordinador"`, su habilidad fija
+  `core:recepcion` y sin transversales.
+- **409 `habilidad_incompatible`** en `PUT /admin/agents/{id}/skills/{pack}` al instalar una transversal que el tipo no
+  admite o un pack de especialidad ajeno. Se comprueba antes de escribir y solo en la instalación nueva: configurar lo
+  ya instalado y quitar nunca dan 409. Un agente sin tipo no se restringe.

@@ -144,6 +144,85 @@ class AgentTemplate(BaseModel):
     requirements: list[Requirement]
 
 
+class DataOperationField(BaseModel):
+    key: str
+    label: str
+    adjustable: bool
+
+
+class CustomerDataOperation(BaseModel):
+    """Una operación del módulo que pide datos del cliente (ADR-0198). Sin niveles: esos son del agente."""
+
+    id: str
+    module: str
+    pack: str
+    label: str
+    fields: list[DataOperationField]
+
+
+class AgentType(AgentTemplate):
+    """Un tipo de agente: todo lo de `AgentTemplate` (el panel migra 1 a 1) y lo que declara su manifiesto."""
+
+    # Habilidades que el tipo trae siempre, incluidas las `core:*` (en `skills` solo van los packs).
+    mandatory_skills: list[str]
+    # Transversales (Conocimiento, Pagos, Voz) que se pueden instalar en un agente de este tipo.
+    transversal_skills: list[str]
+    customer_data_operations: list[CustomerDataOperation]
+    # Secciones del `flow.json` del pack con que nace el agente; vacío = todas.
+    default_flow_sections: list[str]
+
+
+class AgentTypeCoordinator(BaseModel):
+    """El Coordinador: no es un tipo de pack, su habilidad es fija (ADR-0205 §5)."""
+
+    key: Literal["coordinador"]
+    name: str
+    description: str
+    skill: str
+    tools: list[str]
+
+
+class AgentTypesOut(BaseModel):
+    coordinator: AgentTypeCoordinator
+    types: list[AgentType]
+
+
+class SkillTool(BaseModel):
+    name: str
+    group: str
+    description: str
+    # Nunca nulo en una habilidad de la plataforma (lo exige el arranque); nullable en el contrato por si se afloja.
+    side_effect: str | None
+    scopes: list[str]
+    requires_confirmation_default: bool
+
+
+class Skill(BaseModel):
+    """Una habilidad con sus tools. `core:recepcion` repite a propósito tools de otras habilidades (es la vista del
+    Coordinador): quien sume tools por habilidad las contaría dos veces."""
+
+    id: str
+    name: str
+    description: str
+    kind: Literal["core", "especialidad", "transversal"]
+    tools: list[SkillTool]
+
+
+class PosibleTransversal(BaseModel):
+    pack_id: str
+    # lista = instalada y activa; falta_configurar = instalada sin su configuración; sin_agregar = no instalada.
+    status: Literal["lista", "falta_configurar", "sin_agregar"]
+    tools: list[SkillTool]
+
+
+class AgentPosibles(BaseModel):
+    # `None` si el agente no resuelve a ningún tipo (key propia): la ficha se pinta igual, sin posibles.
+    type_key: str | None
+    specialty: Skill | None
+    customer_data: list[CustomerDataOperation]
+    transversal: list[PosibleTransversal]
+
+
 class FromTemplateIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -292,7 +371,11 @@ def _error(exc: svc.ErrorDelEditor) -> ApiError:
             409,
             exc.code,
             str(exc),
-            details={"skills": skills, "min_plan": exc.campos.get("min_plan") or None, "plan": exc.campos.get("plan") or None},
+            details={
+                "skills": skills,
+                "min_plan": exc.campos.get("min_plan") or None,
+                "plan": exc.campos.get("plan") or None,
+            },
         )
     if exc.code in _ERRORES_CON_DETALLE:
         skills = [p.strip() for p in exc.campos.get("skills", "").split(",") if p.strip()]
@@ -320,25 +403,26 @@ Paginados = Annotated[PageParams, Depends(page_params)]
 
 
 # ------------------------------------------------------------------ rutas
-@router.get("/agent-templates", response_model=Page[AgentTemplate])
-async def list_templates(
-    principal: Annotated[Principal, Depends(require("settings"))], params: Paginados
-) -> Page[AgentTemplate]:
-    tid = _tenant(principal)
+async def _armar_templates(tid: uuid.UUID) -> list[AgentTemplate]:
+    """Las plantillas (tipos de agente) con lo que el negocio puede hacer con ellas. Las leen `agent-templates` y
+    `agent-types`, que es un superconjunto."""
     habilitados = await svc.habilitados_del_negocio(tid)
     vistas = svc.plantillas(habilitados)
     cargadas = {v.key: load_plantilla(v.key) for v in vistas}
     por_clave = await requisitos.de_plantillas(tid, habilitados, list(cargadas.values()))
     proveedor = await svc._proveedor_de_suscripciones(tid)
     catalogo = _catalogo()
-    items = [
+    return [
         AgentTemplate(
             key=v.key,
             name=v.name,
             description=v.description,
             section=cargadas[v.key].seccion,
             tools=herramientas_de_plantilla(
-                cargadas[v.key], catalogo, habilitados=habilitados, proveedor_suscripciones=proveedor
+                cargadas[v.key],
+                catalogo,
+                habilitados=habilitados,
+                proveedor_suscripciones=proveedor,
             ),
             questions=[_question(q) for q in cargadas[v.key].preguntas],
             skills=list(v.skills),
@@ -351,11 +435,120 @@ async def list_templates(
         )
         for v in vistas
     ]
+
+
+@router.get("/agent-templates", response_model=Page[AgentTemplate], deprecated=True)
+async def list_templates(
+    principal: Annotated[Principal, Depends(require("settings"))], params: Paginados
+) -> Page[AgentTemplate]:
+    """Obsoleta: usa `GET /admin/agent-types` (HU-AOS-94, ADR-0207 §6). Sigue igual hasta que panel y APK migren."""
+    items = await _armar_templates(_tenant(principal))
     return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
+
+
+def _operacion(a: Any) -> CustomerDataOperation:
+    return CustomerDataOperation(
+        id=a.id,
+        module=a.modulo,
+        pack=a.pack,
+        label=a.etiqueta,
+        fields=[DataOperationField(key=c.clave, label=c.etiqueta, adjustable=c.ajustable) for c in a.campos],
+    )
+
+
+def _tool(i: Any) -> SkillTool:
+    return SkillTool(
+        name=i.name,
+        group=i.group,
+        description=i.description,
+        side_effect=i.side_effect,
+        scopes=list(i.scopes),
+        requires_confirmation_default=i.requires_confirmation_default,
+    )
+
+
+def _catalogo_de_habilidades() -> list[Skill]:
+    """Las habilidades de la plataforma con sus tools. No mira ningún negocio: solo lo que declara el binario."""
+    from core.agents.catalogo_de_tipos import tipo_de_habilidad
+    from core.kernel.procedures.catalogo import catalogo_de_habilidades
+    from core.plugin_manager import plugin_manager
+
+    modulos = plugin_manager.list_modules()
+    salida: list[Skill] = []
+    for h in catalogo_de_habilidades(modulos):
+        kind = tipo_de_habilidad(h, modulos)
+        if kind is None:  # un pack de la plataforma sin `tipo` no se expone: el arranque ya lo señala
+            continue
+        salida.append(
+            Skill(
+                id=h.id,
+                name=h.nombre,
+                description=h.descripcion,
+                kind=kind,
+                tools=[_tool(t) for t in h.tools],
+            )
+        )
+    return salida
+
+
+@router.get("/agent-types", response_model=AgentTypesOut)
+async def list_agent_types(
+    principal: Annotated[Principal, Depends(require("agents"))],
+) -> AgentTypesOut:
+    """El Coordinador y los tipos de agente (Ventas, Agenda, Cobranza, Suscripciones) desde los manifiestos de los
+    packs. Reemplaza a `agent-templates` (HU-AOS-94, ADR-0207 §6): cada tipo trae todo lo de la plantilla."""
+    from core.agents.catalogo_de_tipos import (
+        HABILIDAD_DEL_COORDINADOR,
+        TIPO_DEL_COORDINADOR,
+        operaciones_de_datos,
+    )
+    from core.agents.recepcion import TOOLS_RECEPCION
+    from core.agents.tipos_de_agente import tipos_de_agente
+
+    tipos = tipos_de_agente()
+    items: list[AgentType] = []
+    for plantilla in await _armar_templates(_tenant(principal)):
+        manifiesto = tipos.get(plantilla.key)
+        if manifiesto is None:
+            continue
+        items.append(
+            AgentType(
+                **plantilla.model_dump(),
+                mandatory_skills=list(manifiesto.habilidades_obligatorias),
+                transversal_skills=list(manifiesto.habilidades_transversales),
+                customer_data_operations=[_operacion(a) for a in operaciones_de_datos(manifiesto, plantilla.tools)],
+                default_flow_sections=list(manifiesto.flujo_por_defecto),
+            )
+        )
+    coordinador = AgentTypeCoordinator(
+        key=TIPO_DEL_COORDINADOR,
+        name="Coordinador",
+        description="Recibe cada conversación y la reparte al agente que sabe.",
+        skill=HABILIDAD_DEL_COORDINADOR,
+        tools=list(TOOLS_RECEPCION),
+    )
+    return AgentTypesOut(coordinator=coordinador, types=items)
+
+
+@router.get("/skill-catalog", response_model=list[Skill])
+async def get_skill_catalog(
+    principal: Annotated[Principal, Depends(require("agents"))],
+) -> list[Skill]:
+    """Cada habilidad de la plataforma con sus tools y metadatos (HU-AOS-94). Es el mismo catálogo para todos los
+    negocios: no lleva configuración, secretos ni instalaciones de nadie."""
+    _tenant(principal)
+    return _catalogo_de_habilidades()
 
 
 @router.post(
     "/agent-templates/{template_key}/agents",
+    response_model=FromTemplateOut,
+    status_code=status.HTTP_201_CREATED,
+    responses=plan_limit_responses_de("agentes", habilidad=True),
+    deprecated=True,
+)
+@router.post(
+    "/agent-types/{template_key}/agents",
     response_model=FromTemplateOut,
     status_code=status.HTTP_201_CREATED,
     responses=plan_limit_responses_de("agentes", habilidad=True),
@@ -382,7 +575,10 @@ async def create_from_template(
     except versiones.ErroresDeContrato as exc:
         raise _contrato_422(exc.issues) from None
     return FromTemplateOut(
-        agent=_summary(agente, None), draft=_draft(borrador, ve_modelo=_ve_modelo(principal)), warnings=avisos, enabled_skills=habilitadas
+        agent=_summary(agente, None),
+        draft=_draft(borrador, ve_modelo=_ve_modelo(principal)),
+        warnings=avisos,
+        enabled_skills=habilitadas,
     )
 
 
@@ -542,7 +738,10 @@ async def list_publish_targets(
     except versiones.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None
     destinos = await svc.destinos(
-        tid, agent_id, svc.habilidades_del_contenido(borrador.content), await svc.habilitados_del_negocio(tid)
+        tid,
+        agent_id,
+        svc.habilidades_del_contenido(borrador.content),
+        await svc.habilitados_del_negocio(tid),
     )
     items = [
         PublishTarget(
@@ -559,7 +758,11 @@ async def list_publish_targets(
     return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
 
 
-@router.post("/agents/{agent_id}/publish", response_model=EditorPublishOut, responses=plan_limit_responses("agentes"))
+@router.post(
+    "/agents/{agent_id}/publish",
+    response_model=EditorPublishOut,
+    responses=plan_limit_responses("agentes"),
+)
 async def publish_to_connections(
     agent_id: uuid.UUID,
     payload: EditorPublishIn,
@@ -609,7 +812,6 @@ async def publish_to_connections(
     )
 
 
-
 # ------------------------------------------------------------------ habilidades y acciones del agente (ADR-0190)
 class AgentAction(BaseModel):
     tool: str
@@ -650,7 +852,7 @@ async def _agente_o_404(tid: uuid.UUID, agent_id: uuid.UUID) -> None:
 MENSAJE_COORDINADOR_INMUTABLE = "Las habilidades del Coordinador vienen fijas del sistema: no se cambian."
 
 
-async def _especialista_o_409(tid: uuid.UUID, agent_id: uuid.UUID) -> None:
+async def _especialista_o_409(tid: uuid.UUID, agent_id: uuid.UUID) -> Any:
     """404 si no existe; 409 `coordinador_inmutable` si es el Coordinador (ADR-0205 §5): sus habilidades, su flujo y
     su horario de recepción son del core."""
     try:
@@ -659,6 +861,7 @@ async def _especialista_o_409(tid: uuid.UUID, agent_id: uuid.UUID) -> None:
         raise ApiError.not_found("Agente no encontrado.") from None
     if agente.kind == "core":
         raise ApiError(409, "coordinador_inmutable", MENSAJE_COORDINADOR_INMUTABLE)
+    return agente
 
 
 @router.get("/agents/{agent_id}/actions", response_model=Page[AgentAction])
@@ -714,8 +917,90 @@ async def list_agent_skills(
     return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
 
 
+async def _exigir_compatible(tid: uuid.UUID, agent_id: uuid.UUID, agente: Any, pack_id: str) -> None:
+    """409 `habilidad_incompatible` ANTES de escribir nada (HU-AOS-94, ADR-0207 §6): una transversal que el tipo del
+    agente no admite o un pack de especialidad ajeno. Solo la instalación nueva: configurar lo ya instalado y quitarlo
+    siguen funcionando aunque el manifiesto haya cambiado. Un agente sin tipo no se restringe."""
+    from core.agents.catalogo_de_tipos import packs_de_especialidad_ajenos, transversales_admitidas
+    from core.agents.instalaciones_agente import instaladas_en_agente
+    from core.plugin_manager import plugin_manager
+
+    modulo = plugin_manager.get(pack_id)
+    tipo_del_pack = str(getattr(modulo, "tipo", "") or "")
+    if tipo_del_pack == "especialidad" and packs_de_especialidad_ajenos(agente, {pack_id}):
+        raise ApiError(409, "habilidad_incompatible", "Esa habilidad es de otro tipo de agente.")
+    if tipo_del_pack != "transversal":
+        return
+    admitidas = transversales_admitidas(agente)
+    if admitidas is None or pack_id in admitidas:
+        return
+    if pack_id in set(await instaladas_en_agente(tid, agent_id, solo_activas=False)):
+        return
+    raise ApiError(409, "habilidad_incompatible", "Este tipo de agente no admite esa habilidad.")
+
+
+@router.get("/agents/{agent_id}/posibles", response_model=AgentPosibles)
+async def get_agent_posibles(
+    agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("agents"))]
+) -> AgentPosibles:
+    """Lo que la ficha del agente puede mostrar de sus habilidades (HU-AOS-94): la de especialidad, las operaciones
+    de datos del cliente de su tipo y las transversales que su tipo admite con su estado. 404 si el agente no es del
+    negocio. El Coordinador responde con su habilidad fija y sin transversales; un agente sin tipo, con todo vacío."""
+    from core.agents import habilidades_del_agente as hda
+    from core.agents.catalogo_de_tipos import (
+        HABILIDAD_DEL_COORDINADOR,
+        TIPO_DEL_COORDINADOR,
+        operaciones_de_datos,
+        tipo_del_agente,
+    )
+
+    tid = _tenant(principal)
+    try:
+        agente = await versiones.obtener_agente(tid, agent_id)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
+    habilidades = {h.id: h for h in _catalogo_de_habilidades()}
+    if agente.kind == "core":
+        return AgentPosibles(
+            type_key=TIPO_DEL_COORDINADOR,
+            specialty=habilidades.get(HABILIDAD_DEL_COORDINADOR),
+            customer_data=[],
+            transversal=[],
+        )
+    tipo = tipo_del_agente(agente)
+    if tipo is None:
+        return AgentPosibles(type_key=None, specialty=None, customer_data=[], transversal=[])
+    propia = next((h for h in tipo.habilidades_obligatorias if not h.startswith("core:")), None)
+    plantilla = next((p for p in await _armar_templates(tid) if p.key == tipo.key), None)
+    operaciones = operaciones_de_datos(tipo, plantilla.tools if plantilla else [])
+    estados = {h.pack_id: h for h in await hda.transversales(tid, agent_id)}
+    transversales = []
+    for pack in tipo.habilidades_transversales:
+        estado = estados.get(pack)
+        if estado is None:
+            continue  # el pack no está cargado en este despliegue
+        situacion: Literal["lista", "falta_configurar", "sin_agregar"] = (
+            "sin_agregar" if not estado.instalada else ("lista" if estado.status == "active" else "falta_configurar")
+        )
+        transversales.append(
+            PosibleTransversal(
+                pack_id=pack,
+                status=situacion,
+                tools=habilidades[pack].tools if pack in habilidades else [],
+            )
+        )
+    return AgentPosibles(
+        type_key=tipo.key,
+        specialty=habilidades.get(propia) if propia else None,
+        customer_data=[_operacion(a) for a in operaciones],
+        transversal=transversales,
+    )
+
+
 @router.put(
-    "/agents/{agent_id}/skills/{pack_id}", response_model=AgentSkill, responses=plan_limit_responses_de(habilidad=True)
+    "/agents/{agent_id}/skills/{pack_id}",
+    response_model=AgentSkill,
+    responses=plan_limit_responses_de(habilidad=True),
 )
 async def put_agent_skill(
     agent_id: uuid.UUID,
@@ -730,13 +1015,20 @@ async def put_agent_skill(
     from core.agents.instalaciones import ConflictoInstalacion, InstalacionNoEncontrada
 
     tid = await _puede_escribir(principal)
-    await _especialista_o_409(tid, agent_id)
+    agente = await _especialista_o_409(tid, agent_id)
+    if payload.installed:
+        await _exigir_compatible(tid, agent_id, agente, pack_id)
     from core.agents.habilitacion import HabilitacionError
     from core.billing.enforcement import PlanNoIncluye
 
     try:
         h = await hda.configurar(
-            tid, agent_id, pack_id, instalada=payload.installed, config=payload.config, actor=principal.admin.id
+            tid,
+            agent_id,
+            pack_id,
+            instalada=payload.installed,
+            config=payload.config,
+            actor=principal.admin.id,
         )
     except PlanNoIncluye as exc:
         # `plan_plugin_not_included`: el plan no alcanza el `min_plan` de la habilidad (HU-BILL-19). No se instaló nada.
@@ -752,7 +1044,12 @@ async def put_agent_skill(
     except ValueError as exc:
         # Sin los valores: la config puede traer datos del negocio.
         campo = "cuenta_id" if str(exc) == "cuenta_id" else "config"
-        raise ApiError(422, "invalid_config", "Revisa la configuración de la habilidad.", {campo: "Valor inválido."}) from None
+        raise ApiError(
+            422,
+            "invalid_config",
+            "Revisa la configuración de la habilidad.",
+            {campo: "Valor inválido."},
+        ) from None
     return _skill(h)
 
 
@@ -981,7 +1278,8 @@ class AgentDeclarativeToolsIn(BaseModel):
     tools: list[dict[str, Any]] = Field(max_length=50)
     # Valores nuevos (o rotados) de los secretos que usan las tools, de solo escritura.
     secrets: dict[
-        Annotated[str, Field(max_length=60)], Annotated[SecretStr, Field(max_length=MAX_SECRET_BYTES)]
+        Annotated[str, Field(max_length=60)],
+        Annotated[SecretStr, Field(max_length=MAX_SECRET_BYTES)],
     ] = Field(default_factory=dict, max_length=50)
     lock_version: int = Field(ge=0, lt=2**31)
 
@@ -1108,7 +1406,11 @@ async def save_agent_declarative_tools(
     borrador = await _borrador_editable(tid, agent_id, payload.lock_version)
     try:
         preparadas = preparar_declarativas(
-            borrador.content or {}, payload.tools, payload.secrets, await secretos_configurados(tid), _catalogo()
+            borrador.content or {},
+            payload.tools,
+            payload.secrets,
+            await secretos_configurados(tid),
+            _catalogo(),
         )
     except versiones.ErroresDeContrato as exc:
         raise _contrato_422(exc.issues) from None
