@@ -912,6 +912,12 @@ class AgentTypeManifest(BaseModel):
     seccion: str = Field(default="", max_length=40)
     habilidades_obligatorias: list[Annotated[str, Field(pattern=_ID_HABILIDAD)]] = Field(min_length=1, max_length=10)
     habilidades_opcionales: list[Annotated[str, Field(pattern=_ID_HABILIDAD)]] = Field(default_factory=list, max_length=10)
+    # Habilidades transversales (`tipo = "transversal"`: Conocimiento, Pagos, Voz) que se pueden instalar en un agente de
+    # este tipo (HU-AOS-94, ADR-0207 adenda). Solo gobierna la compatibilidad (`PUT /agents/{id}/skills/{pack}`) y el
+    # catálogo; a diferencia de `habilidades_opcionales`, no alimenta los requisitos del asistente de creación.
+    habilidades_transversales: list[Annotated[str, Field(pattern=r"^pack_[a-z0-9_]{1,40}$")]] = Field(
+        default_factory=list, max_length=10
+    )
     # Acota una habilidad opcional a algunas de sus acciones (HU-AOS-22).
     acciones_opcionales: dict[str, list[str]] = Field(default_factory=dict, max_length=10)
     captar_leads: bool = False

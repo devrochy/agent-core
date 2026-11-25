@@ -11639,7 +11639,9 @@
           "admin · editor de agentes"
         ],
         "summary": "List Templates",
+        "description": "Obsoleta: usa `GET /admin/agent-types` (HU-AOS-94, ADR-0207 §6). Sigue igual hasta que panel y APK migren.",
         "operationId": "list_templates_api_v1_admin_agent_templates_get",
+        "deprecated": true,
         "parameters": [
           {
             "name": "page",
@@ -11729,6 +11731,7 @@
         ],
         "summary": "Create From Template",
         "operationId": "create_from_template_api_v1_admin_agent_templates__template_key__agents_post",
+        "deprecated": true,
         "parameters": [
           {
             "name": "template_key",
@@ -47978,6 +47981,310 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CoordinatorOptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agent-types": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "List Agent Types",
+        "description": "El Coordinador y los tipos de agente (Ventas, Agenda, Cobranza, Suscripciones) desde los manifiestos de los\npacks. Reemplaza a `agent-templates` (HU-AOS-94, ADR-0207 §6): cada tipo trae todo lo de la plantilla.",
+        "operationId": "list_agent_types_api_v1_admin_agent_types_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentTypesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/skill-catalog": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Skill Catalog",
+        "description": "Cada habilidad de la plataforma con sus tools y metadatos (HU-AOS-94). Es el mismo catálogo para todos los\nnegocios: no lleva configuración, secretos ni instalaciones de nadie.",
+        "operationId": "get_skill_catalog_api_v1_admin_skill_catalog_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Skill"
+                  },
+                  "title": "Response Get Skill Catalog Api V1 Admin Skill Catalog Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agent-types/{template_key}/agents": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Create From Template",
+        "operationId": "create_from_template_api_v1_admin_agent_types__template_key__agents_post",
+        "parameters": [
+          {
+            "name": "template_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9_]{2,40}$",
+              "title": "Template Key"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FromTemplateIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FromTemplateOut"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Tope o alcance del plan: `error.code` es `plan_limit_agentes`, `plan_plugin_not_included`; `plan_limit_*` trae `error.details = {metric, used, limit}`; `plan_plugin_not_included` trae `error.details = {skills, min_plan, plan}`. No se escribió nada."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/posibles": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Agent Posibles",
+        "description": "Lo que la ficha del agente puede mostrar de sus habilidades (HU-AOS-94): la de especialidad, las operaciones\nde datos del cliente de su tipo y las transversales que su tipo admite con su estado. 404 si el agente no es del\nnegocio. El Coordinador responde con su habilidad fija y sin transversales; un agente sin tipo, con todo vacío.",
+        "operationId": "get_agent_posibles_api_v1_admin_agents__agent_id__posibles_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPosibles"
                 }
               }
             }
@@ -86657,6 +86964,422 @@
         "type": "object",
         "title": "CoordinatorOptionsUpdate",
         "description": "Todos opcionales: solo cambia lo que viene. `null` equivale a no enviarlo; para vaciar se envía `[]` o `\"\"`\n(`business_ranges: []` borra el horario del negocio)."
+      },
+      "AgentPosibles": {
+        "properties": {
+          "type_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Key"
+          },
+          "specialty": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Skill"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "customer_data": {
+            "items": {
+              "$ref": "#/components/schemas/CustomerDataOperation"
+            },
+            "type": "array",
+            "title": "Customer Data"
+          },
+          "transversal": {
+            "items": {
+              "$ref": "#/components/schemas/PosibleTransversal"
+            },
+            "type": "array",
+            "title": "Transversal"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_key",
+          "specialty",
+          "customer_data",
+          "transversal"
+        ],
+        "title": "AgentPosibles"
+      },
+      "AgentType": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "section": {
+            "type": "string",
+            "title": "Section"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/Question"
+            },
+            "type": "array",
+            "title": "Questions"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skills"
+          },
+          "optional_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Optional Skills"
+          },
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "missing_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Skills"
+          },
+          "will_enable": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Will Enable"
+          },
+          "superpowers": {
+            "items": {
+              "$ref": "#/components/schemas/Superpower"
+            },
+            "type": "array",
+            "title": "Superpowers"
+          },
+          "requirements": {
+            "items": {
+              "$ref": "#/components/schemas/Requirement"
+            },
+            "type": "array",
+            "title": "Requirements"
+          },
+          "mandatory_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mandatory Skills"
+          },
+          "transversal_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Transversal Skills"
+          },
+          "customer_data_operations": {
+            "items": {
+              "$ref": "#/components/schemas/CustomerDataOperation"
+            },
+            "type": "array",
+            "title": "Customer Data Operations"
+          },
+          "default_flow_sections": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Default Flow Sections"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "description",
+          "section",
+          "tools",
+          "questions",
+          "skills",
+          "optional_skills",
+          "available",
+          "missing_skills",
+          "will_enable",
+          "superpowers",
+          "requirements",
+          "mandatory_skills",
+          "transversal_skills",
+          "customer_data_operations",
+          "default_flow_sections"
+        ],
+        "title": "AgentType",
+        "description": "Un tipo de agente: todo lo de `AgentTemplate` (el panel migra 1 a 1) y lo que declara su manifiesto."
+      },
+      "AgentTypeCoordinator": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "const": "coordinador",
+            "title": "Key"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "skill": {
+            "type": "string",
+            "title": "Skill"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "description",
+          "skill",
+          "tools"
+        ],
+        "title": "AgentTypeCoordinator",
+        "description": "El Coordinador: no es un tipo de pack, su habilidad es fija (ADR-0205 §5)."
+      },
+      "AgentTypesOut": {
+        "properties": {
+          "coordinator": {
+            "$ref": "#/components/schemas/AgentTypeCoordinator"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/AgentType"
+            },
+            "type": "array",
+            "title": "Types"
+          }
+        },
+        "type": "object",
+        "required": [
+          "coordinator",
+          "types"
+        ],
+        "title": "AgentTypesOut"
+      },
+      "CustomerDataOperation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "module": {
+            "type": "string",
+            "title": "Module"
+          },
+          "pack": {
+            "type": "string",
+            "title": "Pack"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/DataOperationField"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "module",
+          "pack",
+          "label",
+          "fields"
+        ],
+        "title": "CustomerDataOperation",
+        "description": "Una operación del módulo que pide datos del cliente (ADR-0198). Sin niveles: esos son del agente."
+      },
+      "DataOperationField": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "adjustable": {
+            "type": "boolean",
+            "title": "Adjustable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "adjustable"
+        ],
+        "title": "DataOperationField"
+      },
+      "PosibleTransversal": {
+        "properties": {
+          "pack_id": {
+            "type": "string",
+            "title": "Pack Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "lista",
+              "falta_configurar",
+              "sin_agregar"
+            ],
+            "title": "Status"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/SkillTool"
+            },
+            "type": "array",
+            "title": "Tools"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pack_id",
+          "status",
+          "tools"
+        ],
+        "title": "PosibleTransversal"
+      },
+      "Skill": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "core",
+              "especialidad",
+              "transversal"
+            ],
+            "title": "Kind"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/SkillTool"
+            },
+            "type": "array",
+            "title": "Tools"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "kind",
+          "tools"
+        ],
+        "title": "Skill",
+        "description": "Una habilidad con sus tools. `core:recepcion` repite a propósito tools de otras habilidades (es la vista del\nCoordinador): quien sume tools por habilidad las contaría dos veces."
+      },
+      "SkillTool": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "side_effect": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Side Effect"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes"
+          },
+          "requires_confirmation_default": {
+            "type": "boolean",
+            "title": "Requires Confirmation Default"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "group",
+          "description",
+          "side_effect",
+          "scopes",
+          "requires_confirmation_default"
+        ],
+        "title": "SkillTool"
       }
     }
   }

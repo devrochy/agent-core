@@ -247,6 +247,12 @@ def validar_catalogo(modules: Iterable[Any]) -> list[str]:
         propias = {*tipo.habilidades_obligatorias, *tipo.habilidades_opcionales}
         for h in sorted(propias - habilidades):
             problemas.append(f"el tipo {tipo.key!r} declara la habilidad {h!r}, que no existe")
+        for h in sorted(set(tipo.habilidades_transversales)):
+            modulo = next((m for m in modulos if str(m.id) == h), None)
+            if modulo is None:
+                problemas.append(f"el tipo {tipo.key!r} declara la transversal {h!r}, que no existe")
+            elif getattr(modulo, "tipo", "") != "transversal":
+                problemas.append(f"el tipo {tipo.key!r} declara {h!r} como transversal, pero ese pack no lo es")
         # Las acciones de un procedimiento por defecto tienen que estar en las habilidades del tipo o en el core.
         for proc_id in tipo.procedimientos_por_defecto:
             proc = next((p for p in cargar(proc_id.partition(".")[0]) if p.id == proc_id), None)
@@ -261,4 +267,10 @@ def validar_catalogo(modules: Iterable[Any]) -> list[str]:
                             f"el procedimiento {proc_id!r} del tipo {tipo.key!r} usa {accion!r}, "
                             "que no está en las habilidades del tipo"
                         )
+    # Un transversal de la plataforma que ningún tipo declara no se podría instalar en ningún agente: sin aviso quedaría
+    # inalcanzable (HU-AOS-94).
+    declaradas = {h for tipo in tipos_de_agente(modulos).values() for h in tipo.habilidades_transversales}
+    for modulo in modulos:
+        if getattr(modulo, "tipo", "") == "transversal" and str(modulo.id) not in declaradas:
+            problemas.append(f"la habilidad transversal {modulo.id!r} no está declarada por ningún tipo de agente")
     return problemas
