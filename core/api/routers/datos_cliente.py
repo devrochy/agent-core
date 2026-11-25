@@ -374,143 +374,30 @@ async def save_datos_cliente(
     return await _leer(principal, await _agente(principal, agent_id))
 
 
-# ------------------------------------------------------------------ compatibilidad (HU-CRM-28)
+# ------------------------------------------------------------------ política global retirada (HU-CRM-28)
+
+_POLITICA_RETIRADA = (
+    "La política de datos del cliente es de cada agente (ADR-0198): usa /admin/agents/{id}/datos-cliente. "
+    "El aviso de tratamiento de datos sigue en /admin/datos-cliente/aviso."
+)
+_RESPUESTA_RETIRADA = {
+    410: {"description": "Retirado: la política es de cada agente, `error.code = politica_por_agente` (ADR-0198 §5)."}
+}
 
 
-class PoliticaDatosOut(BaseModel):
-    """Contrato legado de la política global; se conserva un release, deprecado."""
-
-    niveles: list[NivelOut]
-    acciones: list[AccionPoliticaOut]
-    herramientas_del_agente: bool = False
+@router.get("/politica", deprecated=True, status_code=410, responses=_RESPUESTA_RETIRADA)
+async def get_politica_retirada(principal: Annotated[Principal, Depends(require("settings"))]) -> None:
+    """Retirado (ADR-0198 §5): la política de datos del cliente es de cada agente (410 `politica_por_agente`)."""
+    raise ApiError(410, "politica_por_agente", _POLITICA_RETIRADA)
 
 
-class PoliticaDatosUpdate(BaseModel):
-    """Cuerpo legado. Se aplica al especialista por defecto del negocio; lo que no tenga se ignora."""
-
-    politica: dict[str, dict[str, NivelOut]] | None = Field(default=None, max_length=50)
-    herramientas_del_agente: bool | None = None
-
-
-async def _agente_de_compatibilidad(principal: Principal) -> AgentRecord | None:
-    """Especialista por defecto o, si no hay publicación, el primer especialista activo."""
-    from core.agents.instancias import especialista_por_defecto
-
-    async with get_session() as session:
-        agent_id = await especialista_por_defecto(session, principal.tenant_id)
-        if agent_id is not None:
-            fila = (
-                await session.execute(
-                    select(AgentRecord).where(
-                        AgentRecord.tenant_id == principal.tenant_id,
-                        AgentRecord.id == agent_id,
-                        AgentRecord.deleted_at.is_(None),
-                    )
-                )
-            ).scalar_one_or_none()
-            if fila is not None:
-                return fila
-        return (
-            await session.execute(
-                select(AgentRecord)
-                .where(
-                    AgentRecord.tenant_id == principal.tenant_id,
-                    AgentRecord.kind == "specialist",
-                    AgentRecord.status == "active",
-                    AgentRecord.deleted_at.is_(None),
-                )
-                .order_by(AgentRecord.created_at, AgentRecord.id)
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-
-
-def _politica_legada(datos: AgenteDatosOut) -> PoliticaDatosOut:
-    return PoliticaDatosOut(
-        niveles=datos.niveles,
-        acciones=datos.acciones,
-        herramientas_del_agente=datos.herramientas_del_agente,
-    )
-
-
-@router.get("/politica", deprecated=True, response_model=PoliticaDatosOut)
-async def get_politica_deprecada(
-    principal: Annotated[Principal, Depends(require("settings"))],
-) -> PoliticaDatosOut:
-    """Deprecado: la política es de cada agente. Devuelve la del especialista por defecto."""
-    _exigir_negocio(principal)
-    agente = await _agente_de_compatibilidad(principal)
-    if agente is None:
-        return PoliticaDatosOut(niveles=[n.value for n in Nivel], acciones=[], herramientas_del_agente=False)
-    return _politica_legada(await _leer(principal, agente))
-
-
-@router.put("/politica", deprecated=True, response_model=PoliticaDatosOut)
-async def save_politica_deprecado(
-    payload: PoliticaDatosUpdate,
+@router.put("/politica", deprecated=True, status_code=410, responses=_RESPUESTA_RETIRADA)
+async def save_politica_retirada(
     principal: Annotated[Principal, Depends(require("settings", write=True))],
-) -> PoliticaDatosOut:
-    """Deprecado: aplica el cuerpo al especialista por defecto, ignorando lo que ese agente no tenga."""
-    _exigir_negocio(principal)
-    agente = await _agente_de_compatibilidad(principal)
-    if agente is None:
-        return PoliticaDatosOut(niveles=[n.value for n in Nivel], acciones=[], herramientas_del_agente=False)
+) -> None:
+    """Retirado (ADR-0198 §5): la política de datos del cliente es de cada agente (410 `politica_por_agente`)."""
+    raise ApiError(410, "politica_por_agente", _POLITICA_RETIRADA)
 
-    acciones_lista, _, _ = await _acciones_del_agente(principal, agente)
-    acciones = {a.id: a for a in acciones_lista}
-    nuevos: dict[str, dict[str, str]] = {}
-    for accion_id, claves in (payload.politica or {}).items():
-        accion = acciones.get(accion_id)
-        if accion is None:
-            continue  # legado del negocio que este especialista no ejecuta
-        defecto = niveles_efectivos(accion, None, await base_de(accion))
-        elegidos: dict[str, str] = {}
-        for clave, nivel in claves.items():
-            campo = accion.campo(clave)
-            if campo is None or not campo.ajustable:
-                continue
-            if nivel != defecto[clave].value:
-                elegidos[clave] = nivel
-        if elegidos:
-            nuevos[accion_id] = elegidos
-
-    async with get_session() as session:
-        fila = (
-            await session.execute(
-                select(AgentRecord)
-                .where(
-                    AgentRecord.tenant_id == principal.tenant_id,
-                    AgentRecord.id == agente.id,
-                    AgentRecord.deleted_at.is_(None),
-                )
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if fila is None:
-            raise ApiError.not_found("Agente no encontrado.")
-        actual = politica_de(fila.data_policy)
-        resultado = {k: v for k, v in actual.items() if k not in acciones}
-        resultado.update(nuevos)
-        nuevo_policy = con_politica(fila.data_policy, resultado)
-        if payload.herramientas_del_agente is not None:
-            nuevo_policy = con_herramientas(nuevo_policy, payload.herramientas_del_agente)
-        if nuevo_policy != (fila.data_policy or {}):
-            fila.data_policy = nuevo_policy
-            session.add(
-                AuditLog(
-                    tenant_id=principal.tenant_id,
-                    actor=f"admin:{principal.admin.email}",
-                    action="settings.datos_cliente",
-                    input={
-                        "agente_id": str(fila.id),
-                        "origen": "legacy",
-                        "antes": actual,
-                        "despues": nuevos,
-                        "herramientas": herramientas_de(nuevo_policy),
-                    },
-                )
-            )
-    return _politica_legada(await _leer(principal, await _agente(principal, agente.id)))
 
 
 # ------------------------------------------------------------------ aviso de tratamiento de datos (HU-CRM-16)

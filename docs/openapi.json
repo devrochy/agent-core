@@ -35748,9 +35748,9 @@
           "api",
           "admin · datos del cliente"
         ],
-        "summary": "Get Politica Deprecada",
-        "description": "Deprecado: la política es de cada agente. Devuelve la del especialista por defecto.",
-        "operationId": "get_politica_deprecada_api_v1_admin_datos_cliente_politica_get",
+        "summary": "Get Politica Retirada",
+        "description": "Retirado (ADR-0198 §5): la política de datos del cliente es de cada agente (410 `politica_por_agente`).",
+        "operationId": "get_politica_retirada_api_v1_admin_datos_cliente_politica_get",
         "deprecated": true,
         "parameters": [
           {
@@ -35787,13 +35787,11 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Successful Response",
+          "410": {
+            "description": "Retirado: la política es de cada agente, `error.code = politica_por_agente` (ADR-0198 §5).",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PoliticaDatosOut"
-                }
+                "schema": {}
               }
             }
           },
@@ -35814,9 +35812,9 @@
           "api",
           "admin · datos del cliente"
         ],
-        "summary": "Save Politica Deprecado",
-        "description": "Deprecado: aplica el cuerpo al especialista por defecto, ignorando lo que ese agente no tenga.",
-        "operationId": "save_politica_deprecado_api_v1_admin_datos_cliente_politica_put",
+        "summary": "Save Politica Retirada",
+        "description": "Retirado (ADR-0198 §5): la política de datos del cliente es de cada agente (410 `politica_por_agente`).",
+        "operationId": "save_politica_retirada_api_v1_admin_datos_cliente_politica_put",
         "deprecated": true,
         "parameters": [
           {
@@ -35852,24 +35850,12 @@
             }
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PoliticaDatosUpdate"
-              }
-            }
-          }
-        },
         "responses": {
-          "200": {
-            "description": "Successful Response",
+          "410": {
+            "description": "Retirado: la política es de cada agente, `error.code = politica_por_agente` (ADR-0198 §5).",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PoliticaDatosOut"
-                }
+                "schema": {}
               }
             }
           },
@@ -73075,82 +73061,6 @@
           "tenant_health_error"
         ],
         "title": "PluginSummary"
-      },
-      "PoliticaDatosOut": {
-        "properties": {
-          "niveles": {
-            "items": {
-              "type": "string",
-              "enum": [
-                "requerido",
-                "recomendado",
-                "no_pedir"
-              ]
-            },
-            "type": "array",
-            "title": "Niveles"
-          },
-          "acciones": {
-            "items": {
-              "$ref": "#/components/schemas/AccionPoliticaOut"
-            },
-            "type": "array",
-            "title": "Acciones"
-          },
-          "herramientas_del_agente": {
-            "type": "boolean",
-            "title": "Herramientas Del Agente",
-            "default": false
-          }
-        },
-        "type": "object",
-        "required": [
-          "niveles",
-          "acciones"
-        ],
-        "title": "PoliticaDatosOut",
-        "description": "Contrato legado de la política global; se conserva un release, deprecado."
-      },
-      "PoliticaDatosUpdate": {
-        "properties": {
-          "politica": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "additionalProperties": {
-                    "type": "string",
-                    "enum": [
-                      "requerido",
-                      "recomendado",
-                      "no_pedir"
-                    ]
-                  },
-                  "type": "object"
-                },
-                "type": "object",
-                "maxProperties": 50
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Politica"
-          },
-          "herramientas_del_agente": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Herramientas Del Agente"
-          }
-        },
-        "type": "object",
-        "title": "PoliticaDatosUpdate",
-        "description": "Cuerpo legado. Se aplica al especialista por defecto del negocio; lo que no tenga se ignora."
       },
       "Portfolio": {
         "properties": {
