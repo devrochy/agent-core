@@ -6787,86 +6787,6 @@
         }
       }
     },
-    "/api/v1/admin/leads/{lead_id}/seguimiento/hecho": {
-      "post": {
-        "tags": [
-          "api",
-          "admin · leads"
-        ],
-        "summary": "Seguimiento Hecho",
-        "description": "Marca como hecho el seguimiento del lead del cliente; queda en su línea de tiempo con la nota (ADR-0193: antes\n`POST /api/v1/pack/commerce/leads/{customer_id}/seguimiento/hecho`, que sigue como alias).",
-        "operationId": "seguimiento_hecho_api_v1_admin_leads__lead_id__seguimiento_hecho_post",
-        "parameters": [
-          {
-            "name": "lead_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Lead Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SeguimientoHechoIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/admin/leads/{lead_id}/timeline": {
       "get": {
         "tags": [
@@ -12934,168 +12854,6 @@
         }
       }
     },
-    "/api/v1/admin/agents/{agent_id}/schedule": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · editor de agentes"
-        ],
-        "summary": "Get Agent Schedule",
-        "description": "Horario del borrador del agente y el del negocio que hereda si no tiene uno propio.",
-        "operationId": "get_agent_schedule_api_v1_admin_agents__agent_id__schedule_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentScheduleOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "api",
-          "admin · editor de agentes"
-        ],
-        "summary": "Save Agent Schedule",
-        "description": "Guarda el horario propio (o `null` para heredar) con el `lock_version` del borrador. Vale al publicar.",
-        "operationId": "save_agent_schedule_api_v1_admin_agents__agent_id__schedule_put",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentScheduleIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentScheduleOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/admin/agents/{agent_id}/flow/options": {
       "get": {
         "tags": [
@@ -13156,470 +12914,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AgentFlowOptionsOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/agents/{agent_id}/guardrails": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · editor de agentes"
-        ],
-        "summary": "Get Agent Guardrails",
-        "description": "Las reglas de respuesta del borrador del agente. El Coordinador no tiene (lista vacía).",
-        "operationId": "get_agent_guardrails_api_v1_admin_agents__agent_id__guardrails_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentGuardrailsOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "api",
-          "admin · editor de agentes"
-        ],
-        "summary": "Save Agent Guardrails",
-        "description": "Reemplaza las reglas del borrador (frase prohibida, tool obligatoria ante una frase, largo máximo; con\n`retry` o `escalate`). Valen al publicar. 422 por campo (`guardrails[i]...`); 409 `coordinador_inmutable`\npara el Coordinador y `stale_lock_version` si otro guardó antes.",
-        "operationId": "save_agent_guardrails_api_v1_admin_agents__agent_id__guardrails_put",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentGuardrailsIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentGuardrailsOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/agents/{agent_id}/declarative-tools": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · editor de agentes"
-        ],
-        "summary": "Get Agent Declarative Tools",
-        "description": "Las tools HTTP del borrador del agente, los secretos del negocio (nombres y dominios, nunca valores) y las\ntools que el turno no ofrecerá. El Coordinador no tiene tools (lista vacía).",
-        "operationId": "get_agent_declarative_tools_api_v1_admin_agents__agent_id__declarative_tools_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentDeclarativeToolsOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "api",
-          "admin · editor de agentes"
-        ],
-        "summary": "Save Agent Declarative Tools",
-        "description": "Reemplaza las tools HTTP del borrador. Valida todo antes de escribir: un header sensible con valor literal,\nun dominio interno, un secreto sin valor o un valor que ninguna tool usa dan 422 por campo y no se guarda nada.\nLuego cifra los secretos nuevos en la instalación `core` del negocio, atados a los dominios de las tools que los\nusan (más los que ya tenían), y por último guarda el borrador. Si el borrador choca con otra edición (409) los\nsecretos ya quedaron escritos (un valor rotado ya vale para las tools publicadas que lo usan); reintentar con\nel borrador al día termina de guardar.",
-        "operationId": "save_agent_declarative_tools_api_v1_admin_agents__agent_id__declarative_tools_put",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AgentDeclarativeToolsIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AgentDeclarativeToolsOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/coordinator": {
-      "get": {
-        "tags": [
-          "api",
-          "admin · coordinador"
-        ],
-        "summary": "Leer Opciones",
-        "operationId": "leer_opciones_api_v1_admin_coordinator_get",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CoordinatorOptions"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "api",
-          "admin · coordinador"
-        ],
-        "summary": "Guardar Opciones",
-        "operationId": "guardar_opciones_api_v1_admin_coordinator_put",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CoordinatorOptionsUpdate"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CoordinatorOptions"
                 }
               }
             }
@@ -28161,83 +27455,6 @@
         }
       }
     },
-    "/api/v1/admin/plan/recargas": {
-      "post": {
-        "tags": [
-          "api",
-          "admin · plan"
-        ],
-        "summary": "Comprar Recarga",
-        "description": "Link de pago de un paquete de recarga de créditos (ADR-0209 §4, HU-BILL-23). Mismo permiso que\n`POST /subscribe`. El precio lo arma el servidor con el descuento del plan vigente.\n\n400 `unknown_package`: paquete desconocido.\n409 `recarga_no_disponible`: sin suscripción activa o en Free.\n409 `recarga_bajo_minimo`: el precio queda bajo el mínimo de Wompi del ambiente (sandbox: 150.000 COP).",
-        "operationId": "comprar_recarga_api_v1_admin_plan_recargas_post",
-        "parameters": [
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TopUpRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SubscribeResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/admin/platform/tenants": {
       "get": {
         "tags": [
@@ -40987,328 +40204,6 @@
         }
       }
     },
-    "/api/v1/pack/commerce/agents/{agent_id}/payment-forms": {
-      "get": {
-        "tags": [
-          "pack · comercio"
-        ],
-        "summary": "Formas De Pago Del Agente",
-        "description": "Formas de pago del agente con su estado, sus cuentas de transferencia y el proveedor en línea.",
-        "operationId": "formas_de_pago_del_agente_api_v1_pack_commerce_agents__agent_id__payment_forms_get",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FormasDePagoOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "pack · comercio"
-        ],
-        "summary": "Guardar Formas De Pago",
-        "description": "Guarda las formas y las cuentas del agente. Transferencia encendida sin cuenta se guarda y queda\n«Falta configurar» (el agente no la ofrece); tiene que quedar al menos una forma encendida.",
-        "operationId": "guardar_formas_de_pago_api_v1_pack_commerce_agents__agent_id__payment_forms_put",
-        "parameters": [
-          {
-            "name": "agent_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Agent Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/FormasDePagoIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FormasDePagoOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/commerce/orders/{order_id}/payment-proofs": {
-      "get": {
-        "tags": [
-          "pack · comercio"
-        ],
-        "summary": "Comprobantes Del Pedido",
-        "description": "Comprobantes del pedido (los 20 más recientes) con su imagen firmada y el resultado.",
-        "operationId": "comprobantes_del_pedido_api_v1_pack_commerce_orders__order_id__payment_proofs_get",
-        "parameters": [
-          {
-            "name": "order_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Order Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ComprobantesOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/pack/commerce/orders/{order_id}/payment-status": {
-      "post": {
-        "tags": [
-          "pack · comercio"
-        ],
-        "summary": "Cambiar Estado De Pago",
-        "description": "Revisión manual del pago. Queda quién, cuándo y la nota. Un pedido pagado no se vuelve a\nrechazar desde aquí (un reembolso no es un rechazo); rechazar un comprobante deja el pedido\n`rechazado` y el agente deja de presentarlo como pagado.",
-        "operationId": "cambiar_estado_de_pago_api_v1_pack_commerce_orders__order_id__payment_status_post",
-        "parameters": [
-          {
-            "name": "order_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "title": "Order Id"
-            }
-          },
-          {
-            "name": "X-Tenant-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Tenant-Id"
-            }
-          },
-          {
-            "name": "X-Device-Id",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Device-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EstadoDePagoIn"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ComprobantesOut"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/pack/calendar/status": {
       "get": {
         "tags": [
@@ -47994,6 +46889,1111 @@
           }
         }
       }
+    },
+    "/api/v1/pack/commerce/agents/{agent_id}/payment-forms": {
+      "get": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Formas De Pago Del Agente",
+        "description": "Formas de pago del agente con su estado, sus cuentas de transferencia y el proveedor en línea.",
+        "operationId": "formas_de_pago_del_agente_api_v1_pack_commerce_agents__agent_id__payment_forms_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FormasDePagoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Guardar Formas De Pago",
+        "description": "Guarda las formas y las cuentas del agente. Transferencia encendida sin cuenta se guarda y queda\n«Falta configurar» (el agente no la ofrece); tiene que quedar al menos una forma encendida.",
+        "operationId": "guardar_formas_de_pago_api_v1_pack_commerce_agents__agent_id__payment_forms_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FormasDePagoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FormasDePagoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/orders/{order_id}/payment-proofs": {
+      "get": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Comprobantes Del Pedido",
+        "description": "Comprobantes del pedido (los 20 más recientes) con su imagen firmada y el resultado.",
+        "operationId": "comprobantes_del_pedido_api_v1_pack_commerce_orders__order_id__payment_proofs_get",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComprobantesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pack/commerce/orders/{order_id}/payment-status": {
+      "post": {
+        "tags": [
+          "pack · comercio"
+        ],
+        "summary": "Cambiar Estado De Pago",
+        "description": "Revisión manual del pago. Queda quién, cuándo y la nota. Un pedido pagado no se vuelve a\nrechazar desde aquí (un reembolso no es un rechazo); rechazar un comprobante deja el pedido\n`rechazado` y el agente deja de presentarlo como pagado.",
+        "operationId": "cambiar_estado_de_pago_api_v1_pack_commerce_orders__order_id__payment_status_post",
+        "parameters": [
+          {
+            "name": "order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Order Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstadoDePagoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComprobantesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/schedule": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Agent Schedule",
+        "description": "Horario del borrador del agente y el del negocio que hereda si no tiene uno propio.",
+        "operationId": "get_agent_schedule_api_v1_admin_agents__agent_id__schedule_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentScheduleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Save Agent Schedule",
+        "description": "Guarda el horario propio (o `null` para heredar) con el `lock_version` del borrador. Vale al publicar.",
+        "operationId": "save_agent_schedule_api_v1_admin_agents__agent_id__schedule_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentScheduleIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentScheduleOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/leads/{lead_id}/seguimiento/hecho": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · leads"
+        ],
+        "summary": "Seguimiento Hecho",
+        "description": "Marca como hecho el seguimiento del lead del cliente; queda en su línea de tiempo con la nota (ADR-0193: antes\n`POST /api/v1/pack/commerce/leads/{customer_id}/seguimiento/hecho`, que sigue como alias).",
+        "operationId": "seguimiento_hecho_api_v1_admin_leads__lead_id__seguimiento_hecho_post",
+        "parameters": [
+          {
+            "name": "lead_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Lead Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeguimientoHechoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/plan/recargas": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · plan"
+        ],
+        "summary": "Comprar Recarga",
+        "description": "Link de pago de un paquete de recarga de créditos (ADR-0209 §4, HU-BILL-23). Mismo permiso que\n`POST /subscribe`. El precio lo arma el servidor con el descuento del plan vigente.\n\n400 `unknown_package`: paquete desconocido.\n409 `recarga_no_disponible`: sin suscripción activa o en Free.\n409 `recarga_bajo_minimo`: el precio queda bajo el mínimo de Wompi del ambiente (sandbox: 150.000 COP).",
+        "operationId": "comprar_recarga_api_v1_admin_plan_recargas_post",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TopUpRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscribeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/guardrails": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Agent Guardrails",
+        "description": "Las reglas de respuesta del borrador del agente. El Coordinador no tiene (lista vacía).",
+        "operationId": "get_agent_guardrails_api_v1_admin_agents__agent_id__guardrails_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentGuardrailsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Save Agent Guardrails",
+        "description": "Reemplaza las reglas del borrador (frase prohibida, tool obligatoria ante una frase, largo máximo; con\n`retry` o `escalate`). Valen al publicar. 422 por campo (`guardrails[i]...`); 409 `coordinador_inmutable`\npara el Coordinador y `stale_lock_version` si otro guardó antes.",
+        "operationId": "save_agent_guardrails_api_v1_admin_agents__agent_id__guardrails_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentGuardrailsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentGuardrailsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/declarative-tools": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Get Agent Declarative Tools",
+        "description": "Las tools HTTP del borrador del agente, los secretos del negocio (nombres y dominios, nunca valores) y las\ntools que el turno no ofrecerá. El Coordinador no tiene tools (lista vacía).",
+        "operationId": "get_agent_declarative_tools_api_v1_admin_agents__agent_id__declarative_tools_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDeclarativeToolsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · editor de agentes"
+        ],
+        "summary": "Save Agent Declarative Tools",
+        "description": "Reemplaza las tools HTTP del borrador. Valida todo antes de escribir: un header sensible con valor literal,\nun dominio interno, un secreto sin valor o un valor que ninguna tool usa dan 422 por campo y no se guarda nada.\nLuego cifra los secretos nuevos en la instalación `core` del negocio, atados a los dominios de las tools que los\nusan (más los que ya tenían), y por último guarda el borrador. Si el borrador choca con otra edición (409) los\nsecretos ya quedaron escritos (un valor rotado ya vale para las tools publicadas que lo usan); reintentar con\nel borrador al día termina de guardar.",
+        "operationId": "save_agent_declarative_tools_api_v1_admin_agents__agent_id__declarative_tools_put",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentDeclarativeToolsIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDeclarativeToolsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/coordinator": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · coordinador"
+        ],
+        "summary": "Leer Opciones",
+        "operationId": "leer_opciones_api_v1_admin_coordinator_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorOptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · coordinador"
+        ],
+        "summary": "Guardar Opciones",
+        "operationId": "guardar_opciones_api_v1_admin_coordinator_put",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CoordinatorOptionsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoordinatorOptions"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -49813,83 +49813,6 @@
         ],
         "title": "AgentCustomer"
       },
-      "AgentDeclarativeToolsIn": {
-        "properties": {
-          "tools": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "maxItems": 50,
-            "title": "Tools"
-          },
-          "secrets": {
-            "additionalProperties": {
-              "type": "string",
-              "maxLength": 8000,
-              "format": "password",
-              "writeOnly": true
-            },
-            "propertyNames": {
-              "maxLength": 60
-            },
-            "type": "object",
-            "maxProperties": 50,
-            "title": "Secrets"
-          },
-          "lock_version": {
-            "type": "integer",
-            "exclusiveMaximum": 2147483648.0,
-            "minimum": 0.0,
-            "title": "Lock Version"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "tools",
-          "lock_version"
-        ],
-        "title": "AgentDeclarativeToolsIn"
-      },
-      "AgentDeclarativeToolsOut": {
-        "properties": {
-          "tools": {
-            "items": {
-              "$ref": "#/components/schemas/DeclarativeTool"
-            },
-            "type": "array",
-            "title": "Tools"
-          },
-          "secrets": {
-            "items": {
-              "$ref": "#/components/schemas/ConfiguredSecret"
-            },
-            "type": "array",
-            "title": "Secrets"
-          },
-          "omitted": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Omitted"
-          },
-          "lock_version": {
-            "type": "integer",
-            "title": "Lock Version"
-          }
-        },
-        "type": "object",
-        "required": [
-          "tools",
-          "secrets",
-          "omitted",
-          "lock_version"
-        ],
-        "title": "AgentDeclarativeToolsOut"
-      },
       "AgentDetail": {
         "properties": {
           "id": {
@@ -50141,53 +50064,6 @@
           "lock_version"
         ],
         "title": "AgentFlowOut"
-      },
-      "AgentGuardrailsIn": {
-        "properties": {
-          "guardrails": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "maxItems": 100,
-            "title": "Guardrails"
-          },
-          "lock_version": {
-            "type": "integer",
-            "exclusiveMaximum": 2147483648.0,
-            "minimum": 0.0,
-            "title": "Lock Version"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "guardrails",
-          "lock_version"
-        ],
-        "title": "AgentGuardrailsIn"
-      },
-      "AgentGuardrailsOut": {
-        "properties": {
-          "guardrails": {
-            "items": {
-              "$ref": "#/components/schemas/GuardrailRule"
-            },
-            "type": "array",
-            "title": "Guardrails"
-          },
-          "lock_version": {
-            "type": "integer",
-            "title": "Lock Version"
-          }
-        },
-        "type": "object",
-        "required": [
-          "guardrails",
-          "lock_version"
-        ],
-        "title": "AgentGuardrailsOut"
       },
       "AgentOverviewItem": {
         "properties": {
@@ -50616,83 +50492,6 @@
           "notices"
         ],
         "title": "AgentRetiredNotices"
-      },
-      "AgentScheduleIn": {
-        "properties": {
-          "schedule": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Schedule",
-            "description": "`null` vuelve a heredar el horario del negocio."
-          },
-          "lock_version": {
-            "type": "integer",
-            "title": "Lock Version"
-          }
-        },
-        "type": "object",
-        "required": [
-          "schedule",
-          "lock_version"
-        ],
-        "title": "AgentScheduleIn"
-      },
-      "AgentScheduleOut": {
-        "properties": {
-          "schedule": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Schedule",
-            "description": "Horario propio del agente (`{tz, ranges}`); `null` = hereda el del negocio."
-          },
-          "business_hours": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Business Hours",
-            "description": "El horario del negocio (lo que hereda)."
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "agente",
-              "negocio"
-            ],
-            "title": "Source"
-          },
-          "lock_version": {
-            "type": "integer",
-            "title": "Lock Version"
-          }
-        },
-        "type": "object",
-        "required": [
-          "schedule",
-          "business_hours",
-          "source",
-          "lock_version"
-        ],
-        "title": "AgentScheduleOut"
       },
       "AgentSkill": {
         "properties": {
@@ -53187,10 +52986,10 @@
           }
         },
         "type": "object",
+        "title": "BrainSettings",
         "required": [
           "model_primary"
-        ],
-        "title": "BrainSettings"
+        ]
       },
       "BrainUpdate": {
         "properties": {
@@ -53243,11 +53042,11 @@
           }
         },
         "type": "object",
+        "title": "BrainUpdate",
+        "description": "Entrada de `PUT /brain`: mismos rangos que recorta `save_brain` (temperatura 0–2,\n1–50 llamadas a tools por turno, presupuesto ≥ 0); fuera de rango responde 422.",
         "required": [
           "model_primary"
-        ],
-        "title": "BrainUpdate",
-        "description": "Entrada de `PUT /brain`: mismos rangos que recorta `save_brain` (temperatura 0–2,\n1–50 llamadas a tools por turno, presupuesto ≥ 0); fuera de rango responde 422."
+        ]
       },
       "BuildIn": {
         "properties": {
@@ -53445,33 +53244,6 @@
           "numbers"
         ],
         "title": "BusinessNumbersResponse"
-      },
-      "BusinessRange": {
-        "properties": {
-          "day": {
-            "type": "integer",
-            "maximum": 6.0,
-            "minimum": 0.0,
-            "title": "Day"
-          },
-          "from": {
-            "type": "string",
-            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
-            "title": "From"
-          },
-          "to": {
-            "type": "string",
-            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
-            "title": "To"
-          }
-        },
-        "type": "object",
-        "required": [
-          "day",
-          "from",
-          "to"
-        ],
-        "title": "BusinessRange"
       },
       "CalendarDelete": {
         "properties": {
@@ -55990,145 +55762,6 @@
         ],
         "title": "CommerceKpi"
       },
-      "ComprobanteOut": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pagado",
-              "en_revision",
-              "rechazado"
-            ],
-            "title": "Status"
-          },
-          "image_url": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Image Url",
-            "description": "URL firmada de vida corta; `null` si la imagen no está."
-          },
-          "extracted": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Extracted",
-            "description": "Lo que leyó la visión: monto, fecha, estado, banco, cuenta (últimos 4)…"
-          },
-          "match": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Match",
-            "description": "Resultado de la comparación con el pedido y sus motivos."
-          },
-          "reviewed_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reviewed At"
-          },
-          "review_note": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Review Note"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "status",
-          "image_url",
-          "extracted",
-          "match",
-          "reviewed_at",
-          "review_note",
-          "created_at"
-        ],
-        "title": "ComprobanteOut"
-      },
-      "ComprobantesOut": {
-        "properties": {
-          "order_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Order Id"
-          },
-          "payment_status": {
-            "type": "string",
-            "title": "Payment Status"
-          },
-          "payment_method": {
-            "type": "string",
-            "title": "Payment Method"
-          },
-          "payment_status_changed_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Payment Status Changed At"
-          },
-          "payment_status_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Payment Status Reason"
-          },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ComprobanteOut"
-            },
-            "type": "array",
-            "title": "Items"
-          }
-        },
-        "type": "object",
-        "required": [
-          "order_id",
-          "payment_status",
-          "payment_method",
-          "payment_status_changed_at",
-          "payment_status_reason",
-          "items"
-        ],
-        "title": "ComprobantesOut"
-      },
       "ConexionDeEnvioOut": {
         "properties": {
           "id": {
@@ -56408,28 +56041,6 @@
           "active"
         ],
         "title": "ConexionTwilioOut"
-      },
-      "ConfiguredSecret": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "title": "Name"
-          },
-          "domains": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Domains"
-          }
-        },
-        "type": "object",
-        "required": [
-          "name",
-          "domains"
-        ],
-        "title": "ConfiguredSecret",
-        "description": "Un secreto del negocio: su nombre y los dominios a los que puede viajar. Nunca el valor."
       },
       "ConfirmarPagoBody": {
         "properties": {
@@ -58340,211 +57951,6 @@
         ],
         "title": "ConversationUsage"
       },
-      "CoordinatorOptions": {
-        "properties": {
-          "assistant_name": {
-            "type": "string",
-            "title": "Assistant Name"
-          },
-          "business_description": {
-            "type": "string",
-            "title": "Business Description"
-          },
-          "brand_voice": {
-            "type": "string",
-            "title": "Brand Voice"
-          },
-          "business_tz": {
-            "type": "string",
-            "title": "Business Tz"
-          },
-          "business_ranges": {
-            "items": {
-              "$ref": "#/components/schemas/BusinessRange"
-            },
-            "type": "array",
-            "title": "Business Ranges"
-          },
-          "business_hours_mode": {
-            "type": "string",
-            "enum": [
-              "bloquea",
-              "informativo"
-            ],
-            "title": "Business Hours Mode"
-          },
-          "out_of_hours_message": {
-            "type": "string",
-            "title": "Out Of Hours Message"
-          },
-          "nivel_ia": {
-            "type": "string",
-            "enum": [
-              "estandar",
-              "avanzado"
-            ],
-            "title": "Nivel Ia"
-          },
-          "guardrails": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Guardrails"
-          },
-          "guardrails_problems": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Guardrails Problems",
-            "default": []
-          }
-        },
-        "type": "object",
-        "required": [
-          "assistant_name",
-          "business_description",
-          "brand_voice",
-          "business_tz",
-          "business_ranges",
-          "business_hours_mode",
-          "out_of_hours_message",
-          "nivel_ia",
-          "guardrails"
-        ],
-        "title": "CoordinatorOptions"
-      },
-      "CoordinatorOptionsUpdate": {
-        "properties": {
-          "assistant_name": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 120,
-                "minLength": 1
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Assistant Name"
-          },
-          "business_description": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 4000
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Business Description"
-          },
-          "brand_voice": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 4000
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Brand Voice"
-          },
-          "business_tz": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 64
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Business Tz"
-          },
-          "business_ranges": {
-            "anyOf": [
-              {
-                "items": {
-                  "$ref": "#/components/schemas/BusinessRange"
-                },
-                "type": "array",
-                "maxItems": 50
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Business Ranges"
-          },
-          "business_hours_mode": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "bloquea",
-                  "informativo"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Business Hours Mode"
-          },
-          "out_of_hours_message": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 1000
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Out Of Hours Message"
-          },
-          "nivel_ia": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "estandar",
-                  "avanzado"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Nivel Ia"
-          },
-          "guardrails": {
-            "anyOf": [
-              {
-                "items": {
-                  "additionalProperties": true,
-                  "type": "object"
-                },
-                "type": "array",
-                "maxItems": 20
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Guardrails"
-          }
-        },
-        "type": "object",
-        "title": "CoordinatorOptionsUpdate",
-        "description": "Todos opcionales: solo cambia lo que viene. `null` equivale a no enviarlo; para vaciar se envía `[]` o `\"\"`\n(`business_ranges: []` borra el horario del negocio)."
-      },
       "CostsResponse": {
         "properties": {
           "meta": {
@@ -58772,67 +58178,6 @@
           "label"
         ],
         "title": "CredentialField"
-      },
-      "CreditBalance": {
-        "properties": {
-          "total": {
-            "type": "number",
-            "title": "Total"
-          },
-          "month": {
-            "type": "number",
-            "title": "Month"
-          },
-          "accumulated": {
-            "type": "number",
-            "title": "Accumulated",
-            "default": 0
-          },
-          "accumulated_expires_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Accumulated Expires At"
-          },
-          "top_ups": {
-            "type": "number",
-            "title": "Top Ups",
-            "default": 0
-          },
-          "used_month": {
-            "type": "number",
-            "title": "Used Month",
-            "default": 0
-          },
-          "used_accumulated": {
-            "type": "number",
-            "title": "Used Accumulated",
-            "default": 0
-          },
-          "used_top_ups": {
-            "type": "number",
-            "title": "Used Top Ups",
-            "default": 0
-          },
-          "over_balance": {
-            "type": "number",
-            "title": "Over Balance",
-            "default": 0
-          }
-        },
-        "type": "object",
-        "required": [
-          "total",
-          "month"
-        ],
-        "title": "CreditBalance",
-        "description": "Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22): el crédito del mes del plan más lo\nacumulado (sobrante de ciclos anteriores, en Premium y Empresarial) y las recargas. Se gasta en ese\norden: mes, acumulado (el que vence antes primero) y recargas. `over_balance` es lo consumido por\nencima del saldo (colchón de las conversaciones abiertas, lo absorbe la plataforma). En créditos con\ndécimas (1 crédito = COP 10)."
       },
       "CreditByAgent": {
         "properties": {
@@ -59882,45 +59227,6 @@
         ],
         "title": "CronSummary"
       },
-      "CuentaDeTransferencia": {
-        "properties": {
-          "entity": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Entity",
-            "description": "Entidad (Bancolombia, Nequi…)."
-          },
-          "accountType": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Accounttype",
-            "default": ""
-          },
-          "accountNumber": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Accountnumber"
-          },
-          "holderName": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Holdername",
-            "default": ""
-          },
-          "holderDocument": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Holderdocument",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "entity",
-          "accountNumber"
-        ],
-        "title": "CuentaDeTransferencia"
-      },
       "DashboardResponse": {
         "properties": {
           "tenant_id": {
@@ -59987,85 +59293,6 @@
           "retirados"
         ],
         "title": "DatosRetirados"
-      },
-      "DeclarativeTool": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "pattern": "^[a-zA-Z0-9_]{1,60}$",
-            "title": "Name"
-          },
-          "description": {
-            "type": "string",
-            "maxLength": 400,
-            "title": "Description",
-            "default": ""
-          },
-          "method": {
-            "type": "string",
-            "enum": [
-              "GET",
-              "POST"
-            ],
-            "title": "Method",
-            "default": "GET"
-          },
-          "url": {
-            "type": "string",
-            "maxLength": 2000,
-            "pattern": "^https?://",
-            "title": "Url"
-          },
-          "allowedDomains": {
-            "items": {
-              "type": "string",
-              "maxLength": 253,
-              "minLength": 1
-            },
-            "type": "array",
-            "maxItems": 20,
-            "title": "Alloweddomains",
-            "default": []
-          },
-          "headers": {
-            "patternProperties": {
-              "^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,80}$": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "maxLength": 8000,
-                    "pattern": "^[^\\r\\n\\x00]*$"
-                  },
-                  {
-                    "$ref": "#/components/schemas/SecretRef"
-                  }
-                ]
-              }
-            },
-            "type": "object",
-            "maxProperties": 30,
-            "title": "Headers",
-            "default": {}
-          },
-          "parameters": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Parameters"
-          },
-          "body": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Body",
-            "default": {}
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "name",
-          "url"
-        ],
-        "title": "DeclarativeTool"
       },
       "Definicion": {
         "properties": {
@@ -61475,44 +60702,6 @@
         ],
         "title": "EstadoDatosDePruebaModulo"
       },
-      "EstadoDePagoIn": {
-        "properties": {
-          "accion": {
-            "type": "string",
-            "enum": [
-              "confirmar",
-              "rechazar",
-              "marcar_pagado"
-            ],
-            "title": "Accion",
-            "description": "`confirmar`: el comprobante en revisión es válido. `rechazar`: no lo es. `marcar_pagado`: el pago se verificó por fuera (sin comprobante)."
-          },
-          "proof_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Proof Id",
-            "description": "Comprobante que se confirma o rechaza."
-          },
-          "nota": {
-            "type": "string",
-            "maxLength": 300,
-            "title": "Nota",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "accion"
-        ],
-        "title": "EstadoDePagoIn"
-      },
       "EstadoImportacion": {
         "properties": {
           "disponible": {
@@ -62219,186 +61408,6 @@
         ],
         "title": "FormaDeDatosOut"
       },
-      "FormaDePagoIn": {
-        "properties": {
-          "method": {
-            "type": "string",
-            "enum": [
-              "efectivo_contraentrega",
-              "transferencia",
-              "pago_en_linea"
-            ],
-            "title": "Method"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "instructions": {
-            "type": "string",
-            "maxLength": 500,
-            "title": "Instructions",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "method",
-          "enabled"
-        ],
-        "title": "FormaDePagoIn"
-      },
-      "FormaDePagoOut": {
-        "properties": {
-          "method": {
-            "type": "string",
-            "enum": [
-              "efectivo_contraentrega",
-              "transferencia",
-              "pago_en_linea"
-            ],
-            "title": "Method"
-          },
-          "label": {
-            "type": "string",
-            "title": "Label"
-          },
-          "enabled": {
-            "type": "boolean",
-            "title": "Enabled"
-          },
-          "estado": {
-            "type": "string",
-            "enum": [
-              "activa",
-              "falta_configurar",
-              "apagada"
-            ],
-            "title": "Estado",
-            "description": "`falta_configurar`: encendida pero sin lo que necesita (cuenta o proveedor); el agente no la ofrece."
-          },
-          "falta": {
-            "type": "string",
-            "title": "Falta",
-            "description": "Qué falta, en palabras del dueño; vacío si nada."
-          },
-          "instructions": {
-            "type": "string",
-            "title": "Instructions"
-          },
-          "superpoder": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Superpoder",
-            "description": "Superpoder del dominio «Formas de pago» que la acompaña; contra entrega no tiene."
-          }
-        },
-        "type": "object",
-        "required": [
-          "method",
-          "label",
-          "enabled",
-          "estado",
-          "falta",
-          "instructions",
-          "superpoder"
-        ],
-        "title": "FormaDePagoOut"
-      },
-      "FormasDePagoIn": {
-        "properties": {
-          "forms": {
-            "items": {
-              "$ref": "#/components/schemas/FormaDePagoIn"
-            },
-            "type": "array",
-            "maxItems": 3,
-            "minItems": 1,
-            "title": "Forms"
-          },
-          "transfer_accounts": {
-            "items": {
-              "$ref": "#/components/schemas/CuentaDeTransferencia"
-            },
-            "type": "array",
-            "maxItems": 10,
-            "title": "Transfer Accounts"
-          },
-          "transfer_proof_required": {
-            "type": "boolean",
-            "title": "Transfer Proof Required",
-            "default": true
-          },
-          "transfer_ocr_enabled": {
-            "type": "boolean",
-            "title": "Transfer Ocr Enabled",
-            "default": true
-          }
-        },
-        "type": "object",
-        "required": [
-          "forms"
-        ],
-        "title": "FormasDePagoIn"
-      },
-      "FormasDePagoOut": {
-        "properties": {
-          "agent_id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Agent Id"
-          },
-          "configurada": {
-            "type": "boolean",
-            "title": "Configurada",
-            "description": "`false`: el agente aún no guardó sus formas y se deducen como antes."
-          },
-          "forms": {
-            "items": {
-              "$ref": "#/components/schemas/FormaDePagoOut"
-            },
-            "type": "array",
-            "title": "Forms"
-          },
-          "transfer_accounts": {
-            "items": {
-              "$ref": "#/components/schemas/CuentaDeTransferencia"
-            },
-            "type": "array",
-            "title": "Transfer Accounts"
-          },
-          "transfer_proof_required": {
-            "type": "boolean",
-            "title": "Transfer Proof Required"
-          },
-          "transfer_ocr_enabled": {
-            "type": "boolean",
-            "title": "Transfer Ocr Enabled"
-          },
-          "pago_en_linea_disponible": {
-            "type": "boolean",
-            "title": "Pago En Linea Disponible",
-            "description": "El negocio tiene una cuenta de pagos en línea conectada."
-          }
-        },
-        "type": "object",
-        "required": [
-          "agent_id",
-          "configurada",
-          "forms",
-          "transfer_accounts",
-          "transfer_proof_required",
-          "transfer_ocr_enabled",
-          "pago_en_linea_disponible"
-        ],
-        "title": "FormasDePagoOut"
-      },
       "FromScriptIn": {
         "properties": {
           "template_key": {
@@ -62897,77 +61906,6 @@
         ],
         "title": "GuardadoErrorOut",
         "description": "El sobre de error de la API (`{error: {code, message, details?}}`). En un 422, `details` trae los valores\nválidos (`permitidas`) y, según el caso, los inválidos (`desconocidas`, `invalidos`)."
-      },
-      "GuardrailRule": {
-        "properties": {
-          "name": {
-            "type": "string",
-            "maxLength": 60,
-            "minLength": 1,
-            "title": "Name"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "forbidden_phrase",
-              "required_tool",
-              "max_length"
-            ],
-            "title": "Kind"
-          },
-          "action": {
-            "type": "string",
-            "enum": [
-              "retry",
-              "escalate"
-            ],
-            "title": "Action",
-            "default": "retry"
-          },
-          "phrases": {
-            "items": {
-              "type": "string",
-              "maxLength": 1000,
-              "minLength": 1
-            },
-            "type": "array",
-            "maxItems": 50,
-            "title": "Phrases",
-            "default": []
-          },
-          "tool": {
-            "anyOf": [
-              {
-                "type": "string",
-                "pattern": "^[a-zA-Z0-9_]{1,80}$"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Tool"
-          },
-          "value": {
-            "anyOf": [
-              {
-                "type": "integer",
-                "maximum": 100000.0,
-                "minimum": 1.0
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Value"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "name",
-          "kind"
-        ],
-        "title": "GuardrailRule"
       },
       "GuardrailsSettings": {
         "properties": {
@@ -73752,35 +72690,6 @@
         ],
         "title": "PlatformTenant"
       },
-      "PlaygroundCredit": {
-        "properties": {
-          "used": {
-            "type": "number",
-            "title": "Used"
-          },
-          "free_limit": {
-            "type": "number",
-            "title": "Free Limit"
-          },
-          "free_remaining": {
-            "type": "number",
-            "title": "Free Remaining"
-          },
-          "charged": {
-            "type": "number",
-            "title": "Charged"
-          }
-        },
-        "type": "object",
-        "required": [
-          "used",
-          "free_limit",
-          "free_remaining",
-          "charged"
-        ],
-        "title": "PlaygroundCredit",
-        "description": "Consumo del playground del panel en el mes del ciclo (D-79, ADR-0208 §15). Es gratis hasta\n`free_limit` créditos; lo que pasa (`charged`) ya está sumado en `used` del crédito y en\n`by_concept.playground`. El playground lo lee para avisar antes de empezar a descontar."
-      },
       "PlaygroundMensajeOut": {
         "properties": {
           "id": {
@@ -80439,21 +79348,6 @@
         ],
         "title": "SearchResponse"
       },
-      "SecretRef": {
-        "properties": {
-          "secret": {
-            "type": "string",
-            "pattern": "^[a-z0-9_]{1,60}$",
-            "title": "Secret"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "secret"
-        ],
-        "title": "SecretRef"
-      },
       "SeguimientoHechoIn": {
         "properties": {
           "siguiente_en": {
@@ -82800,53 +81694,6 @@
           "is_valid"
         ],
         "title": "TokenInspect"
-      },
-      "TopUpPackage": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "creditos": {
-            "type": "integer",
-            "title": "Creditos"
-          },
-          "precio_lista_cop": {
-            "type": "integer",
-            "title": "Precio Lista Cop"
-          },
-          "descuento_pct": {
-            "type": "integer",
-            "title": "Descuento Pct"
-          },
-          "precio_cop": {
-            "type": "integer",
-            "title": "Precio Cop"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "creditos",
-          "precio_lista_cop",
-          "descuento_pct",
-          "precio_cop"
-        ],
-        "title": "TopUpPackage",
-        "description": "Paquete de recarga de créditos con el precio del plan vigente (ADR-0209 §4, D-79): el de lista\nmenos `features.descuento_recarga` del plan, en pesos enteros."
-      },
-      "TopUpRequest": {
-        "properties": {
-          "paquete": {
-            "type": "string",
-            "title": "Paquete"
-          }
-        },
-        "type": "object",
-        "required": [
-          "paquete"
-        ],
-        "title": "TopUpRequest"
       },
       "TramoDeMora": {
         "properties": {
@@ -86657,6 +85504,1159 @@
           "fecha_hora"
         ],
         "title": "Payment"
+      },
+      "CuentaDeTransferencia": {
+        "properties": {
+          "entity": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Entity",
+            "description": "Entidad (Bancolombia, Nequi…)."
+          },
+          "accountType": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Accounttype",
+            "default": ""
+          },
+          "accountNumber": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Accountnumber"
+          },
+          "holderName": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Holdername",
+            "default": ""
+          },
+          "holderDocument": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Holderdocument",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity",
+          "accountNumber"
+        ],
+        "title": "CuentaDeTransferencia"
+      },
+      "FormaDePagoOut": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "efectivo_contraentrega",
+              "transferencia",
+              "pago_en_linea"
+            ],
+            "title": "Method"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "activa",
+              "falta_configurar",
+              "apagada"
+            ],
+            "title": "Estado",
+            "description": "`falta_configurar`: encendida pero sin lo que necesita (cuenta o proveedor); el agente no la ofrece."
+          },
+          "falta": {
+            "type": "string",
+            "title": "Falta",
+            "description": "Qué falta, en palabras del dueño; vacío si nada."
+          },
+          "instructions": {
+            "type": "string",
+            "title": "Instructions"
+          },
+          "superpoder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Superpoder",
+            "description": "Superpoder del dominio «Formas de pago» que la acompaña; contra entrega no tiene."
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "label",
+          "enabled",
+          "estado",
+          "falta",
+          "instructions",
+          "superpoder"
+        ],
+        "title": "FormaDePagoOut"
+      },
+      "FormasDePagoOut": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "configurada": {
+            "type": "boolean",
+            "title": "Configurada",
+            "description": "`false`: el agente aún no guardó sus formas y se deducen como antes."
+          },
+          "forms": {
+            "items": {
+              "$ref": "#/components/schemas/FormaDePagoOut"
+            },
+            "type": "array",
+            "title": "Forms"
+          },
+          "transfer_accounts": {
+            "items": {
+              "$ref": "#/components/schemas/CuentaDeTransferencia"
+            },
+            "type": "array",
+            "title": "Transfer Accounts"
+          },
+          "transfer_proof_required": {
+            "type": "boolean",
+            "title": "Transfer Proof Required"
+          },
+          "transfer_ocr_enabled": {
+            "type": "boolean",
+            "title": "Transfer Ocr Enabled"
+          },
+          "pago_en_linea_disponible": {
+            "type": "boolean",
+            "title": "Pago En Linea Disponible",
+            "description": "El negocio tiene una cuenta de pagos en línea conectada."
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "configurada",
+          "forms",
+          "transfer_accounts",
+          "transfer_proof_required",
+          "transfer_ocr_enabled",
+          "pago_en_linea_disponible"
+        ],
+        "title": "FormasDePagoOut"
+      },
+      "FormaDePagoIn": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": [
+              "efectivo_contraentrega",
+              "transferencia",
+              "pago_en_linea"
+            ],
+            "title": "Method"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Instructions",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "enabled"
+        ],
+        "title": "FormaDePagoIn"
+      },
+      "FormasDePagoIn": {
+        "properties": {
+          "forms": {
+            "items": {
+              "$ref": "#/components/schemas/FormaDePagoIn"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Forms"
+          },
+          "transfer_accounts": {
+            "items": {
+              "$ref": "#/components/schemas/CuentaDeTransferencia"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Transfer Accounts"
+          },
+          "transfer_proof_required": {
+            "type": "boolean",
+            "title": "Transfer Proof Required",
+            "default": true
+          },
+          "transfer_ocr_enabled": {
+            "type": "boolean",
+            "title": "Transfer Ocr Enabled",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "forms"
+        ],
+        "title": "FormasDePagoIn"
+      },
+      "EstadoDePagoIn": {
+        "properties": {
+          "accion": {
+            "type": "string",
+            "enum": [
+              "confirmar",
+              "rechazar",
+              "marcar_pagado"
+            ],
+            "title": "Accion",
+            "description": "`confirmar`: el comprobante en revisión es válido. `rechazar`: no lo es. `marcar_pagado`: el pago se verificó por fuera (sin comprobante)."
+          },
+          "proof_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proof Id",
+            "description": "Comprobante que se confirma o rechaza."
+          },
+          "nota": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Nota",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "accion"
+        ],
+        "title": "EstadoDePagoIn"
+      },
+      "ComprobanteOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pagado",
+              "en_revision",
+              "rechazado"
+            ],
+            "title": "Status"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url",
+            "description": "URL firmada de vida corta; `null` si la imagen no está."
+          },
+          "extracted": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extracted",
+            "description": "Lo que leyó la visión: monto, fecha, estado, banco, cuenta (últimos 4)…"
+          },
+          "match": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Match",
+            "description": "Resultado de la comparación con el pedido y sus motivos."
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "image_url",
+          "extracted",
+          "match",
+          "reviewed_at",
+          "review_note",
+          "created_at"
+        ],
+        "title": "ComprobanteOut"
+      },
+      "ComprobantesOut": {
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Order Id"
+          },
+          "payment_status": {
+            "type": "string",
+            "title": "Payment Status"
+          },
+          "payment_method": {
+            "type": "string",
+            "title": "Payment Method"
+          },
+          "payment_status_changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Status Changed At"
+          },
+          "payment_status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payment Status Reason"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ComprobanteOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "order_id",
+          "payment_status",
+          "payment_method",
+          "payment_status_changed_at",
+          "payment_status_reason",
+          "items"
+        ],
+        "title": "ComprobantesOut"
+      },
+      "AgentScheduleIn": {
+        "properties": {
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule",
+            "description": "`null` vuelve a heredar el horario del negocio."
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schedule",
+          "lock_version"
+        ],
+        "title": "AgentScheduleIn"
+      },
+      "AgentScheduleOut": {
+        "properties": {
+          "schedule": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule",
+            "description": "Horario propio del agente (`{tz, ranges}`); `null` = hereda el del negocio."
+          },
+          "business_hours": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours",
+            "description": "El horario del negocio (lo que hereda)."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "agente",
+              "negocio"
+            ],
+            "title": "Source"
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schedule",
+          "business_hours",
+          "source",
+          "lock_version"
+        ],
+        "title": "AgentScheduleOut"
+      },
+      "PlaygroundCredit": {
+        "properties": {
+          "used": {
+            "type": "number",
+            "title": "Used"
+          },
+          "free_limit": {
+            "type": "number",
+            "title": "Free Limit"
+          },
+          "free_remaining": {
+            "type": "number",
+            "title": "Free Remaining"
+          },
+          "charged": {
+            "type": "number",
+            "title": "Charged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "used",
+          "free_limit",
+          "free_remaining",
+          "charged"
+        ],
+        "title": "PlaygroundCredit",
+        "description": "Consumo del playground del panel en el mes del ciclo (D-79, ADR-0208 §15). Es gratis hasta\n`free_limit` créditos; lo que pasa (`charged`) ya está sumado en `used` del crédito y en\n`by_concept.playground`. El playground lo lee para avisar antes de empezar a descontar."
+      },
+      "CreditBalance": {
+        "properties": {
+          "total": {
+            "type": "number",
+            "title": "Total"
+          },
+          "month": {
+            "type": "number",
+            "title": "Month"
+          },
+          "accumulated": {
+            "type": "number",
+            "title": "Accumulated",
+            "default": 0
+          },
+          "accumulated_expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accumulated Expires At"
+          },
+          "top_ups": {
+            "type": "number",
+            "title": "Top Ups",
+            "default": 0
+          },
+          "used_month": {
+            "type": "number",
+            "title": "Used Month",
+            "default": 0
+          },
+          "used_accumulated": {
+            "type": "number",
+            "title": "Used Accumulated",
+            "default": 0
+          },
+          "used_top_ups": {
+            "type": "number",
+            "title": "Used Top Ups",
+            "default": 0
+          },
+          "over_balance": {
+            "type": "number",
+            "title": "Over Balance",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "month"
+        ],
+        "title": "CreditBalance",
+        "description": "Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22): el crédito del mes del plan más lo\nacumulado (sobrante de ciclos anteriores, en Premium y Empresarial) y las recargas. Se gasta en ese\norden: mes, acumulado (el que vence antes primero) y recargas. `over_balance` es lo consumido por\nencima del saldo (colchón de las conversaciones abiertas, lo absorbe la plataforma). En créditos con\ndécimas (1 crédito = COP 10)."
+      },
+      "TopUpPackage": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "creditos": {
+            "type": "integer",
+            "title": "Creditos"
+          },
+          "precio_lista_cop": {
+            "type": "integer",
+            "title": "Precio Lista Cop"
+          },
+          "descuento_pct": {
+            "type": "integer",
+            "title": "Descuento Pct"
+          },
+          "precio_cop": {
+            "type": "integer",
+            "title": "Precio Cop"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "creditos",
+          "precio_lista_cop",
+          "descuento_pct",
+          "precio_cop"
+        ],
+        "title": "TopUpPackage",
+        "description": "Paquete de recarga de créditos con el precio del plan vigente (ADR-0209 §4, D-79): el de lista\nmenos `features.descuento_recarga` del plan, en pesos enteros."
+      },
+      "TopUpRequest": {
+        "properties": {
+          "paquete": {
+            "type": "string",
+            "title": "Paquete"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paquete"
+        ],
+        "title": "TopUpRequest"
+      },
+      "AgentDeclarativeToolsIn": {
+        "properties": {
+          "tools": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Tools"
+          },
+          "secrets": {
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 8000,
+              "format": "password",
+              "writeOnly": true
+            },
+            "propertyNames": {
+              "maxLength": 60
+            },
+            "type": "object",
+            "maxProperties": 50,
+            "title": "Secrets"
+          },
+          "lock_version": {
+            "type": "integer",
+            "exclusiveMaximum": 2147483648.0,
+            "minimum": 0.0,
+            "title": "Lock Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "tools",
+          "lock_version"
+        ],
+        "title": "AgentDeclarativeToolsIn"
+      },
+      "AgentDeclarativeToolsOut": {
+        "properties": {
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/DeclarativeTool"
+            },
+            "type": "array",
+            "title": "Tools"
+          },
+          "secrets": {
+            "items": {
+              "$ref": "#/components/schemas/ConfiguredSecret"
+            },
+            "type": "array",
+            "title": "Secrets"
+          },
+          "omitted": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Omitted"
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tools",
+          "secrets",
+          "omitted",
+          "lock_version"
+        ],
+        "title": "AgentDeclarativeToolsOut"
+      },
+      "AgentGuardrailsIn": {
+        "properties": {
+          "guardrails": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Guardrails"
+          },
+          "lock_version": {
+            "type": "integer",
+            "exclusiveMaximum": 2147483648.0,
+            "minimum": 0.0,
+            "title": "Lock Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "guardrails",
+          "lock_version"
+        ],
+        "title": "AgentGuardrailsIn"
+      },
+      "AgentGuardrailsOut": {
+        "properties": {
+          "guardrails": {
+            "items": {
+              "$ref": "#/components/schemas/GuardrailRule"
+            },
+            "type": "array",
+            "title": "Guardrails"
+          },
+          "lock_version": {
+            "type": "integer",
+            "title": "Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "guardrails",
+          "lock_version"
+        ],
+        "title": "AgentGuardrailsOut"
+      },
+      "ConfiguredSecret": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Domains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "domains"
+        ],
+        "title": "ConfiguredSecret",
+        "description": "Un secreto del negocio: su nombre y los dominios a los que puede viajar. Nunca el valor."
+      },
+      "DeclarativeTool": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9_]{1,60}$",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 400,
+            "title": "Description",
+            "default": ""
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST"
+            ],
+            "title": "Method",
+            "default": "GET"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^https?://",
+            "title": "Url"
+          },
+          "allowedDomains": {
+            "items": {
+              "type": "string",
+              "maxLength": 253,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Alloweddomains",
+            "default": []
+          },
+          "headers": {
+            "patternProperties": {
+              "^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,80}$": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 8000,
+                    "pattern": "^[^\\r\\n\\x00]*$"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SecretRef"
+                  }
+                ]
+              }
+            },
+            "type": "object",
+            "maxProperties": 30,
+            "title": "Headers",
+            "default": {}
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Parameters"
+          },
+          "body": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Body",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "url"
+        ],
+        "title": "DeclarativeTool"
+      },
+      "GuardrailRule": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "forbidden_phrase",
+              "required_tool",
+              "max_length"
+            ],
+            "title": "Kind"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "retry",
+              "escalate"
+            ],
+            "title": "Action",
+            "default": "retry"
+          },
+          "phrases": {
+            "items": {
+              "type": "string",
+              "maxLength": 1000,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Phrases",
+            "default": []
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-zA-Z0-9_]{1,80}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 100000.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "title": "GuardrailRule"
+      },
+      "SecretRef": {
+        "properties": {
+          "secret": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,60}$",
+            "title": "Secret"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "secret"
+        ],
+        "title": "SecretRef"
+      },
+      "BusinessRange": {
+        "properties": {
+          "day": {
+            "type": "integer",
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Day"
+          },
+          "from": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "To"
+          }
+        },
+        "type": "object",
+        "required": [
+          "day",
+          "from",
+          "to"
+        ],
+        "title": "BusinessRange"
+      },
+      "CoordinatorOptions": {
+        "properties": {
+          "assistant_name": {
+            "type": "string",
+            "title": "Assistant Name"
+          },
+          "business_description": {
+            "type": "string",
+            "title": "Business Description"
+          },
+          "brand_voice": {
+            "type": "string",
+            "title": "Brand Voice"
+          },
+          "business_tz": {
+            "type": "string",
+            "title": "Business Tz"
+          },
+          "business_ranges": {
+            "items": {
+              "$ref": "#/components/schemas/BusinessRange"
+            },
+            "type": "array",
+            "title": "Business Ranges"
+          },
+          "business_hours_mode": {
+            "type": "string",
+            "enum": [
+              "bloquea",
+              "informativo"
+            ],
+            "title": "Business Hours Mode"
+          },
+          "out_of_hours_message": {
+            "type": "string",
+            "title": "Out Of Hours Message"
+          },
+          "nivel_ia": {
+            "type": "string",
+            "enum": [
+              "estandar",
+              "avanzado"
+            ],
+            "title": "Nivel Ia"
+          },
+          "guardrails": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Guardrails"
+          },
+          "guardrails_problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Guardrails Problems",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "assistant_name",
+          "business_description",
+          "brand_voice",
+          "business_tz",
+          "business_ranges",
+          "business_hours_mode",
+          "out_of_hours_message",
+          "nivel_ia",
+          "guardrails"
+        ],
+        "title": "CoordinatorOptions"
+      },
+      "CoordinatorOptionsUpdate": {
+        "properties": {
+          "assistant_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistant Name"
+          },
+          "business_description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Description"
+          },
+          "brand_voice": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand Voice"
+          },
+          "business_tz": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Tz"
+          },
+          "business_ranges": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BusinessRange"
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Ranges"
+          },
+          "business_hours_mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "bloquea",
+                  "informativo"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Business Hours Mode"
+          },
+          "out_of_hours_message": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Out Of Hours Message"
+          },
+          "nivel_ia": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "estandar",
+                  "avanzado"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nivel Ia"
+          },
+          "guardrails": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guardrails"
+          }
+        },
+        "type": "object",
+        "title": "CoordinatorOptionsUpdate",
+        "description": "Todos opcionales: solo cambia lo que viene. `null` equivale a no enviarlo; para vaciar se envía `[]` o `\"\"`\n(`business_ranges: []` borra el horario del negocio)."
       }
     }
   }
