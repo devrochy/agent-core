@@ -27,6 +27,7 @@ from core.admin.lead_registry import (
 )
 from core.db.session import get_session
 from core.shared.tenant import get_current_tenant_id
+from pack_cobranza import datos as _datos  # noqa: F401  (acciones de la política de datos)
 from pack_cobranza import ficha as _ficha
 from pack_cobranza.models import AuditoriaCartera, Cartera, Cliente, Cuota, Pago, Prestamo, Promesa
 
