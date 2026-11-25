@@ -265,7 +265,7 @@ async def test_la_ficha_del_coordinador_abre_sin_borrador(app_client) -> None:
     r = await app_client.post("/api/v1/admin/agents", headers=h, json={"key": "coord_sin_borrador", "kind": "core", "name": "Coordinador"})
     aid = r.json()["id"]
     async with get_session() as session:
-        await session.execute(text("delete from agent_drafts where agent_id = :a"), {"a": aid})
+        await session.execute(text("update agent_drafts set deleted_at = now() where agent_id = :a"), {"a": aid})
     r = await app_client.get(f"/api/v1/admin/agents/{aid}", headers=h)
     assert r.status_code == 200, r.text
     assert r.json()["kind"] == "core" and r.json()["draft"]["content"] == {} and r.json()["draft"]["lock_version"] == 0
@@ -273,5 +273,5 @@ async def test_la_ficha_del_coordinador_abre_sin_borrador(app_client) -> None:
     r = await app_client.post("/api/v1/admin/agents", headers=h, json={"key": "ventas_sin_borrador", "kind": "specialist", "name": "Ventas"})
     esp = r.json()["id"]
     async with get_session() as session:
-        await session.execute(text("delete from agent_drafts where agent_id = :a"), {"a": esp})
+        await session.execute(text("update agent_drafts set deleted_at = now() where agent_id = :a"), {"a": esp})
     assert (await app_client.get(f"/api/v1/admin/agents/{esp}", headers=h)).status_code == 404
