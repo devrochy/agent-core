@@ -178,7 +178,12 @@ def _preparar_registro() -> None:
     """Carga los `datos.py` de los packs: el registro vive en el proceso y no siempre se importa solo."""
     import importlib
 
-    for modulo in ("pack_commerce.datos", "pack_calendar.datos", "pack_subscriptions.datos"):
+    for modulo in (
+        "pack_commerce.datos",
+        "pack_calendar.datos",
+        "pack_subscriptions.datos",
+        "pack_cobranza.datos",
+    ):
         try:
             importlib.import_module(modulo)
         except Exception:
