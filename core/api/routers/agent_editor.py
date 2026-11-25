@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal
 
 from agentcore_contracts import DeclarativeTool, GuardrailRule
@@ -1094,8 +1095,18 @@ async def _flujo_del_agente(
     from core.agents import flujo_agente as fa
     from core.agents import habilidades_del_agente as hda
 
-    await _agente_o_404(tenant_id, agent_id)
-    borrador = await versiones.obtener_borrador(tenant_id, agent_id)
+    try:
+        agente = await versiones.obtener_agente(tenant_id, agent_id)
+        try:
+            borrador = await versiones.obtener_borrador(tenant_id, agent_id)
+        except versiones.AgenteNoEncontrado:
+            # El Coordinador sembrado por el alta no tiene borrador (sus opciones viven en `/admin/coordinator`): se lee
+            # un borrador vacío que no se guarda, como en su ficha. Un especialista sin borrador sigue siendo 404.
+            if agente.kind != "core":
+                raise
+            borrador = SimpleNamespace(content={}, flow=None, lock_version=0)
+    except versiones.AgenteNoEncontrado:
+        raise ApiError.not_found("Agente no encontrado.") from None
     packs = await hda.packs_del_agente(tenant_id, agent_id, await svc.habilitados_del_negocio(tenant_id))
     acciones = hda.acciones(dict(borrador.content or {}), packs)
     permitidas = fa.acciones_permitidas(acciones)
