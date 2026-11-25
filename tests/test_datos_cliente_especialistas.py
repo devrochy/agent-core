@@ -30,7 +30,8 @@ def test_la_promesa_de_cobranza_no_bloquea_por_defecto() -> None:
     assert accion is not None and accion.pack == "pack_cobranza"
     # Cobranza opera sobre un cliente de cartera que ya existe: ningún dato frena la promesa.
     assert all(c.nivel is not Nivel.REQUERIDO for c in accion.campos)
-    assert accion.campo("id_document").nivel is Nivel.RECOMENDADO
+    documento = accion.campo("id_document")
+    assert documento is not None and documento.nivel is Nivel.RECOMENDADO
 
 
 def test_la_promesa_solo_aplica_a_agentes_con_sus_tools() -> None:

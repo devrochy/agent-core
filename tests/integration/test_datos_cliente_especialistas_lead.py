@@ -157,10 +157,10 @@ async def test_el_especialista_enriquece_el_lead_del_coordinador_sin_crear_otro(
     assert perfil.get("email") == "ana@example.test"
     assert antes is not None and despues is not None
     # La operación del módulo ve como registrado lo que el especialista aportó (sus datos pedidos, no los `no_pedir`).
+    registrada = registro_datos.obtener(accion)
+    assert registrada is not None
     pedidos = {
-        k
-        for k, nivel in niveles_efectivos(registro_datos.obtener(accion)).items()
-        if nivel is not Nivel.NO_PEDIR
+        k for k, nivel in niveles_efectivos(registrada).items() if nivel is not Nivel.NO_PEDIR
     }
     aportados = {"name", "email", "phone"} & pedidos
     assert aportados <= set(despues.ya_registrados), (despues, pedidos)
