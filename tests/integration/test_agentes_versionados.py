@@ -254,3 +254,24 @@ async def test_archivar_y_patch_no_cambia_kind(app_client) -> None:
         f"/api/v1/admin/agents/{aid}/draft", headers=h, json={"content": ventas_sin_secretos(), "lock_version": 0}
     )
     assert r.status_code == 409
+
+
+async def test_la_ficha_del_coordinador_abre_sin_borrador(app_client) -> None:
+    """El Coordinador sembrado no tiene borrador: su ficha no puede dar 404 (HU-AOS-98)."""
+    from core.db.session import get_session
+
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    r = await app_client.post("/api/v1/admin/agents", headers=h, json={"key": "coord_sin_borrador", "kind": "core", "name": "Coordinador"})
+    aid = r.json()["id"]
+    async with get_session() as session:
+        await session.execute(text("delete from agent_drafts where agent_id = :a"), {"a": aid})
+    r = await app_client.get(f"/api/v1/admin/agents/{aid}", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["kind"] == "core" and r.json()["draft"]["content"] == {} and r.json()["draft"]["lock_version"] == 0
+    # Un especialista sin borrador sigue sin existir para la API.
+    r = await app_client.post("/api/v1/admin/agents", headers=h, json={"key": "ventas_sin_borrador", "kind": "specialist", "name": "Ventas"})
+    esp = r.json()["id"]
+    async with get_session() as session:
+        await session.execute(text("delete from agent_drafts where agent_id = :a"), {"a": esp})
+    assert (await app_client.get(f"/api/v1/admin/agents/{esp}", headers=h)).status_code == 404
