@@ -441,12 +441,19 @@ async def get_agent(
     tid = _tenant(principal)
     try:
         agente = await svc.obtener_agente(tid, agent_id)
-        borrador = await svc.obtener_borrador(tid, agent_id)
         versiones = await svc.listar_versiones(tid, agent_id)
+        try:
+            borrador = _draft(await svc.obtener_borrador(tid, agent_id), ve_modelo=_ve_modelo(principal))
+        except svc.AgenteNoEncontrado:
+            # El Coordinador sembrado por el alta no tiene borrador (sus opciones viven en `/admin/coordinator`,
+            # HU-AOS-98): su ficha se abre igual, con un borrador vacío que no se guarda.
+            if agente.kind != "core":
+                raise
+            borrador = AgentDraft(content={}, flow=None, lock_version=0, base_version_id=None, updated_at=agente.updated_at)
     except svc.AgenteNoEncontrado:
         raise ApiError.not_found("Agente no encontrado.") from None
     base = _summary(agente, versiones[0].version if versiones else None)
-    return AgentDetail(**base.model_dump(), draft=_draft(borrador, ve_modelo=_ve_modelo(principal)), versions=[_version(v) for v in versiones])
+    return AgentDetail(**base.model_dump(), draft=borrador, versions=[_version(v) for v in versiones])
 
 
 _PATCH_409: dict[int | str, dict[str, Any]] = {
