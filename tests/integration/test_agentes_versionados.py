@@ -271,6 +271,13 @@ async def test_la_ficha_del_coordinador_abre_sin_borrador(app_client) -> None:
     r = await app_client.get(f"/api/v1/admin/agents/{aid}", headers=h)
     assert r.status_code == 200, r.text
     assert r.json()["kind"] == "core" and r.json()["draft"]["content"] == {} and r.json()["draft"]["lock_version"] == 0
+    # Su flujo también se lee (antes daba 500): vacío, de semilla y sin guardar nada; guardarlo sigue prohibido.
+    r = await app_client.get(f"/api/v1/admin/agents/{aid}/flow", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["lock_version"] == 0 and r.json()["seeded"] is True
+    assert (await app_client.get(f"/api/v1/admin/agents/{aid}/flow/options", headers=h)).status_code == 200
+    r = await app_client.put(f"/api/v1/admin/agents/{aid}/flow", headers=h, json={"flow": {}, "lock_version": 0})
+    assert r.status_code == 409, r.text
     # Un especialista sin borrador sigue sin existir para la API.
     r = await app_client.post("/api/v1/admin/agents", headers=h, json={"key": "ventas_sin_borrador", "kind": "specialist", "name": "Ventas"})
     esp = r.json()["id"]
@@ -278,3 +285,4 @@ async def test_la_ficha_del_coordinador_abre_sin_borrador(app_client) -> None:
         async with get_session() as session:
             await session.execute(text("update agent_drafts set deleted_at = now() where agent_id = :a"), {"a": esp})
     assert (await app_client.get(f"/api/v1/admin/agents/{esp}", headers=h)).status_code == 404
+    assert (await app_client.get(f"/api/v1/admin/agents/{esp}/flow", headers=h)).status_code == 404
