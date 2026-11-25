@@ -504,3 +504,22 @@ async def test_script_de_migracion_copia_la_politica_global_a_cada_agente(app_cl
 
     otra_vez = await script._migrar_negocio(tid, aplicar=True)  # idempotente: ya no hay política global
     assert otra_vez["agentes"] == [] and (await _estado())[2] == auditoria
+
+
+async def test_la_politica_global_esta_retirada_y_el_aviso_sigue(app_client) -> None:
+    """ADR-0198 §5: la política es de cada agente; `/admin/datos-cliente/politica` responde 410 y no toca nada."""
+    tid = await _negocio()
+    h = await api_headers(app_client, tid)
+    agent_id = await _agente(tid)
+    r = await app_client.get("/api/v1/admin/datos-cliente/politica", headers=h)
+    assert r.status_code == 410 and r.json()["error"]["code"] == "politica_por_agente", r.text
+    r = await app_client.put(
+        "/api/v1/admin/datos-cliente/politica",
+        headers=h,
+        json={"politica": {"ventas.pedido_domicilio": {"id_document": "no_pedir"}}},
+    )
+    assert r.status_code == 410
+    assert _campo((await app_client.get(_url(agent_id), headers=h)).json(), "ventas.pedido_domicilio", "id_document")[
+        "ajustado"
+    ] is False
+    assert (await app_client.get("/api/v1/admin/datos-cliente/aviso", headers=h)).status_code == 200
