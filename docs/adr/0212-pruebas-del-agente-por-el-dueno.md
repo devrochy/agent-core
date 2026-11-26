@@ -55,7 +55,11 @@ Cada escenario corre en una conversación de prueba **propia de la corrida**, de
 - **Chequeo determinista primero.** Con la lista de tools llamadas (que sale del registro del sandbox): si el agente llamó una `tools_prohibidas`, falla; si nunca llamó una `tools_esperadas`, falla. En ambos casos **no se llama al juez LLM** y el escenario ahorra su costo.
 - **Juez LLM después.** `core/pruebas/juez.py` recibe la transcripción (en un bloque delimitado como dato), las tools llamadas y los `criterios`, y devuelve con `generar_estructurado` `{pasa, criterio_incumplido, razon}`; una salida que no valida el esquema se descarta y el escenario queda `no_se_pudo_probar`. **Los prompts del juez, del arreglo y del simulador viven como playbooks del core** (`load_core_playbook`, como el resto de `generar_estructurado`), no en `.py` (invariante 3). El juez usa un **modelo fijo de la plataforma**, independiente del nivel de IA del agente (ADR-0210), para que el veredicto no cambie si el dueño sube o baja de nivel. El prompt del juez dice que ante la duda no falla y exige citar el turno.
 - **El juez puede equivocarse.** El resultado muestra la razón y el dueño puede marcarlo `juez_equivocado`; ese resultado sale del porcentaje y se mide (objetivo: menos del 10 %).
-- **k.** Por defecto 1. El dueño puede pedir 2 o 4; el estimado se multiplica. Con k > 1 un escenario pasa si pasan todos los intentos (como `pass^k` del gate) y se marca inestable si difieren.
+- **k (repeticiones por escenario) con valor por defecto y tope editables.**
+  - **Por defecto:** k = 1, de `PRUEBAS_K_POR_DEFECTO` (config de plataforma).
+  - **Tope:** el dueño elige k entre 1 y `PRUEBAS_K_MAXIMO` (4 al empezar), que es de plataforma y se cambia sin desplegar con la configuración del negocio `tenants.settings.pruebas.k_maximo` (solo el master) para bajarlo o subirlo por negocio, sin pasar nunca del techo global. El dueño también puede guardar su k habitual en `tenants.settings.pruebas.k_por_defecto`, dentro de ese tope.
+  - **Qué hace k:** con k > 1 un escenario pasa si pasan todos los intentos (como `pass^k` del gate) y se marca inestable si difieren. Cada intento corre con su propia conversación, cliente simulado y juez, así que el costo crece casi lineal con k.
+  - **Fuera de rango:** un k mayor al tope responde 422 `k_fuera_de_rango`.
 
 ### 4. Cobro
 
@@ -75,12 +79,12 @@ Hay dos tipos de filas del ledger de una corrida, y se tratan distinto:
 - `core/billing/tipos_de_uso.py` suma `prueba_agente` a `NO_ES_ACTIVIDAD` y `NO_SON_TURNOS`. A diferencia de `eval`, sí cuenta como gasto del negocio (por el cubo).
 
 **Estimado y aprobación.**
-- **Estimado.** Es una función nueva, `core/billing/pruebas.py::estimar_corrida` (no una extensión de `cotizar`, que vive en `core/billing/creditos.py:294` y solo cubre `vision`). Calcula por escenario: turnos esperados (6; techo 12) × créditos medios de un turno en el nivel de IA del agente + cliente simulado + juez, y se calibra con la medición real de HU-AOS-105 (los 11,1 y 45,1 créditos de HU-BILL-29 son solo el punto de partida). Devuelve `estimado`, `de_la_cuota`, `del_saldo` y `saldo_despues`.
-- **Aprobación.** `POST .../corridas` exige `confirmo_creditos` igual al estimado vigente (si cambió, 409 `estimado_cambio`) y corre `alcanza()` sobre `del_saldo` antes de crear la corrida (409 `plan_limit_creditos`). Es el patrón de `core/qa/importar_fotos.py`.
+- **Estimado.** Es una función nueva, `core/billing/pruebas.py::estimar_corrida` (no una extensión de `cotizar`, que vive en `core/billing/creditos.py:294` y solo cubre `vision`). Calcula por escenario: turnos esperados (6; techo 12) × créditos medios de un turno en el nivel de IA del agente + cliente simulado + juez, y se calibra con la medición real de HU-AOS-105 (los 11,1 y 45,1 créditos de HU-BILL-29 son solo el punto de partida). Devuelve la tabla **por cada k permitido** (de 1 al tope): `por_k: [{k, estimado, de_la_cuota, del_saldo, saldo_despues}]`, más el saldo y la cuota gratis restante, para que el panel muestre cuánto cuesta cada k antes de elegirlo. El estimado de un k es el de k = 1 por escenario × k (turnos del agente, cliente simulado y juez se repiten por intento). El cliente ve créditos y su equivalente en conversaciones; el master ve además el costo real en USD, que no sale de la respuesta del gestor.
+- **Aprobación.** `POST .../corridas` recibe `k` y exige `confirmo_creditos` igual al estimado de ese k (si cambió, 409 `estimado_cambio`) y corre `alcanza()` sobre `del_saldo` antes de crear la corrida (409 `plan_limit_creditos`). Es el patrón de `core/qa/importar_fotos.py`.
 - **Proponer escenarios** cobra `generacion` desde el saldo, con `alcanza` antes de gastar y el costo visible en el panel antes de pedirlo.
 
 **Topes y planes.**
-- `tope_creditos` = estimado × 1,5, que el corredor comprueba después de cada escenario; si lo pasó, corta con `cortada_por_tope` y cobra solo lo gastado. Cancelar cobra lo gastado.
+- `tope_creditos` = estimado del k elegido × 1,5, que el corredor comprueba después de cada escenario; si lo pasó, corta con `cortada_por_tope` y cobra solo lo gastado. Cancelar cobra lo gastado.
 - Máx. 20 escenarios por corrida, una corrida a la vez por negocio (409 `corrida_en_curso`, con candado consultivo) y 5 corridas por día.
 - **Con llave propia (BYOK):** el agente corre con el modelo de la llave del negocio y esos turnos cuestan lo que cuesta la llave; el simulador, el juez y el arreglo son de la plataforma y se cobran siempre con la llave de la plataforma.
 - **Planes:** todos, Free incluido. El tope real lo da el saldo.
@@ -97,7 +101,7 @@ Por cada resultado que falla, `core/pruebas/arreglo.py` propone un cambio tipado
 
 ### 7. API
 
-Bajo `/api/v1/admin/agents/{agent_id}/pruebas`, con el permiso de editar el agente: `GET /`, `POST /proponer`, `POST /`, `PATCH|DELETE /{case_id}`, `POST /estimado`, `POST /corridas`, `GET /corridas/{run_id}`, `POST /corridas/{run_id}/cancelar`, `POST /resultados/{id}/aplicar`, `POST /resultados/{id}/juez-equivocado`. Errores: 409 `plan_limit_creditos`, `estimado_cambio`, `corrida_en_curso`; 422 `demasiados_escenarios`. El modelo del juez y del simulador nunca sale en la respuesta.
+Bajo `/api/v1/admin/agents/{agent_id}/pruebas`, con el permiso de editar el agente: `GET /`, `POST /proponer`, `POST /`, `PATCH|DELETE /{case_id}`, `POST /estimado`, `POST /corridas`, `GET /corridas/{run_id}`, `POST /corridas/{run_id}/cancelar`, `POST /resultados/{id}/aplicar`, `POST /resultados/{id}/juez-equivocado`. Errores: 409 `plan_limit_creditos`, `estimado_cambio`, `corrida_en_curso`; 422 `demasiados_escenarios`, 422 `k_fuera_de_rango`. El modelo del juez y del simulador nunca sale en la respuesta.
 
 ## Alternativas consideradas
 
