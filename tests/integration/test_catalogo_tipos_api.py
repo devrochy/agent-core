@@ -1,7 +1,7 @@
 """HU-AOS-94 · API de tipos de agente, catálogo de habilidades y `/posibles` (ADR-0207 §6).
 
 Sin LLM ni red. Criterios cubiertos:
-- **Tipos:** `GET /admin/agent-types` trae el Coordinador y un superconjunto de `agent-templates`.
+- **Tipos:** `GET /admin/agent-types` trae el Coordinador y la plantilla de cada tipo y lo que declara su manifiesto.
 - **Catálogo:** `GET /admin/skill-catalog` lista habilidades por clase y no expone secretos.
 - **Posibles:** `GET /admin/agents/{id}/posibles` da la especialidad, los datos del cliente y las transversales con su
   estado; el Coordinador responde 200 con `core:recepcion`; el agente de otro negocio es 404.

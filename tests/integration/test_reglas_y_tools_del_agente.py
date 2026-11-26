@@ -114,7 +114,7 @@ async def _dueno(app_client, tid: uuid.UUID) -> dict[str, str]:
 
 
 async def _agente(app_client, h: dict[str, str], plantilla: str) -> str:
-    r = await app_client.post(f"/api/v1/admin/agent-templates/{plantilla}/agents", headers=h, json={})
+    r = await app_client.post(f"/api/v1/admin/agent-types/{plantilla}/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     return r.json()["agent"]["id"]
 

@@ -1,7 +1,7 @@
 """HU-BILL-05 · planes por agentes: agentes publicados, colaboradores y crédito (D-35, ADR-0142).
 
 - Free (1 agente): el primer especialista entra (y queda por defecto); al tope, crear otro
-  borrador (`agent-templates` y `from-script`) o publicar una versión da 409 `plan_limit_agentes`,
+  borrador (`agent-types` y `from-script`) o publicar una versión da 409 `plan_limit_agentes`,
   sin escribir nada.
 - Premium permite 5 agentes; el sexto da 409. Un agente que ya está en una conexión no ocupa otro cupo.
 - El Coordinador no cuenta; el especialista por defecto sí, como cualquiera (ADR-0192 §7: sin General).
@@ -199,7 +199,7 @@ async def test_free_el_editor_no_crea_el_borrador_si_no_hay_cupo(app_client) -> 
 
     # Ni desde plantilla ni desde el guion: 409 y nada escrito (tampoco se habilitan habilidades).
     for ruta, cuerpo in (
-        ("/api/v1/admin/agent-templates/ventas/agents", {}),
+        ("/api/v1/admin/agent-types/ventas/agents", {}),
         ("/api/v1/admin/agents/from-script", {"template_key": "cobranza", "answers": {}}),
     ):
         r = await app_client.post(ruta, headers=h, json=cuerpo)
@@ -219,7 +219,7 @@ async def test_free_el_editor_no_publica_la_version_si_no_hay_cupo(app_client) -
     h = await _dueno(app_client, tid)
     # El borrador se crea con cupo libre; después se llena el cupo y publicar ya no entra. Agenda: su habilidad es de
     # Free (Ventas pide Basic desde HU-BILL-19).
-    r = await app_client.post("/api/v1/admin/agent-templates/agenda/agents", headers=h, json={})
+    r = await app_client.post("/api/v1/admin/agent-types/agenda/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
     hm = await api_headers(app_client, tid)
