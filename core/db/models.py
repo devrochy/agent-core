@@ -1467,6 +1467,110 @@ class CreditGrant(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+# ------------------------------------------------- pruebas del agente por el dueño (ADR-0212, SPEC-53)
+class AgentTestCase(Base):
+    """Escenario de prueba de un agente (migración 0160, HU-AOS-100, ADR-0212 §1).
+
+    Lo propone la IA o lo escribe el dueño. `objetivo_cliente` y `datos_cliente` alimentan al cliente
+    simulado; `criterios` los lee el juez; `tools_esperadas` y `tools_prohibidas` se chequean sin LLM. Todo
+    es dato del dueño, nunca instrucción (invariante 7). Título único por agente entre los vivos.
+    """
+
+    __tablename__ = "agent_test_cases"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_agent_test_cases_tenant_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"], ["agents.tenant_id", "agents.id"], name="fk_agent_test_cases_agente"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    titulo: Mapped[str] = mapped_column(Text, nullable=False)
+    objetivo_cliente: Mapped[str] = mapped_column(Text, nullable=False)
+    datos_cliente: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    criterios: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    tools_esperadas: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    tools_prohibidas: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    origen: Mapped[str] = mapped_column(Text, nullable=False)  # ia | manual
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default="borrador")  # borrador | aprobado
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentTestRun(Base):
+    """Corrida de escenarios de un agente (migración 0160, HU-AOS-100, ADR-0212 §1 y §4).
+
+    `creditos_reales` son brutos (antes de la cuota gratis, que es derivada en `medir_creditos`);
+    `creditos_de_cuota` es solo informativo del estimado. El índice parcial `uq_agent_test_runs_activa`
+    deja una corrida activa (`en_cola` | `corriendo`) por negocio.
+    """
+
+    __tablename__ = "agent_test_runs"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id", name="uq_agent_test_runs_tenant_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_id"], ["agents.tenant_id", "agents.id"], name="fk_agent_test_runs_agente"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default="en_cola")
+    k: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    version_probada: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+    creditos_estimados: Mapped[Decimal] = mapped_column(Numeric(12, 1), nullable=False, default=Decimal(0))
+    creditos_de_cuota: Mapped[Decimal] = mapped_column(Numeric(12, 1), nullable=False, default=Decimal(0))
+    creditos_reales: Mapped[Decimal] = mapped_column(Numeric(12, 1), nullable=False, default=Decimal(0))
+    tope_creditos: Mapped[Decimal] = mapped_column(Numeric(12, 1), nullable=False, default=Decimal(0))
+    pedida_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    iniciada_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    terminada_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentTestResult(Base):
+    """Resultado de un escenario en un intento de una corrida (migración 0160, HU-AOS-100, ADR-0212 §1).
+
+    Guarda la transcripción porque la conversación de la corrida se purga al terminar el escenario. El
+    `arreglo` es dato derivado de texto externo: nunca se aplica solo (ADR-0212 §6).
+    """
+
+    __tablename__ = "agent_test_results"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "run_id"], ["agent_test_runs.tenant_id", "agent_test_runs.id"], name="fk_agent_test_results_corrida"
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "case_id"], ["agent_test_cases.tenant_id", "agent_test_cases.id"], name="fk_agent_test_results_caso"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    intento: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    estado: Mapped[str] = mapped_column(Text, nullable=False)  # pasa | falla | no_se_pudo_probar
+    fin: Mapped[str | None] = mapped_column(Text)  # objetivo | se_rindio | tope
+    transcripcion: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    tools_llamadas: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    criterio_incumplido: Mapped[str | None] = mapped_column(Text)
+    razon: Mapped[str | None] = mapped_column(Text)
+    arreglo: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    arreglo_aplicado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    juez_equivocado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 # ------------------------------------------------- planes y facturación (ADR-0045 / ADR-0046)
 class Plan(Base):
     """Catálogo de planes. Tabla de SISTEMA (sin RLS, sin `tenant_id`).
