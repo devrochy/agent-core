@@ -1,6 +1,6 @@
 # ADR-0212 — Pruebas del agente por el dueño: escenarios, corridas en el sandbox, juez y cobro en créditos
 
-- **Estado:** propuesto (2026-11-26). Sin código todavía; el código va en HU-AOS-100 a HU-AOS-105.
+- **Estado:** aceptado (2026-11-26, por decisión del dueño; k con valor por defecto y tope editables incluido). Sin código todavía; el código va en HU-AOS-100 a HU-AOS-105.
 - **Fecha:** 2026-11-26
 - **Contexto:** D-81 y SPEC-53 (`solvershub-docs`), HU-AOS-99.
   **Usa:** ADR-0117 y su adenda del gate (`core/releases/veredicto.py`, `kind='eval'`), HU-ARCH-14 (sandbox de tools,
