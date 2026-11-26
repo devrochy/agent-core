@@ -359,7 +359,7 @@ async def referencias_vigentes(conversation_id: uuid.UUID, customer_id: uuid.UUI
                 ),
             )
         )
-    return referencias + await _referencia_de_formas()
+    return referencias + await _referencia_de_formas() + await _referencia_de_entrega()
 
 
 async def _referencia_de_formas() -> list[Referencia]:
@@ -378,6 +378,28 @@ async def _referencia_de_formas() -> list[Referencia]:
         return []
     activos = set(configurados)
     return [Referencia(tipo="formas_de_pago", datos=tuple((m, "si" if m in activos else "no") for m in METODOS))]
+
+
+async def _referencia_de_entrega() -> list[Referencia]:
+    """Los métodos de entrega que el agente en foco puede ofrecer (HU-CRM-28): solo ids y `si`/`no`.
+    Solo cuando el dueño apagó alguno: con los dos (el valor por defecto) el prompt queda como antes
+    y las grabaciones de los journeys valen. Sin la línea, el agente prometía «recoger en tienda»
+    apagado hasta que `crear_pedido` lo rechazaba. Sin agente en foco, nada."""
+    from core.datos_cliente.ajustes import cargar_data_policy, metodos_entrega_de
+    from core.shared import release_vigente
+
+    agente = release_vigente.agente_del_turno()
+    if agente is None:
+        return []
+    habilitados = metodos_entrega_de(await cargar_data_policy(agente.agent_id))
+    if set(habilitados) >= set(DELIVERY_METHODS):
+        return []
+    return [
+        Referencia(
+            tipo="metodos_entrega",
+            datos=tuple((m, "si" if m in habilitados else "no") for m in DELIVERY_METHODS),
+        )
+    ]
 
 
 async def _referencias_del_sandbox(conversation_id: uuid.UUID) -> list[Referencia]:
@@ -416,7 +438,7 @@ async def _referencias_del_sandbox(conversation_id: uuid.UUID) -> list[Referenci
                 ),
             )
         )
-    return referencias + await _referencia_de_formas()
+    return referencias + await _referencia_de_formas() + await _referencia_de_entrega()
 
 
 async def _order_del_cliente(session, order_id, customer_id) -> Order | None:  # type: ignore[no-untyped-def]
