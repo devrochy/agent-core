@@ -280,10 +280,10 @@ async def test_proveedor_caido_usa_la_plantilla(app_client, monkeypatch, qa_on) 
 # ---------------------------------------------------------------- reglas
 async def test_sin_descripcion_general_bandera_y_aislamiento(app_client, monkeypatch, qa_on) -> None:
     from core.config import get_settings
-    from core.qa.datos import DESCRIPCION_QA
+    from core.qa.datos import DESCRIPCION_QA_ANTERIOR
 
     _proveedor(monkeypatch, ProveedorGuionado(json.dumps(CATALOGO)))
-    tid = await _negocio(DESCRIPCION_QA)
+    tid = await _negocio(DESCRIPCION_QA_ANTERIOR)
     ventas = await _agente(tid, "ventas", ["pack_commerce.tomar_pedido"])
     general = await _agente(tid, "general", [], kind="core")
     h = await api_headers(app_client, tid)

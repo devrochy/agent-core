@@ -165,6 +165,17 @@ async def test_instala_agentes_reglas_y_release_candidata_sin_activarla() -> Non
     assert ventas["declarativeTools"] == []
     tools_agenda = {b["tool"] for b in agenda["tools"]}
     assert "check_availability" in tools_agenda and "crear_pedido" not in tools_agenda
+    # El borrador queda igual a la v1 (antes quedaba el inicial, sin tools ni procedimientos, y
+    # Personalizar › Datos del cliente decía que el agente no pide datos).
+    for key in ("ventas", "agenda", "suscripciones"):
+        borrador = await _sql(
+            tid,
+            "select d.content from agent_drafts d join agents a on a.id = d.agent_id "
+            "where a.tenant_id = :t and a.key = :k and d.deleted_at is null",
+            t=tid,
+            k=key,
+        )
+        assert borrador[0][0] == await _contenido(tid, key), key
 
     # Reglas del Coordinador: agregadas, con `defaultAgent` intacto (el del contrato, inerte: manda `is_default`, ADR-0192).
     kernel = await _contenido(tid, "coordinador")

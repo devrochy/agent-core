@@ -92,10 +92,12 @@ class Negocio:
 
     @property
     def falta_descripcion(self) -> bool:
-        from core.qa.datos import DESCRIPCION_QA
+        # La descripción actual del negocio de prueba sirve (2026-11-26); la anterior describía el
+        # centro de pruebas y no un negocio, y cuenta como vacía hasta que se vuelvan a preparar los datos.
+        from core.qa.datos import DESCRIPCION_QA_ANTERIOR
 
         descripcion = self.descripcion.strip()
-        return not descripcion or descripcion == DESCRIPCION_QA
+        return not descripcion or descripcion == DESCRIPCION_QA_ANTERIOR
 
 
 @dataclass(frozen=True)

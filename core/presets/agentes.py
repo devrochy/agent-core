@@ -472,7 +472,20 @@ async def _instalar_plantilla(
             label=f"preset {manifest.id}",
             notes=f"Plantilla '{plantilla.key}' del preset {manifest.id} v{manifest.version} (HU-AOS-46).",
         )
+        await _borrador_como_version(aid, version.content)
         return version.version
+
+    async def _borrador_como_version(aid: uuid.UUID, contenido: Any) -> None:
+        """`publicar(contenido=...)` no toca el borrador: sin esto queda el inicial de `crear_agente`
+        (sin tools ni procedimientos) encima de la v1, y el editor y Personalizar leen ese vacío. Solo
+        se reemplaza un borrador que nadie guardó (`lock_version` 0): lo del dueño no se pisa."""
+        borrador = await versiones.obtener_borrador(tenant_id, aid)
+        if borrador.lock_version != 0 or borrador.content == contenido:
+            return
+        try:
+            await versiones.guardar_borrador(tenant_id, aid, contenido, 0, catalogo=catalogo)  # type: ignore[arg-type]
+        except versiones.Conflicto:
+            pass  # lo guardó alguien en paralelo: manda lo suyo
 
     existente = await _agente_por_key(tenant_id, plantilla.key)
     nuevo = False  # el preset lo crea o lo reactiva en esta corrida
@@ -495,6 +508,9 @@ async def _instalar_plantilla(
                 await _publicar_v1(agent_id, contenido)
             ultima = (1, contenido)
             nuevo = True
+        elif aplicar and estado == "active":
+            # Agentes que el preset publicó antes de este arreglo: el borrador intacto pasa a ser la versión.
+            await _borrador_como_version(agent_id, ultima[1])
         if estado != "active":
             if plantilla.key not in registro.archivados:
                 return ResultadoAgente(plantilla.key, "archivado")

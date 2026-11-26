@@ -143,17 +143,24 @@ async def _agente(principal: Principal, agent_id: uuid.UUID) -> AgentRecord:
 
 
 async def _contenido(principal: Principal, agent_id: uuid.UUID) -> dict:
-    """El borrador del agente; si no tiene, la última versión publicada; si tampoco, vacío."""
+    """El borrador del agente, que es lo que el dueño está editando. Cae a la última versión publicada
+    si no hay borrador o si el borrador está intacto (nadie lo guardó, `lock_version` 0) y no declara
+    tools ni procedimientos: es el inicial de `crear_agente` y no lo que el agente ejecuta. Un borrador
+    que el dueño guardó manda aunque esté vacío. Si tampoco hay versión, vacío."""
     from core.agents import versiones
 
     try:
         borrador = await versiones.obtener_borrador(principal.tenant_id, agent_id)
-        return borrador.content if isinstance(borrador.content, dict) else {}
     except Exception:
-        versiones_lista = await versiones.listar_versiones(principal.tenant_id, agent_id)
-        if versiones_lista and isinstance(versiones_lista[0].content, dict):
-            return versiones_lista[0].content
-        return {}
+        borrador = None
+    contenido = borrador.content if borrador is not None and isinstance(borrador.content, dict) else None
+    intacto = borrador is not None and borrador.lock_version == 0
+    if contenido is not None and not (intacto and not contenido.get("tools") and not contenido.get("procedures")):
+        return contenido
+    versiones_lista = await versiones.listar_versiones(principal.tenant_id, agent_id)
+    if versiones_lista and isinstance(versiones_lista[0].content, dict):
+        return versiones_lista[0].content
+    return contenido or {}
 
 
 def _procedimientos_del_agente(contenido: dict, packs: set[str]) -> dict[str, object]:

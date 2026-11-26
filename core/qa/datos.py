@@ -35,9 +35,16 @@ log = get_logger(__name__)
 
 PACKS = ("pack_commerce", "pack_calendar", "pack_cobranza")
 PLAN = "premium"
-# Descripción fija del negocio `qa-…`. «Generar datos de prueba» (HU-QA-10) la reconoce y pide
-# una propia: con esta todos los testers generarían lo mismo que ya trae el juego fijo.
+# Descripción del negocio `qa-…`, acorde a los fragmentos `qa.json`: con ella «Generar datos de
+# prueba» (HU-QA-10) y el chat simulado funcionan sin que el tester la escriba en Configuración.
 DESCRIPCION_QA = (
+    "Tostadora y tienda de café de especialidad en Bogotá. Vendemos café de origen en grano y "
+    "molido, prensas francesas y filtros, con envío a domicilio. Agendamos asesorías de preparación "
+    "y catas de café, y damos crédito en cuotas a clientes frecuentes."
+)
+# La de antes de 2026-11-26: describía el centro de pruebas, no un negocio, y «Generar datos de
+# prueba» la trataba como vacía. Al volver a preparar los datos se cambia por `DESCRIPCION_QA`.
+DESCRIPCION_QA_ANTERIOR = (
     "Negocio de prueba del centro de pruebas: tienda de café con agenda de asesorías "
     "y una cartera de créditos."
 )
@@ -282,15 +289,24 @@ async def _sigue_siendo_de_prueba(session, cuenta: Admin, email: str, tenant_id:
 
 
 async def _cuenta(ds_id: uuid.UUID, columna: str, email: str, password: str, tenant_id: uuid.UUID) -> uuid.UUID:
-    """Crea la cuenta (o reutiliza la que esta misma fila ya creó) con una contraseña nueva."""
+    """Crea la cuenta (o reutiliza la que esta misma fila ya creó) con una contraseña nueva.
+
+    Si la fila no tiene la cuenta registrada (se borró la fila, p. ej. al limpiar negocios de test,
+    y la cuenta quedó), se adopta la que lleva el correo de prueba de este tester siempre que siga
+    siendo solo de prueba (`_sigue_siendo_de_prueba`). El correo sale del id del tester en el dominio
+    reservado `.test`, así que nadie más puede tenerlo."""
     async with get_session() as session:
         ds = await session.get(QaTesterDataset, ds_id)
         assert ds is not None
         propia = getattr(ds, columna)
         existente = (await session.execute(select(Admin).where(Admin.email == email))).scalar_one_or_none()
         if existente is not None and existente.id != propia:
-            # Nunca se toma una cuenta que no creó esta fila.
-            raise QaError("conflicto", f"El correo {email} ya pertenece a otra cuenta.")
+            # Nunca se toma una cuenta registrada en otra columna ni una que dejó de ser de prueba.
+            huerfana = propia is None and await _sigue_siendo_de_prueba(session, existente, email, tenant_id)
+            if not huerfana:
+                raise QaError("conflicto", f"El correo {email} ya pertenece a otra cuenta.")
+            setattr(ds, columna, existente.id)
+            log.info("qa_datos_cuenta_huerfana_adoptada", columna=columna, admin_id=str(existente.id))
         if existente is None:
             existente = Admin(email=email, password_hash=hash_password(password), role="colaborador", active=True)
             session.add(existente)
@@ -393,6 +409,28 @@ async def _sembrar_comercio(tenant_id: uuid.UUID) -> None:
         await module.seed_data(tenant_id, _fragmento("pack_commerce"))
 
 
+async def _descripcion(tenant_id: uuid.UUID) -> None:
+    """Pone `DESCRIPCION_QA` si el negocio no tiene descripción o tiene la anterior. El alta no
+    toca unos `app_settings` que ya existían, así que esto repara los negocios de prueba viejos.
+    Una que escribió el tester no se toca."""
+    from core.db.models import AppSettings
+    from core.shared.tenant import tenant_scope
+
+    async with tenant_scope(tenant_id):
+        async with get_session() as session:
+            await session.execute(
+                update(AppSettings)
+                .where(
+                    AppSettings.tenant_id == tenant_id,
+                    AppSettings.deleted_at.is_(None),
+                    (AppSettings.business_description == "")
+                    | AppSettings.business_description.is_(None)
+                    | (AppSettings.business_description == DESCRIPCION_QA_ANTERIOR),
+                )
+                .values(business_description=DESCRIPCION_QA)
+            )
+
+
 async def _actualizar_agent_os(admin: Admin) -> dict[str, Any] | None:
     """Volver a pulsar «Preparar mis datos» con los datos ya listos (y el negocio vivo) solo pone
     al día el Agent OS del negocio de prueba (HU-QA-09): no toca la corrida, las cuentas ni las
@@ -411,6 +449,7 @@ async def _actualizar_agent_os(admin: Admin) -> dict[str, Any] | None:
     # El catálogo de Comercio es idempotente por SKU: así los negocios de prueba anteriores
     # reciben lo que se sumó al fragmento (el plan de `contratar_plan`). No toca stock ni borra.
     await _sembrar_comercio(tenant_id)
+    await _descripcion(tenant_id)
     motivo = await datos_aos.preparar(tenant_id, slug)
     async with get_session() as session:
         ds = (
@@ -443,8 +482,8 @@ async def preparar(admin: Admin) -> dict[str, Any]:
     ds = await _reclamar(admin)
     try:
         nombre = f"QA · {admin.username or _corto(admin.id)}"
-        await _reservar_negocio(ds, nombre)
-
+        # Las cuentas antes que el negocio: si una no se puede usar, no queda un negocio a medias.
+        # `_cuenta` solo compara con `ds.tenant_id`; no necesita la fila del negocio.
         contrasenas: dict[str, str] = {}
         ids: dict[str, uuid.UUID] = {}
         for c in CUENTAS:
@@ -452,6 +491,7 @@ async def preparar(admin: Admin) -> dict[str, Any]:
             ids[c["rol"]] = await _cuenta(
                 ds.id, c["columna"], correo_de(c["rol"], admin.id), contrasenas[c["rol"]], ds.tenant_id
             )
+        await _reservar_negocio(ds, nombre)
 
         creado, _pasos_alta = await onboard_tenant(
             name=nombre,
@@ -463,6 +503,7 @@ async def preparar(admin: Admin) -> dict[str, Any]:
         )
         if creado != ds.tenant_id:
             raise QaError("conflicto", f"Ya existe otro negocio con el slug {ds.slug}.")
+        await _descripcion(ds.tenant_id)
         # El alta no elige habilidades (ADR-0206, HU-AOS-91): aquí se activa su código y los agentes del Agent OS
         # (`datos_aos.preparar`) las instalan.
         await _activar_packs(ds.tenant_id)
