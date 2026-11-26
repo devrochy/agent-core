@@ -282,7 +282,7 @@ async def test_basic_no_habilita_cobranza_y_nada_queda_escrito(app_client, monke
             await asegurar_habilidades(tid, ["pack_cobranza"], actor=None)
 
     h = await _dueno(app_client, tid)
-    r = await app_client.post("/api/v1/admin/agent-templates/cobranza/agents", headers=h, json={})
+    r = await app_client.post("/api/v1/admin/agent-types/cobranza/agents", headers=h, json={})
     assert r.status_code == 409, r.text
     error = r.json()["error"]
     assert error["code"] == "plan_plugin_not_included"

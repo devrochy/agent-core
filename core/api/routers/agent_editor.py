@@ -3,22 +3,23 @@
 Completa la API de agentes (`agents.py`: alta, borrador con `lock_version`, versiones) con lo que
 el editor del panel necesita y no existía:
 
-- `GET  /api/v1/admin/agent-templates` — plantillas (Ventas, Cobranza, Agenda, Suscripciones)
-  con sus superpoderes y frases de la habilidad, y si el negocio puede usarlas. Elegir una
-  HABILITA sus habilidades (`will_enable`): no hace falta activarlas de antemano.
-- `POST /api/v1/admin/agent-templates/{key}/agents` — `{name?}` → especialista con la key de la
+- `GET  /api/v1/admin/agent-types` — el Coordinador y los tipos de agente (Ventas, Cobranza, Agenda,
+  Suscripciones) con sus superpoderes y frases de la habilidad, y si el negocio puede usarlos. Elegir uno
+  HABILITA sus habilidades (`will_enable`): no hace falta activarlas de antemano. Las rutas
+  `agent-templates` se retiraron (HU-AOS-94, ADR-0207).
+- `POST /api/v1/admin/agent-types/{key}/agents` — `{name?}` → especialista con la key de la
   plantilla y su borrador derivado (sin publicar). 409 `key_taken` (con `fields.agent_id`) si
   ya existe; 409 `plan_limit_agentes` si el plan ya tiene todos sus agentes publicados; 409
   `template_unavailable` si el despliegue no trae una habilidad; 403 `skills_forbidden` si hay
   habilidades por habilitar y falta `plugins:write`; 409 `concurrent_edit` (reintentable) si otra
   edición del negocio ganó la carrera. `enabled_skills` trae lo que esta llamada habilitó.
 - `POST /api/v1/admin/agents/from-script` — `{template_key, answers, name?}` → lo mismo desde las
-  respuestas del guion de la plantilla (`questions` de `agent-templates`, HU-AOS-48), más los
+  respuestas del guion de la plantilla (`questions` de `agent-types`, HU-AOS-48), más los
   `requirements` pendientes. 422 `invalid_answers` por pregunta; 409 igual que arriba.
 - `GET  /api/v1/admin/agent-superpowers` — superpoderes que ofrece el negocio con sus frases;
   con `?agent_id=` solo los del enfoque de ese agente (404 si no es del negocio).
 - `GET  /api/v1/admin/agents/{id}/requirements` — lo que falta configurar para el enfoque del agente
-  (aviso, no bloquea). También viene en cada plantilla de `agent-templates`.
+  (aviso, no bloquea). También viene en cada tipo de `agent-types`.
 - `GET  /api/v1/admin/agent-models` — modelos de la tabla de precios del core, cuáles sirve el
   proveedor del negocio, si hay un modelo BYOK que manda y el costo estimado por 1.000 turnos
   con el promedio real de tokens por turno del negocio (30 días); sin historial (o sin acceso a
@@ -35,7 +36,7 @@ el editor del panel necesita y no existía:
   Un modelo retirado o de otro proveedor ya no da 422: la versión usa el del negocio y lo anota
   en sus notas y en `warnings` (HU-AOS-79).
 
-Rutas con prefijos propios (`/agent-templates`, ...) para no depender del orden de los routers
+Rutas con prefijos propios (`/agent-types`, ...) para no depender del orden de los routers
 frente a `/admin/agents/{agent_id}`. Toda lista va paginada (`page`, `page_size`).
 
 Permisos (ADR-0136): lectura con la sección `settings`; crear con `settings` en escritura;
@@ -405,8 +406,7 @@ Paginados = Annotated[PageParams, Depends(page_params)]
 
 # ------------------------------------------------------------------ rutas
 async def _armar_templates(tid: uuid.UUID) -> list[AgentTemplate]:
-    """Las plantillas (tipos de agente) con lo que el negocio puede hacer con ellas. Las leen `agent-templates` y
-    `agent-types`, que es un superconjunto."""
+    """Las plantillas (tipos de agente) con lo que el negocio puede hacer con ellas. Las lee `agent-types`."""
     habilitados = await svc.habilitados_del_negocio(tid)
     vistas = svc.plantillas(habilitados)
     cargadas = {v.key: load_plantilla(v.key) for v in vistas}
@@ -436,15 +436,6 @@ async def _armar_templates(tid: uuid.UUID) -> list[AgentTemplate]:
         )
         for v in vistas
     ]
-
-
-@router.get("/agent-templates", response_model=Page[AgentTemplate], deprecated=True)
-async def list_templates(
-    principal: Annotated[Principal, Depends(require("settings"))], params: Paginados
-) -> Page[AgentTemplate]:
-    """Obsoleta: usa `GET /admin/agent-types` (HU-AOS-94, ADR-0207 §6). Sigue igual hasta que panel y APK migren."""
-    items = await _armar_templates(_tenant(principal))
-    return build_page(items[params.offset : params.offset + params.page_size], len(items), params)
 
 
 def _operacion(a: Any) -> CustomerDataOperation:
@@ -497,7 +488,7 @@ async def list_agent_types(
     principal: Annotated[Principal, Depends(require("agents"))],
 ) -> AgentTypesOut:
     """El Coordinador y los tipos de agente (Ventas, Agenda, Cobranza, Suscripciones) desde los manifiestos de los
-    packs. Reemplaza a `agent-templates` (HU-AOS-94, ADR-0207 §6): cada tipo trae todo lo de la plantilla."""
+    packs (HU-AOS-94, ADR-0207 §6): cada tipo trae la plantilla y lo que declara su manifiesto."""
     from core.agents.catalogo_de_tipos import (
         HABILIDAD_DEL_COORDINADOR,
         TIPO_DEL_COORDINADOR,
@@ -541,13 +532,6 @@ async def get_skill_catalog(
     return _catalogo_de_habilidades()
 
 
-@router.post(
-    "/agent-templates/{template_key}/agents",
-    response_model=FromTemplateOut,
-    status_code=status.HTTP_201_CREATED,
-    responses=plan_limit_responses_de("agentes", habilidad=True),
-    deprecated=True,
-)
 @router.post(
     "/agent-types/{template_key}/agents",
     response_model=FromTemplateOut,
