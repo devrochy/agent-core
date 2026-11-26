@@ -125,9 +125,9 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
 
     # Plantillas: Ventas disponible con sus superpoderes y frases; Cobranza también, y al crearla habilitará
     # su habilidad (`will_enable`): estar habilitada ya no es precondición (ver test_plantilla_habilita_habilidades).
-    r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
+    r = await app_client.get("/api/v1/admin/agent-types", headers=h)
     assert r.status_code == 200, r.text
-    plantillas = {p["key"]: p for p in r.json()["items"]}
+    plantillas = {p["key"]: p for p in r.json()["types"]}
     assert set(plantillas) == {"agenda", "cobranza", "suscripciones", "ventas"}
     ventas = plantillas["ventas"]
     assert ventas["available"] and ventas["missing_skills"] == [] and ventas["will_enable"] == []
@@ -137,7 +137,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     assert cobranza["available"] and cobranza["missing_skills"] == [] and cobranza["will_enable"] == ["pack_cobranza"]
 
     # Desde plantilla: borrador derivado, con los superpoderes de Ventas, sin publicar.
-    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={"name": "Mis ventas"})
+    r = await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={"name": "Mis ventas"})
     assert r.status_code == 201, r.text
     creado = r.json()
     aid = creado["agent"]["id"]
@@ -148,7 +148,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     assert {p["id"] for p in contenido["procedures"]} == {"pack_commerce.tomar_pedido", "pack_commerce.pago_en_linea", "pack_commerce.comprobar_transferencia"}
     assert creado["draft"]["lock_version"] == 1
 
-    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    r = await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={})
     assert (r.status_code, r.json()["error"]["code"]) == (409, "key_taken")
     assert r.json()["error"]["fields"]["agent_id"] == aid
 
@@ -238,7 +238,7 @@ async def test_desde_plantilla_validacion_y_publicacion_d35(app_client, monkeypa
     )
     assert r.status_code == 404, r.text
     # Ni instala un agente propio en la conexión de este negocio.
-    r = await app_client.post("/api/v1/admin/agent-templates/agenda/agents", headers=h_otro, json={})
+    r = await app_client.post("/api/v1/admin/agent-types/agenda/agents", headers=h_otro, json={})
     agenda_otro = r.json()["agent"]["id"]
     r = await app_client.post(
         f"/api/v1/admin/agents/{agenda_otro}/publish", headers=h_otro, json={"connection_ids": [str(cid)]}
@@ -332,7 +332,7 @@ async def test_modelo_que_no_sirve_usa_el_del_negocio(app_client) -> None:
 
     tid, cid = await _negocio()
     h, master = await _dueno(app_client, tid), await api_headers(app_client, tid)
-    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    r = await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
 
@@ -414,7 +414,7 @@ async def test_cada_negocio_usa_su_modelo_por_defecto(app_client) -> None:
     masters = {id(ha): await api_headers(app_client, a), id(hb): await api_headers(app_client, b)}
     for h, cid, esperado in ((ha, cid_a, "deepseek-v4-pro"), (hb, cid_b, del_b)):
         master = masters[id(h)]
-        r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+        r = await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={})
         assert r.status_code == 201, r.text
         aid = r.json()["agent"]["id"]
         await _poner_modelo(app_client, master, aid, "claude-haiku-4-5")
@@ -440,7 +440,7 @@ async def test_superpoderes_por_enfoque(app_client) -> None:
     todos = {s["id"] for s in r.json()["items"]}
     assert "pack_calendar.agendar_cita" in todos and "pack_commerce.tomar_pedido" in todos
 
-    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    r = await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
 
@@ -482,9 +482,9 @@ async def test_requisitos_de_configuracion_por_enfoque(app_client) -> None:
     tid, _ = await _negocio()
     h = await _dueno(app_client, tid)
 
-    r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
+    r = await app_client.get("/api/v1/admin/agent-types", headers=h)
     assert r.status_code == 200, r.text
-    ventas = {p["key"]: p for p in r.json()["items"]}["ventas"]
+    ventas = {p["key"]: p for p in r.json()["types"]}["ventas"]
     pedidos = {(q["skill"], q["kind"]): q for q in ventas["requirements"]}
     assert ("pack_payments", "habilidad_sin_configurar") in pedidos
     assert ("pack_commerce", "sin_contenido") in pedidos
@@ -493,7 +493,7 @@ async def test_requisitos_de_configuracion_por_enfoque(app_client) -> None:
     assert pedidos[("pack_commerce", "sin_contenido")]["content"] == "catalogo"
 
     # Por agente: lo mismo, y sin secretos ni datos de clientes en la respuesta.
-    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    r = await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
     r = await app_client.get(f"/api/v1/admin/agents/{aid}/requirements", headers=h)
@@ -512,9 +512,9 @@ async def test_plantillas_traen_seccion_y_solo_sus_herramientas(app_client) -> N
     las de Ventas no incluyen `sub_*` ni las de Agenda."""
     tid, _ = await _negocio()
     h = await _dueno(app_client, tid)
-    r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
+    r = await app_client.get("/api/v1/admin/agent-types", headers=h)
     assert r.status_code == 200, r.text
-    por_key = {p["key"]: p for p in r.json()["items"]}
+    por_key = {p["key"]: p for p in r.json()["types"]}
     assert por_key["ventas"]["section"] == "Ventas" and por_key["agenda"]["section"] == "Agenda"
     ventas, agenda = set(por_key["ventas"]["tools"]), set(por_key["agenda"]["tools"])
     assert {"crear_pedido", "generar_cotizacion"} <= ventas
@@ -529,9 +529,9 @@ async def test_crear_desde_el_guion_de_la_plantilla(app_client) -> None:
     tid, _ = await _negocio()
     h = await _dueno(app_client, tid)
 
-    r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
+    r = await app_client.get("/api/v1/admin/agent-types", headers=h)
     assert r.status_code == 200, r.text
-    ventas = {p["key"]: p for p in r.json()["items"]}["ventas"]
+    ventas = {p["key"]: p for p in r.json()["types"]}["ventas"]
     assert "que_vendes" not in {q["id"] for q in ventas["questions"]}
 
     # Respuesta fuera de las opciones: 422 por pregunta y no se crea nada.
@@ -588,7 +588,7 @@ async def test_flujo_de_atencion_por_agente(app_client) -> None:
     """HU-AOS-74: el flujo vive en el agente, valida acciones y se congela al publicar."""
     tid, cid = await _negocio()
     h = await _dueno(app_client, tid)
-    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={"name": "Ventas flujo"})
+    r = await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={"name": "Ventas flujo"})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
 
@@ -654,8 +654,8 @@ async def test_horario_por_agente(app_client) -> None:
 
     tid, cid = await _negocio()
     h = await _dueno(app_client, tid)
-    ventas = (await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={"name": "Ventas h"})).json()
-    agenda = (await app_client.post("/api/v1/admin/agent-templates/agenda/agents", headers=h, json={"name": "Agenda h"})).json()
+    ventas = (await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={"name": "Ventas h"})).json()
+    agenda = (await app_client.post("/api/v1/admin/agent-types/agenda/agents", headers=h, json={"name": "Agenda h"})).json()
     aid, otro = ventas["agent"]["id"], agenda["agent"]["id"]
 
     r = await app_client.get(f"/api/v1/admin/agents/{aid}/schedule", headers=h)
@@ -721,7 +721,7 @@ async def test_el_negocio_no_ve_ni_cambia_el_modelo_del_agente(app_client) -> No
     dueño; guardar su borrador sin `model` (o con otro) conserva el del borrador. El master lo ve."""
     tid, cid = await _negocio()
     h, master = await _dueno(app_client, tid), await api_headers(app_client, tid)
-    r = await app_client.post("/api/v1/admin/agent-templates/ventas/agents", headers=h, json={})
+    r = await app_client.post("/api/v1/admin/agent-types/ventas/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
     await _poner_modelo(app_client, master, aid, "deepseek-v4-pro")

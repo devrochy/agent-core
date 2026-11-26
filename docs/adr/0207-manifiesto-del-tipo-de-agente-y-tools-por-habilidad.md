@@ -93,7 +93,7 @@ Detalle:
   leyó o escribió algo reversible se cancela en vez de escalarse cuando cambia la release. Los tests de cambio de
   release lo cubren en HU-AOS-92.
 - Las tools sin `side_effect` claro hay que clasificarlas a mano una vez.
-- `/admin/agent-templates` convive como alias por un tiempo.
+- `/admin/agent-templates` convivió como alias hasta que panel y APK migraron; se retiró el 2026-11-26 (ver la adenda).
 
 **Qué haría que revisáramos esto:** que un pack nuevo necesite declarar algo de su tipo que el manifiesto no
 admite y obligue a tocar el core, o que la validación de arranque bloquee un despliegue por una tool de un tenant.
@@ -158,3 +158,11 @@ admite y obligue a tocar el core, o que la validación de arranque bloquee un de
 - **409 `habilidad_incompatible`** en `PUT /admin/agents/{id}/skills/{pack}` al instalar una transversal que el tipo no
   admite o un pack de especialidad ajeno. Se comprueba antes de escribir y solo en la instalación nueva: configurar lo
   ya instalado y quitar nunca dan 409. Un agente sin tipo no se restringe.
+
+## Adenda 2026-11-26: retiro de `agent-templates`
+
+Panel y APK ya leen `GET /admin/agent-types` y crean con `POST /admin/agent-types/{key}/agents`; la OTA de la APK
+se publicó antes. Se quitan `GET /admin/agent-templates` y `POST /admin/agent-templates/{key}/agents`, y con ellas
+los esquemas `AgentTemplate` y `Page_AgentTemplate_` del contrato. `agent-types` no cambia: lleva todo lo que traía
+la plantilla. Quien siga llamando a las rutas viejas recibe 404 (una APK sin la OTA); `agent-types` pide la sección
+`agents` y la creación sigue pidiendo `settings:write`.

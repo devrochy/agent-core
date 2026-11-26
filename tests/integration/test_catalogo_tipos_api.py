@@ -1,7 +1,7 @@
 """HU-AOS-94 · API de tipos de agente, catálogo de habilidades y `/posibles` (ADR-0207 §6).
 
 Sin LLM ni red. Criterios cubiertos:
-- **Tipos:** `GET /admin/agent-types` trae el Coordinador y un superconjunto de `agent-templates`.
+- **Tipos:** `GET /admin/agent-types` trae el Coordinador y la plantilla de cada tipo y lo que declara su manifiesto.
 - **Catálogo:** `GET /admin/skill-catalog` lista habilidades por clase y no expone secretos.
 - **Posibles:** `GET /admin/agents/{id}/posibles` da la especialidad, los datos del cliente y las transversales con su
   estado; el Coordinador responde 200 con `core:recepcion`; el agente de otro negocio es 404.
@@ -81,20 +81,24 @@ async def _negocio(app_client, plantilla: str = "ventas") -> tuple[uuid.UUID, di
     return tid, h, r.json()["agent"]["id"]
 
 
-async def test_tipos_son_superconjunto_de_las_plantillas(app_client) -> None:
+async def test_tipos_traen_la_plantilla_y_el_manifiesto(app_client) -> None:
     _tid, h, _agente = await _negocio(app_client)
     r = await app_client.get(f"{BASE}/agent-types", headers=h)
     assert r.status_code == 200, r.text
     cuerpo = r.json()
     assert cuerpo["coordinator"]["key"] == "coordinador" and cuerpo["coordinator"]["skill"] == "core:recepcion"
-    viejas = (await app_client.get(f"{BASE}/agent-templates", headers=h, params={"page_size": 100})).json()["items"]
     por_clave = {t["key"]: t for t in cuerpo["types"]}
-    assert {p["key"] for p in viejas} <= set(por_clave)
-    for vieja in viejas:
-        assert {k: por_clave[vieja["key"]][k] for k in vieja} == vieja
+    assert {"agenda", "cobranza", "suscripciones", "ventas"} <= set(por_clave)
     ventas = por_clave["ventas"]
+    assert {"section", "tools", "questions", "superpowers", "requirements", "will_enable"} <= set(ventas)
     assert "pack_commerce" in ventas["mandatory_skills"]
     assert set(ventas["transversal_skills"]) == {"pack_knowledge", "pack_payments", "pack_voice"}
+
+
+async def test_las_rutas_agent_templates_ya_no_existen(app_client) -> None:
+    _tid, h, _agente = await _negocio(app_client)
+    assert (await app_client.get(f"{BASE}/agent-templates", headers=h)).status_code == 404
+    assert (await app_client.post(f"{BASE}/agent-templates/ventas/agents", headers=h, json={})).status_code in (404, 405)
 
 
 async def test_catalogo_de_habilidades_por_clase_y_sin_secretos(app_client) -> None:

@@ -81,7 +81,7 @@ async def _roles(tid: uuid.UUID, release_id: Any) -> list[str]:
 
 
 async def _publicar(app_client, h: dict[str, str], cid: uuid.UUID, plantilla: str = "agenda") -> dict[str, Any]:
-    r = await app_client.post(f"/api/v1/admin/agent-templates/{plantilla}/agents", headers=h, json={})
+    r = await app_client.post(f"/api/v1/admin/agent-types/{plantilla}/agents", headers=h, json={})
     assert r.status_code == 201, r.text
     aid = r.json()["agent"]["id"]
     r = await app_client.post(f"/api/v1/admin/agents/{aid}/publish", headers=h, json={"connection_ids": [str(cid)]})

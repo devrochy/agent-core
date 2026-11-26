@@ -113,9 +113,9 @@ async def test_sin_packs_ve_los_cuatro_tipos_y_crear_habilita_la_habilidad(app_c
     assert await _packs(tid) == set()
     huella_antes = await _huella(tid)
 
-    r = await app_client.get("/api/v1/admin/agent-templates", headers=h)
+    r = await app_client.get("/api/v1/admin/agent-types", headers=h)
     assert r.status_code == 200, r.text
-    plantillas = {p["key"]: p for p in r.json()["items"]}
+    plantillas = {p["key"]: p for p in r.json()["types"]}
     assert set(plantillas) == set(TODAS)
     for key, pack in TODAS.items():
         assert plantillas[key]["available"], key
@@ -141,7 +141,7 @@ async def test_sin_packs_ve_los_cuatro_tipos_y_crear_habilita_la_habilidad(app_c
     assert await _huella(tid) == huella
 
     # Ya habilitada, otra plantilla que pide lo mismo no vuelve a habilitar.
-    plantillas = {p["key"]: p for p in (await app_client.get("/api/v1/admin/agent-templates", headers=h)).json()["items"]}
+    plantillas = {p["key"]: p for p in (await app_client.get("/api/v1/admin/agent-types", headers=h)).json()["types"]}
     assert plantillas["ventas"]["will_enable"] == []
 
 
