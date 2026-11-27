@@ -413,8 +413,11 @@ async def consolidar_y_purgar(
             text("select purge_test_conversation(:t, :c)"), {"t": str(tenant_id), "c": str(conversation_id)}
         )
     # Fuera de la transacción: Redis no es transaccional y borrar de más/menos no cambia el cobro.
-    await working_memory.clear(conversation_id)
-    await SandboxPrueba(tenant_id, conversation_id).limpiar()
+    try:
+        await working_memory.clear(conversation_id)
+        await SandboxPrueba(tenant_id, conversation_id).limpiar()
+    except Exception as exc:
+        log.warning("prueba_limpieza_redis_fallo", run_id=str(run_id), error=type(exc).__name__)
     return creditos.quantize(Decimal("0.1")), tools
 
 
@@ -430,7 +433,8 @@ def _credito_del_simulador(proveedor: Any, respuesta: Any) -> tuple[Decimal, Dec
     salida = int(getattr(uso, "output_tokens", 0) or 0)
     try:
         usd = Decimal(str(costo_de_respuesta(proveedor, uso))) if hasattr(proveedor, "estimate_cost_usd") else Decimal(0)
-    except Exception:
+    except Exception as exc:
+        log.warning("prueba_simulador_sin_tarifa", error=type(exc).__name__)
         usd = Decimal(0)
     creditos = creditos_por_evento(usd, "agent_run", "platform", trm_vigente()) if usd > 0 else Decimal(0)
     return Decimal(creditos), usd, entrada, salida
