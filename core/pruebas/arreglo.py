@@ -50,6 +50,8 @@ TIMEOUT_S = 60.0
 MAX_PORQUE = 600
 MAX_TEXTO = 1500
 MAX_REGLAS_EN_PROMPT = 40
+MIN_LARGO_MAXIMO = 50
+MIN_FRASE = 3
 
 Tipo = Literal["regla", "respuesta", "dato"]
 Seccion = Literal["catalogo", "horario", "formas_de_pago", "conocimiento", "otro"]
@@ -84,6 +86,11 @@ class Arreglo(BaseModel):
         if self.tipo == "regla":
             if self.regla is None or self.texto or self.seccion or self.procedimiento:
                 raise ValueError("una regla trae `regla` y nada más")
+            # Un mínimo de sentido: una regla demasiado amplia degradaría al agente si el dueño la aplica sin leer.
+            if self.regla.kind == "max_length" and (self.regla.value or 0) < MIN_LARGO_MAXIMO:
+                raise ValueError(f"un largo máximo menor a {MIN_LARGO_MAXIMO} caracteres no es razonable")
+            if any(len(f.strip()) < MIN_FRASE for f in self.regla.phrases):
+                raise ValueError(f"cada frase de la regla tiene al menos {MIN_FRASE} caracteres")
         elif self.tipo == "respuesta":
             if not self.texto or self.regla is not None or self.seccion:
                 raise ValueError("una respuesta trae `texto` (y a lo más `procedimiento`)")
@@ -241,6 +248,10 @@ async def proponer(
     gastado = Decimal(resultado.consumo.credits or 0)
     arreglo = resultado.datos
     if arreglo.aplicable:
+        regla = arreglo.regla
+        if regla is not None and regla.kind == "required_tool" and regla.tool not in set(tools):
+            log.warning("prueba_arreglo_tool_ajena", run_id=str(run_id), case_id=str(case_id))
+            return None, gastado
         # Que el cambio pase el contrato y el linter del borrador, no solo la forma: una `required_tool` con una tool
         # que el agente no tiene se descarta aquí y no le llega al dueño como algo que no podrá aplicar.
         try:

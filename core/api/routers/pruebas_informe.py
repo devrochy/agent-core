@@ -205,7 +205,9 @@ async def informe(
 
 
 @router.get(
-    "/{agent_id}/pruebas/resultados/{result_id}/arreglo", response_model=PruebasArregloVistaOut, responses=_ERRORES
+    "/{agent_id}/pruebas/resultados/{result_id}/arreglo",
+    response_model=PruebasArregloVistaOut,
+    responses={**_ERRORES, 409: {"description": "`sin_arreglo`: el resultado no tiene un arreglo sugerido."}},
 )
 async def ver_arreglo(
     agent_id: uuid.UUID, result_id: uuid.UUID, principal: Annotated[Principal, Depends(require("agents"))]
@@ -228,7 +230,10 @@ async def ver_arreglo(
             "(`details = {tipo, seccion, texto}`: se edita a mano), `sin_borrador`, `agente_archivado` o "
             "`stale_lock_version` (`details.lock_version` trae el vigente)."
         },
-        422: {"description": "`arreglo_invalido`: el cambio no pasa el contrato del borrador (`fields` por campo)."},
+        422: {
+            "description": "`arreglo_invalido`: el cambio no pasa el contrato del borrador (`fields` por campo); "
+            "o `validation_error` si falta `confirmo: true` o el `lock_version`."
+        },
     },
 )
 async def aplicar_arreglo(
@@ -300,7 +305,10 @@ async def estimar_fallidas(
     status_code=202,
     responses={
         **_ERRORES,
-        409: {"description": "`corrida_en_curso`, `estimado_cambio` o `plan_limit_creditos`; no se creó la corrida."},
+        409: {
+            "description": "`corrida_en_curso` (la corrida de origen sigue activa: `details.estado`; u otra corrida del "
+            "negocio: sin `details`), `estimado_cambio` o `plan_limit_creditos`; no se creó la corrida."
+        },
         422: {"description": "`sin_fallidas` o `k_fuera_de_rango`."},
         429: {"description": "`corridas_por_dia`."},
     },

@@ -154,7 +154,11 @@ async def informe(tenant_id: uuid.UUID, agent_id: uuid.UUID, run_id: uuid.UUID) 
             c.id: c.titulo
             for c in (
                 await session.execute(
-                    select(AgentTestCase).where(AgentTestCase.tenant_id == tenant_id, AgentTestCase.id.in_(pedidos))
+                    select(AgentTestCase).where(
+                        AgentTestCase.tenant_id == tenant_id,
+                        AgentTestCase.agent_id == agent_id,
+                        AgentTestCase.id.in_(pedidos),
+                    )
                 )
             ).scalars()
         }
@@ -312,7 +316,7 @@ async def aplicar(
             lock_final = guardado_ok.lock_version
         ahora = datetime.now(UTC)
         async with get_session() as session:
-            await session.execute(
+            marcado = await session.execute(
                 update(AgentTestResult)
                 .where(
                     AgentTestResult.tenant_id == tenant_id,
@@ -321,19 +325,20 @@ async def aplicar(
                 )
                 .values(arreglo_aplicado_en=ahora, updated_at=func.now())
             )
-            session.add(
-                AuditLog(
-                    tenant_id=tenant_id,
-                    actor=actor[:120],
-                    action=ACCION_APLICAR,
-                    input={
-                        "result_id": str(result_id),
-                        "agent_id": str(agent_id),
-                        "tipo": arreglo.tipo,
-                        "cambios": [c["ruta"] for c in cambios],
-                    },
+            if marcado.rowcount:  # dos clics a la vez no auditan dos veces
+                session.add(
+                    AuditLog(
+                        tenant_id=tenant_id,
+                        actor=actor[:120],
+                        action=ACCION_APLICAR,
+                        input={
+                            "result_id": str(result_id),
+                            "agent_id": str(agent_id),
+                            "tipo": arreglo.tipo,
+                            "cambios": [c["ruta"] for c in cambios],
+                        },
+                    )
                 )
-            )
     log.info(ACCION_APLICAR, tenant_id=str(tenant_id), result_id=str(result_id), cambios=len(cambios))
     return {
         "result_id": result_id,

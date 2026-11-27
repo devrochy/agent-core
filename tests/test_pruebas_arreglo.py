@@ -38,6 +38,8 @@ def test_porcentaje_cuenta_lo_que_se_pudo_juzgar(pasan: int, fallan: int, espera
         {"tipo": "otro", "porque": "x", "texto": "t"},
         {"tipo": "regla", "porque": "", "regla": REGLA},
         {"tipo": "regla", "porque": "x", "regla": REGLA, "publicar": True},
+        {"tipo": "regla", "porque": "x", "regla": {"name": "Corto", "kind": "max_length", "value": 1}},  # demasiado amplia
+        {"tipo": "regla", "porque": "x", "regla": {**REGLA, "phrases": ["a"]}},
         {"tipo": "respuesta", "porque": "x", "texto": "t", "procedimiento": "no es un id"},
     ],
 )
