@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     # Rol `tester` del centro de pruebas (SPEC-30, ADR-0134): master sin Colaboradores.
     # SOLO en test. Apagado (producción), un tester no inicia sesión ni se puede crear.
     qa_testers_enabled: bool = Field(default=False, alias="QA_TESTERS_ENABLED")
+    # Pruebas del agente por el dueño (SPEC-53, ADR-0212 §3 y §5). Apagada en producción hasta pasar las pruebas del
+    # dueño: sin ella el estimado y las corridas responden 404. `k` es el número de intentos por escenario: valor por
+    # defecto y tope de plataforma; el master baja o sube el tope de un negocio (`tenants.settings.pruebas.k_maximo`).
+    pruebas_agente_enabled: bool = Field(default=False, alias="PRUEBAS_AGENTE_ENABLED")
+    pruebas_k_por_defecto: int = Field(default=1, ge=1, alias="PRUEBAS_K_POR_DEFECTO")
+    pruebas_k_maximo: int = Field(default=4, ge=1, alias="PRUEBAS_K_MAXIMO")
     # HU-CRM-06 (ADR-0150): números (con o sin `+`) que pueden recibir un envío a un segmento
     # cuando el entorno no es producción real (desarrollo o test con QA_TESTERS_ENABLED). Vacío =
     # en esos entornos no sale ningún envío a un segmento. En producción no se mira.
