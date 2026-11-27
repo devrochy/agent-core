@@ -8479,6 +8479,429 @@
         }
       }
     },
+    "/api/v1/admin/agents/{agent_id}/pruebas": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Listar Escenarios",
+        "description": "Los escenarios del agente y su última corrida.",
+        "operationId": "listar_escenarios_api_v1_admin_agents__agent_id__pruebas_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscenariosDePrueba"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Escribir Escenario",
+        "description": "El dueño escribe un escenario. Sus tools deben ser del agente.",
+        "operationId": "escribir_escenario_api_v1_admin_agents__agent_id__pruebas_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EscenarioDePruebaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscenarioDePrueba"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/proponer": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Proponer Escenarios",
+        "description": "La IA propone hasta 10 escenarios con la configuración del agente. Quedan en `borrador`.",
+        "operationId": "proponer_escenarios_api_v1_admin_agents__agent_id__pruebas_proponer_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscenariosPropuestos"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Tope del plan: `error.code = plan_limit_creditos`, `error.details = {metric, used, limit}`; no se escribió nada."
+          },
+          "502": {
+            "description": "`propuesta_invalida`: la IA respondió sin escenarios utilizables (ya se cobró la llamada)."
+          },
+          "503": {
+            "description": "`ia_no_disponible`: el proveedor no respondió; no se cobró nada."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/{case_id}": {
+      "patch": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Editar Escenario",
+        "description": "Edita un escenario o lo aprueba (`estado = aprobado`).",
+        "operationId": "editar_escenario_api_v1_admin_agents__agent_id__pruebas__case_id__patch",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EscenarioDePruebaPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EscenarioDePrueba"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Borrar Escenario",
+        "description": "Borrado lógico: el escenario deja de salir y de correrse.",
+        "operationId": "borrar_escenario_api_v1_admin_agents__agent_id__pruebas__case_id__delete",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Case Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/agents/overview": {
       "get": {
         "tags": [
@@ -61674,6 +62097,346 @@
         ],
         "title": "EscalationItem"
       },
+      "EscenarioDePrueba": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "objetivo_cliente": {
+            "type": "string",
+            "title": "Objetivo Cliente"
+          },
+          "datos_cliente": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Datos Cliente"
+          },
+          "criterios": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Criterios"
+          },
+          "tools_esperadas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools Esperadas"
+          },
+          "tools_prohibidas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools Prohibidas"
+          },
+          "origen": {
+            "type": "string",
+            "enum": [
+              "ia",
+              "manual"
+            ],
+            "title": "Origen"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "borrador",
+              "aprobado"
+            ],
+            "title": "Estado"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "titulo",
+          "objetivo_cliente",
+          "datos_cliente",
+          "criterios",
+          "tools_esperadas",
+          "tools_prohibidas",
+          "origen",
+          "estado",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "EscenarioDePrueba"
+      },
+      "EscenarioDePruebaIn": {
+        "properties": {
+          "titulo": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Titulo"
+          },
+          "objetivo_cliente": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Objetivo Cliente",
+            "description": "Lo que el cliente simulado quiere lograr."
+          },
+          "datos_cliente": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Datos Cliente",
+            "description": "Datos inventados que el cliente conoce."
+          },
+          "criterios": {
+            "items": {
+              "type": "string",
+              "maxLength": 500,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Criterios"
+          },
+          "tools_esperadas": {
+            "items": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Tools Esperadas"
+          },
+          "tools_prohibidas": {
+            "items": {
+              "type": "string",
+              "maxLength": 100,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Tools Prohibidas"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "borrador",
+              "aprobado"
+            ],
+            "title": "Estado",
+            "default": "borrador"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "titulo",
+          "objetivo_cliente"
+        ],
+        "title": "EscenarioDePruebaIn"
+      },
+      "EscenarioDePruebaPatch": {
+        "properties": {
+          "titulo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Titulo"
+          },
+          "objetivo_cliente": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Objetivo Cliente"
+          },
+          "datos_cliente": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Datos Cliente"
+          },
+          "criterios": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 500,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Criterios"
+          },
+          "tools_esperadas": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 100,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools Esperadas"
+          },
+          "tools_prohibidas": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 100,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 50
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tools Prohibidas"
+          },
+          "estado": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "borrador",
+                  "aprobado"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estado"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "EscenarioDePruebaPatch",
+        "description": "Solo los campos enviados cambian."
+      },
+      "EscenariosDePrueba": {
+        "properties": {
+          "escenarios": {
+            "items": {
+              "$ref": "#/components/schemas/EscenarioDePrueba"
+            },
+            "type": "array",
+            "title": "Escenarios"
+          },
+          "tope": {
+            "type": "integer",
+            "title": "Tope",
+            "description": "Máximo de escenarios por agente."
+          },
+          "ultima_corrida": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResumenDeCorridaDePrueba"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "escenarios",
+          "tope",
+          "ultima_corrida"
+        ],
+        "title": "EscenariosDePrueba"
+      },
+      "EscenariosPropuestos": {
+        "properties": {
+          "escenarios": {
+            "items": {
+              "$ref": "#/components/schemas/EscenarioDePrueba"
+            },
+            "type": "array",
+            "title": "Escenarios",
+            "description": "Los guardados en `borrador`, hasta 10."
+          },
+          "descartados": {
+            "type": "integer",
+            "title": "Descartados",
+            "description": "Propuestas que se descartaron: repetidas, sin título u objetivo."
+          },
+          "creditos": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creditos",
+            "description": "Lo que costó pedir la propuesta; `null` si no se pudo medir."
+          }
+        },
+        "type": "object",
+        "required": [
+          "escenarios",
+          "descartados",
+          "creditos"
+        ],
+        "title": "EscenariosPropuestos"
+      },
       "EstadisticaSnapshot": {
         "properties": {
           "fecha": {
@@ -79922,6 +80685,56 @@
           "items"
         ],
         "title": "ResultadoSeccion"
+      },
+      "ResumenDeCorridaDePrueba": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "k": {
+            "type": "integer",
+            "title": "K"
+          },
+          "iniciada_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iniciada En"
+          },
+          "terminada_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminada En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "estado",
+          "k",
+          "iniciada_en",
+          "terminada_en"
+        ],
+        "title": "ResumenDeCorridaDePrueba"
       },
       "ResumenPorAgente": {
         "properties": {
