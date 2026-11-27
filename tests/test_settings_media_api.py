@@ -34,7 +34,18 @@ def _media_data() -> dict:
                     "key": "groq",
                     "label": "Groq · Whisper",
                     "default_model": "whisper-large-v3-turbo",
-                    "models": [{"id": "whisper-large-v3-turbo", "label": "Turbo"}],
+                    "models": [
+                        {
+                            "id": "whisper-large-v3-turbo",
+                            "label": "Turbo",
+                            "quality": 4,
+                            "tier": "rapido",
+                            "legacy": False,
+                            "offered": True,
+                            "cost_usd": 0.000667,
+                            "cost_unit": "minute",
+                        }
+                    ],
                 }
             ],
             "vision": [
@@ -42,7 +53,18 @@ def _media_data() -> dict:
                     "key": "deepseek",
                     "label": "DeepSeek · visión",
                     "default_model": "deepseek-flash",
-                    "models": [{"id": "deepseek-flash", "label": "Flash"}],
+                    "models": [
+                        {
+                            "id": "deepseek-flash",
+                            "label": "Flash",
+                            "quality": 2,
+                            "tier": "economico",
+                            "legacy": False,
+                            "offered": True,
+                            "cost_usd": 0.000252,
+                            "cost_unit": "image",
+                        }
+                    ],
                 }
             ],
         },
@@ -58,6 +80,10 @@ async def test_get_media_settings_serializa_el_contrato(monkeypatch: pytest.Monk
     assert out.audio.provider == "groq"
     assert out.vision.mode == "describir"
     assert out.catalog.audio[0].models[0].id == "whisper-large-v3-turbo"
+    assert out.catalog.audio[0].models[0].quality == 4
+    assert out.catalog.audio[0].models[0].cost_unit == "minute"
+    assert out.catalog.audio[0].models[0].offered is True
+    assert out.catalog.vision[0].models[0].cost_unit == "image"
 
 
 async def test_save_audio_devuelve_el_estado_efectivo(monkeypatch: pytest.MonkeyPatch) -> None:

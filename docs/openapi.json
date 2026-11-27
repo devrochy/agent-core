@@ -69657,12 +69657,46 @@
           "label": {
             "type": "string",
             "title": "Label"
+          },
+          "quality": {
+            "type": "integer",
+            "title": "Quality"
+          },
+          "tier": {
+            "type": "string",
+            "title": "Tier"
+          },
+          "legacy": {
+            "type": "boolean",
+            "default": false,
+            "title": "Legacy"
+          },
+          "offered": {
+            "type": "boolean",
+            "default": true,
+            "title": "Offered"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "cost_unit": {
+            "enum": [
+              "minute",
+              "image"
+            ],
+            "type": "string",
+            "title": "Cost Unit"
           }
         },
         "type": "object",
         "required": [
           "id",
-          "label"
+          "label",
+          "quality",
+          "tier",
+          "cost_usd",
+          "cost_unit"
         ],
         "title": "MediaCatalogModel"
       },

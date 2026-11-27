@@ -3,11 +3,13 @@ from core.media.catalog import (
     VISION_CATALOG,
     audio_cost_usd,
     audio_model_or_default,
+    audio_price_per_minute,
     is_audio_provider,
     is_vision_mode,
     is_vision_provider,
     vision_cost_usd,
     vision_model_or_default,
+    vision_price_per_image,
 )
 
 
@@ -40,3 +42,25 @@ def test_costos_de_referencia() -> None:
     assert audio_cost_usd("groq", "whisper-large-v3-turbo", 0) == 0
     assert vision_cost_usd("deepseek", "deepseek-flash", 1_000_000, 0) == 0.14
     assert vision_cost_usd("deepseek", "deepseek-flash", 0, 1_000_000) == 0.28
+
+
+def test_catalogo_expone_calidad_tier_y_legado() -> None:
+    audio = {m.id: m for m in AUDIO_CATALOG["openai"].models}
+    assert audio["gpt-4o-transcribe"].quality == 5
+    assert audio["gpt-4o-transcribe"].tier == "maxima"
+    assert not audio["gpt-4o-transcribe"].legacy
+    assert audio["gpt-4o-mini-transcribe"].offered is False
+    assert audio["whisper-1"].legacy
+    assert audio["whisper-1"].offered is False
+
+    vision = {m.id: m for m in VISION_CATALOG["openai"].models}
+    assert vision["gpt-4.1-mini"].quality == 4
+    assert vision["gpt-4.1-mini"].tier == "preciso"
+    assert not vision["gpt-4.1-mini"].legacy
+    assert vision["gpt-4o"].legacy
+
+
+def test_costos_de_referencia_por_unidad() -> None:
+    assert audio_price_per_minute("openai", "gpt-4o-transcribe") == 0.006
+    # 1.200 tokens de entrada + 300 de salida: 0,00048 + 0,00048.
+    assert vision_price_per_image("openai", "gpt-4.1-mini") == 0.00096
