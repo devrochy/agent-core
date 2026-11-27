@@ -45,6 +45,7 @@ from core.billing.tarifario import (
     creditos_por_evento,
     trm_vigente,
 )
+from core.billing.tipos_de_uso import PRUEBA_AGENTE
 from core.db.models import AgentInstanceRecord, AgentRecord, Conversation, Message, UsageLedger
 from core.shared.logger import get_logger
 from core.shared.test_mode import TEST_CHANNEL
@@ -80,19 +81,36 @@ class ConsumoDeCreditos:
 
 
 def _de_playground(tenant_id: uuid.UUID, columna):  # type: ignore[no-untyped-def]
-    """Filas del playground del panel (conversaciones del canal `test`). Una fila sin conversación
-    no es del playground (`IN` con NULL da NULL, que un `case` trata como falso)."""
+    """Filas del playground VIVO del panel: conversaciones del canal `test` que NO son de una corrida de
+    pruebas (`state.prueba_corrida`, ADR-0212 §2). Una fila sin conversación no es del playground (`IN`
+    con NULL da NULL, que un `case` trata como falso)."""
     de_prueba = select(Conversation.id).where(
-        Conversation.tenant_id == tenant_id, Conversation.channel == TEST_CHANNEL
+        Conversation.tenant_id == tenant_id,
+        Conversation.channel == TEST_CHANNEL,
+        Conversation.state["prueba_corrida"].astext.is_(None),
     )
     return columna.in_(de_prueba)
 
 
+def _de_corrida(tenant_id: uuid.UUID, columna):  # type: ignore[no-untyped-def]
+    """Filas de la conversación de una corrida de pruebas EN CURSO. Su gasto se consolida en una fila
+    `prueba_agente` antes de purgarla (ADR-0212 §4); mientras vive no suma a nada, para no contarse dos veces."""
+    de_corrida = select(Conversation.id).where(
+        Conversation.tenant_id == tenant_id,
+        Conversation.channel == TEST_CHANNEL,
+        Conversation.state["prueba_corrida"].astext.is_not(None),
+    )
+    return columna.in_(de_corrida)
+
+
 def _sin_playground(tenant_id: uuid.UUID, columna):  # type: ignore[no-untyped-def]
-    """Excluye las filas del playground; las que no tienen conversación se conservan
-    (`NOT IN` con NULL descartaría filas legítimas). El playground no desaparece del crédito: se
+    """Excluye las filas del playground y de las corridas de pruebas; las que no tienen conversación se
+    conservan (`NOT IN` con NULL descartaría filas legítimas). El playground no desaparece del crédito: se
     mide aparte y cobra lo que pasa de `PLAYGROUND_GRATIS_POR_CICLO` (`medir_creditos`)."""
-    return or_(columna.is_(None), ~_de_playground(tenant_id, columna))
+    return and_(
+        or_(columna.is_(None), ~_de_playground(tenant_id, columna)),
+        or_(columna.is_(None), ~_de_corrida(tenant_id, columna)),
+    )
 
 
 def _creditos_de_la_fila(trm: Decimal, tarifario: Tarifario):  # type: ignore[no-untyped-def]
@@ -130,6 +148,9 @@ async def medir_creditos(
       `vigente_desde` de `v2` suman aparte; al negocio solo se le cobra lo que pasa de 300 en la
       ventana, en `por_concepto["playground"]` y en el renglón sin agente. Lo anterior a `v2`
       queda fuera, como antes: los ciclos cerrados no cambian.
+    - **Pruebas del agente** (ADR-0212 §4): las filas `prueba_agente` suman al mismo cubo que el
+      playground, así que los 300 créditos gratis son compartidos. Las conversaciones de una corrida en
+      curso no suman (se consolidan en una fila `prueba_agente` antes de purgarlas).
     - `eval` nunca cuenta (ADR-0117)."""
     from core.shared.tenant import get_current_tenant_id
 
@@ -144,18 +165,27 @@ async def medir_creditos(
         filtros_ledger.append(UsageLedger.created_at >= desde)
     if hasta is not None:
         filtros_ledger.append(UsageLedger.created_at < hasta)
-    filtros_ledger_negocio = [*filtros_ledger, _sin_playground(tenant_id, UsageLedger.conversation_id)]
+    filtros_ledger_negocio = [
+        *filtros_ledger,
+        _sin_playground(tenant_id, UsageLedger.conversation_id),
+        UsageLedger.kind != PRUEBA_AGENTE,
+    ]
 
     # Una sola lectura del ledger: concepto × «es del playground». El playground anterior a `v2`
     # sale como «excluido» y no suma a nada (antes de `v2` el playground no consumía).
     concepto_de_la_fila = case(
         (UsageLedger.kind.in_(_KINDS_CON_CONCEPTO), UsageLedger.kind), else_=literal("llm_turn")
     )
+    # Las pruebas del agente (`prueba_agente`, ADR-0212 §4) comparten el cubo del playground: una sola
+    # fórmula, `max(0, playground_vivo + pruebas − 300)`, derivada del ledger y sin contador aparte. Las
+    # conversaciones de una corrida en curso quedan «excluidas» hasta que se consolidan.
     lugar = case(
+        (UsageLedger.kind == PRUEBA_AGENTE, literal("playground")),
         (
             _de_playground(tenant_id, UsageLedger.conversation_id),
             case((UsageLedger.created_at >= v2_desde, literal("playground")), else_=literal("excluido")),
         ),
+        (_de_corrida(tenant_id, UsageLedger.conversation_id), literal("excluido")),
         else_=literal("negocio"),
     )
     del_ledger: dict[str, Decimal] = {c: Decimal(0) for c in ("llm_turn", *_KINDS_CON_CONCEPTO)}

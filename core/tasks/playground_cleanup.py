@@ -46,6 +46,9 @@ async def purgar_pruebas_vencidas() -> dict[str, int]:
                                 Conversation.tenant_id == tenant_id,
                                 Conversation.channel == TEST_CHANNEL,
                                 Conversation.state["panel"].astext == "true",
+                                # Las de una corrida de pruebas (ADR-0212 §2) las purga su corredor tras consolidar
+                                # el gasto en una fila `prueba_agente`; purgarlas aquí perdería ese cobro.
+                                Conversation.state["prueba_corrida"].astext.is_(None),
                                 Conversation.started_at < corte,
                             )
                         )

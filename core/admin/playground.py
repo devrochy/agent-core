@@ -211,6 +211,9 @@ async def close_test_conversation(
                 Conversation.tenant_id == tenant_id,
                 Conversation.channel == TEST_CHANNEL,
                 Conversation.state["panel"].astext == "true",
+                # Nunca las de una corrida de pruebas en curso (ADR-0212 §2): reiniciar o cerrar el playground
+                # no debe tumbar la corrida ni borrar su gasto antes de consolidarlo.
+                Conversation.state["prueba_corrida"].astext.is_(None),
             ]
             if agent_id is not None:
                 filtros.append(Conversation.state[CLAVE_BORRADOR].astext == str(agent_id))
