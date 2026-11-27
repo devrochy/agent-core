@@ -326,7 +326,12 @@ async def borrar(tenant_id: uuid.UUID, agent_id: uuid.UUID, case_id: uuid.UUID) 
         await _vivo(session, tenant_id, agent_id, case_id)
         await session.execute(
             update(AgentTestCase)
-            .where(AgentTestCase.tenant_id == tenant_id, AgentTestCase.id == case_id)
+            .where(
+                AgentTestCase.tenant_id == tenant_id,
+                AgentTestCase.agent_id == agent_id,
+                AgentTestCase.id == case_id,
+                AgentTestCase.deleted_at.is_(None),
+            )
             .values(deleted_at=utcnow())
         )
 

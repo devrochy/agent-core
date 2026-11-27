@@ -39,6 +39,9 @@ TEMPERATURA = 0.5
 TIMEOUT_LLM_S = 90
 # Mínimo con el que el negocio puede pedir una propuesta: el costo real se mide y se muestra después.
 CREDITOS_MINIMOS = 1
+TOPE_DATOS_CLIENTE = (
+    4000  # caracteres de JSON de `datos_cliente`: salida de la IA, dato no confiable
+)
 
 
 class Propuesta(BaseModel):
@@ -149,7 +152,9 @@ def depurar(
             {
                 "titulo": titulo,
                 "objetivo_cliente": objetivo,
-                "datos_cliente": dict(datos) if isinstance(datos, dict) else {},
+                "datos_cliente": datos
+                if isinstance(datos, dict) and len(json.dumps(datos)) <= TOPE_DATOS_CLIENTE
+                else {},
                 "criterios": _lista(p.get("criterios"), 500, 20),
                 "tools_esperadas": esperadas,
                 "tools_prohibidas": prohibidas,
