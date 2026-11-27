@@ -48195,6 +48195,9 @@
               }
             }
           },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
           "404": {
             "description": "Agente o escenario inexistente o de otro negocio (`not_found`, `escenario_no_encontrado`), o pruebas apagadas."
           },
@@ -48278,6 +48281,9 @@
               }
             }
           },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
           "404": {
             "description": "Agente o escenario inexistente o de otro negocio (`not_found`, `escenario_no_encontrado`), o pruebas apagadas."
           },
@@ -48285,7 +48291,7 @@
             "description": "`k_fuera_de_rango`, `demasiados_escenarios`, `sin_escenarios` o `escenario_no_aprobado`."
           },
           "409": {
-            "description": "Tope del plan: `error.code = plan_limit_creditos`, `error.details = {metric, used, limit}`; no se escribió nada."
+            "description": "`plan_limit_creditos` (`details = {metric, used, limit}`), `estimado_cambio` (`details.estimado` trae el vigente) o `corrida_en_curso`; no se creó la corrida."
           },
           "429": {
             "description": "`corridas_por_dia`."

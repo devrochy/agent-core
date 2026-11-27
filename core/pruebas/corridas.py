@@ -83,7 +83,7 @@ async def _escenarios(
             )
         ).all()
     }
-    if len(filas) != len(ids):  # uno no existe, es de otro agente o negocio, o está borrado
+    if len(filas) != len(ids):  # uno no existe, es de otro agente o negocio, o está archivado
         raise ErrorPruebas(404, "escenario_no_encontrado", "Algún escenario no existe.")
     if any(estado != "aprobado" for estado in filas.values()):
         raise ErrorPruebas(422, "escenario_no_aprobado", "Solo se corren escenarios aprobados.")
@@ -119,7 +119,9 @@ async def _escenarios_o_agente(
 
     existe = (
         await session.execute(
-            select(AgentRecord.id).where(AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id)
+            select(AgentRecord.id).where(
+                AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id, AgentRecord.status == "active"
+            )
         )
     ).scalar_one_or_none()
     if existe is None:
@@ -205,6 +207,8 @@ async def crear(
         try:
             await session.flush()
         except IntegrityError as exc:  # el índice parcial `uq_agent_test_runs_activa` ganó una carrera
+            if "uq_agent_test_runs_activa" not in str(exc.orig):
+                raise
             raise ErrorPruebas(409, "corrida_en_curso", "Ya hay una corrida de pruebas en curso en este negocio.") from exc
         session.add(
             AuditLog(

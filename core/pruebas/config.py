@@ -26,6 +26,10 @@ CLAVE = "pruebas"
 ACCION_AUDITORIA = "pruebas_k_maximo"
 
 
+# `settings.pruebas` si es un objeto; cualquier otra forma (escalar, array) se trata como vacía.
+_BLOQUE = "CASE WHEN jsonb_typeof(settings->'pruebas') = 'object' THEN settings->'pruebas' ELSE '{}'::jsonb END"
+
+
 class NegocioNoEncontrado(LookupError):
     pass
 
@@ -58,7 +62,12 @@ async def _settings_del_negocio(session, tenant_id: uuid.UUID) -> dict[str, Any]
         raise PermissionError("pruebas: fuera del tenant_scope del negocio")
     fila = (
         await session.execute(
-            text("SELECT settings FROM tenants WHERE id = :t AND deleted_at IS NULL"), {"t": tenant_id}
+            text(
+                "SELECT CASE WHEN jsonb_typeof(settings->'pruebas') = 'object' "
+                "THEN jsonb_build_object('pruebas', settings->'pruebas') ELSE '{}'::jsonb END "
+                "FROM tenants WHERE id = :t AND deleted_at IS NULL"
+            ),
+            {"t": tenant_id},
         )
     ).first()
     if fila is None:
@@ -102,9 +111,7 @@ async def fijar_k_maximo(tenant_id: uuid.UUID, k_maximo: int | None, *, actor: s
     async with get_session() as session:
         # `settings.pruebas || {...}` conserva `k_por_defecto`; con `None` se quita solo `k_maximo`.
         cambio = (
-            "coalesce(settings->'pruebas', '{}'::jsonb) || cast(:valor as jsonb)"
-            if k_maximo is not None
-            else "coalesce(settings->'pruebas', '{}'::jsonb) - 'k_maximo'"
+            f"{_BLOQUE} || cast(:valor as jsonb)" if k_maximo is not None else f"{_BLOQUE} - 'k_maximo'"
         )
         parametros: dict[str, Any] = {"t": tenant_id}
         if k_maximo is not None:
@@ -112,7 +119,8 @@ async def fijar_k_maximo(tenant_id: uuid.UUID, k_maximo: int | None, *, actor: s
         fila = (
             await session.execute(
                 text(
-                    "UPDATE tenants SET settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{pruebas}', "
+                    "UPDATE tenants SET settings = jsonb_set("
+                    "CASE WHEN jsonb_typeof(settings) = 'object' THEN settings ELSE '{}'::jsonb END, '{pruebas}', "
                     f"{cambio}) WHERE id = :t AND deleted_at IS NULL RETURNING id"
                 ),
                 parametros,

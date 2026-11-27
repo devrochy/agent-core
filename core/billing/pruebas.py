@@ -116,7 +116,7 @@ async def estimar_corrida(
     now: datetime | None = None,
 ) -> EstimadoDeCorrida:
     """Tabla `por_k` de 1 al tope del negocio para correr `escenarios` escenarios del agente. La sesión está dentro
-    del `tenant_scope(tenant_id)`. `AgenteNoEncontrado` si el agente no es del negocio o está borrado."""
+    del `tenant_scope(tenant_id)`. `AgenteNoEncontrado` si el agente no es del negocio o está archivado."""
     from core.ia.estructurado import _app_settings
     from core.llm.niveles import normalizar, usa_llave_propia
     from core.pruebas.config import topes_de_k
@@ -126,7 +126,9 @@ async def estimar_corrida(
     ahora = now or datetime.now(UTC)
     nivel_crudo = (
         await session.execute(
-            select(AgentRecord.nivel_ia).where(AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id)
+            select(AgentRecord.nivel_ia).where(
+                AgentRecord.tenant_id == tenant_id, AgentRecord.id == agent_id, AgentRecord.status == "active"
+            )
         )
     ).scalar_one_or_none()
     if nivel_crudo is None:

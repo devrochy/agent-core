@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from core.admin.roles import actua_como_master
 from core.api.deps import Principal, get_principal, require
 from core.api.errors import ApiError
-from core.api.plan_limits import plan_limit_error, plan_limit_responses
+from core.api.plan_limits import plan_limit_error
 from core.billing.enforcement import QuotaExceeded
 from core.billing.pruebas import MAX_ESCENARIOS, EstimadoDeCorrida
 from core.config import get_settings
@@ -89,9 +89,17 @@ class PruebasCorridaOut(BaseModel):
 
 
 _ERRORES: dict[int | str, dict[str, str]] = {
+    403: {"description": "Sin permiso de escritura en la sección `agents`."},
     404: {"description": "Agente o escenario inexistente o de otro negocio (`not_found`, `escenario_no_encontrado`), o pruebas apagadas."},
     422: {
         "description": "`k_fuera_de_rango`, `demasiados_escenarios`, `sin_escenarios` o `escenario_no_aprobado`."
+    },
+}
+
+_ERRORES_CORRIDA: dict[int | str, dict[str, str]] = {
+    409: {
+        "description": "`plan_limit_creditos` (`details = {metric, used, limit}`), `estimado_cambio` "
+        "(`details.estimado` trae el vigente) o `corrida_en_curso`; no se creó la corrida."
     },
 }
 
@@ -153,7 +161,7 @@ async def estimar(
     "/{agent_id}/pruebas/corridas",
     response_model=PruebasCorridaOut,
     status_code=202,
-    responses={**_ERRORES, **plan_limit_responses("creditos"), 429: {"description": "`corridas_por_dia`."}},
+    responses={**_ERRORES, **_ERRORES_CORRIDA, 429: {"description": "`corridas_por_dia`."}},
 )
 async def crear_corrida(
     agent_id: uuid.UUID,
