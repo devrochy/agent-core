@@ -66,6 +66,7 @@ from core.api.routers import (
     procedures,
     pruebas_corridas,
     pruebas_escenarios,
+    pruebas_informe,
     push,
     qa,
     search,
@@ -110,6 +111,7 @@ api_router.include_router(datos_de_prueba.router)
 api_router.include_router(datos_de_prueba.modulos_router)
 api_router.include_router(pruebas_corridas.router)
 api_router.include_router(pruebas_corridas.plataforma_router)
+api_router.include_router(pruebas_informe.router)
 api_router.include_router(agents.router)
 api_router.include_router(agent_editor.router)
 api_router.include_router(coordinator.router)

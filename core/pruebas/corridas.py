@@ -54,6 +54,7 @@ class ErrorPruebas(Exception):
     code: str
     message: str
     details: dict[str, Any] | None = None
+    fields: dict[str, str] | None = None
 
 
 def _agente_no_encontrado() -> ErrorPruebas:
@@ -139,6 +140,7 @@ async def crear(
     confirmo_creditos: int,
     pedida_por: uuid.UUID | None,
     actor: str,
+    reintento_de: uuid.UUID | None = None,
 ) -> AgentTestRun:
     """Crea la corrida `en_cola`. Ver el docstring del módulo."""
     from core.billing.creditos import alcanza
@@ -198,7 +200,10 @@ async def crear(
             agent_id=agent_id,
             estado="en_cola",
             k=k,
-            version_probada={"escenarios": [str(i) for i in ids]},
+            version_probada={
+                "escenarios": [str(i) for i in ids],
+                **({"reintento_de": str(reintento_de)} if reintento_de is not None else {}),
+            },
             creditos_estimados=Decimal(vigente.estimado),
             creditos_de_cuota=Decimal(vigente.de_la_cuota),
             tope_creditos=tope_de_creditos(vigente.estimado),
@@ -223,6 +228,7 @@ async def crear(
                     "escenarios": len(ids),
                     "estimado": vigente.estimado,
                     "de_la_cuota": vigente.de_la_cuota,
+                    **({"reintento_de": str(reintento_de)} if reintento_de is not None else {}),
                 },
             )
         )

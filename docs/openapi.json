@@ -48972,6 +48972,598 @@
           }
         }
       }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/corridas/{run_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Informe",
+        "description": "El informe de la corrida: progreso, créditos, porcentaje y, por escenario, la conversación, la razón del juez y\nel arreglo sugerido con su diff. Se puede sondear mientras corre.",
+        "operationId": "informe_api_v1_admin_agents__agent_id__pruebas_corridas__run_id__get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasInformeOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente, corrida o resultado inexistente o de otro negocio, o pruebas apagadas."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/resultados/{result_id}/arreglo": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Ver Arreglo",
+        "description": "El arreglo de un resultado con el diff contra el borrador de ahora. No escribe nada.",
+        "operationId": "ver_arreglo_api_v1_admin_agents__agent_id__pruebas_resultados__result_id__arreglo_get",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasArregloVistaOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente, corrida o resultado inexistente o de otro negocio, o pruebas apagadas."
+          },
+          "409": {
+            "description": "`sin_arreglo`: el resultado no tiene un arreglo sugerido."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/resultados/{result_id}/aplicar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Aplicar Arreglo",
+        "description": "Aplica el arreglo al BORRADOR del agente, con la confirmación explícita del dueño. Nunca publica.",
+        "operationId": "aplicar_arreglo_api_v1_admin_agents__agent_id__pruebas_resultados__result_id__aplicar_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PruebasAplicarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasAplicadoOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente, corrida o resultado inexistente o de otro negocio, o pruebas apagadas."
+          },
+          "409": {
+            "description": "`resultado_no_es_falla`, `sin_arreglo`, `arreglo_ya_aplicado`, `arreglo_no_aplicable` (`details = {tipo, seccion, texto}`: se edita a mano), `sin_borrador`, `agente_archivado` o `stale_lock_version` (`details.lock_version` trae el vigente)."
+          },
+          "422": {
+            "description": "`arreglo_invalido`: el cambio no pasa el contrato del borrador (`fields` por campo); o `validation_error` si falta `confirmo: true` o el `lock_version`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/resultados/{result_id}/juez-equivocado": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Juez Equivocado",
+        "description": "«Esto no es una falla»: el resultado sale del porcentaje y de volver a probar. Idempotente.",
+        "operationId": "juez_equivocado_api_v1_admin_agents__agent_id__pruebas_resultados__result_id__juez_equivocado_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "result_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Result Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PruebasJuezEquivocadoIn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasJuezEquivocadoOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente, corrida o resultado inexistente o de otro negocio, o pruebas apagadas."
+          },
+          "409": {
+            "description": "`resultado_no_es_falla`."
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/corridas/{run_id}/volver-a-probar/estimado": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Estimar Fallidas",
+        "description": "Cuánto cuesta repetir solo las pruebas que fallaron, con cada `k`. No escribe.",
+        "operationId": "estimar_fallidas_api_v1_admin_agents__agent_id__pruebas_corridas__run_id__volver_a_probar_estimado_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasEstimadoOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente, corrida o resultado inexistente o de otro negocio, o pruebas apagadas."
+          },
+          "409": {
+            "description": "`corrida_en_curso`: la corrida todavía no termina."
+          },
+          "422": {
+            "description": "`sin_fallidas`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/corridas/{run_id}/volver-a-probar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Volver A Probar",
+        "description": "Nueva corrida solo con los escenarios que fallaron, contra el borrador, con su propio estimado y aprobación.",
+        "operationId": "volver_a_probar_api_v1_admin_agents__agent_id__pruebas_corridas__run_id__volver_a_probar_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PruebasVolverIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasCorridaOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente, corrida o resultado inexistente o de otro negocio, o pruebas apagadas."
+          },
+          "409": {
+            "description": "`corrida_en_curso` (la corrida de origen sigue activa: `details.estado`; u otra corrida del negocio: sin `details`), `estimado_cambio` o `plan_limit_creditos`; no se creó la corrida."
+          },
+          "422": {
+            "description": "`sin_fallidas` o `k_fuera_de_rango`."
+          },
+          "429": {
+            "description": "`corridas_por_dia`."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -77471,6 +78063,305 @@
         ],
         "title": "ProveedorSuscripcion"
       },
+      "PruebasAplicadoOut": {
+        "properties": {
+          "result_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Result Id"
+          },
+          "arreglo_aplicado_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Arreglo Aplicado En"
+          },
+          "borrador_lock_version": {
+            "type": "integer",
+            "title": "Borrador Lock Version"
+          },
+          "cambios": {
+            "items": {
+              "$ref": "#/components/schemas/PruebasCambioOut"
+            },
+            "type": "array",
+            "title": "Cambios",
+            "description": "Vacío si el borrador ya lo tenía."
+          },
+          "publicado": {
+            "type": "boolean",
+            "const": false,
+            "title": "Publicado",
+            "description": "Aplicar nunca publica: el agente sigue con su versión.",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "result_id",
+          "arreglo_aplicado_en",
+          "borrador_lock_version",
+          "cambios"
+        ],
+        "title": "PruebasAplicadoOut"
+      },
+      "PruebasAplicarIn": {
+        "properties": {
+          "confirmo": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirmo",
+            "description": "Confirmación explícita del dueño: vio el cambio y quiere aplicarlo."
+          },
+          "lock_version": {
+            "type": "integer",
+            "exclusiveMaximum": 2147483648.0,
+            "minimum": 0.0,
+            "title": "Lock Version",
+            "description": "El `borrador_lock_version` que vio al mirar el cambio."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "confirmo",
+          "lock_version"
+        ],
+        "title": "PruebasAplicarIn"
+      },
+      "PruebasArregloOut": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "regla",
+              "respuesta",
+              "dato"
+            ],
+            "title": "Tipo"
+          },
+          "porque": {
+            "type": "string",
+            "title": "Porque"
+          },
+          "regla": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PruebasReglaOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Solo en `regla`."
+          },
+          "texto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Texto",
+            "description": "La respuesta o el dato que falta (`respuesta` y `dato`)."
+          },
+          "procedimiento": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedimiento"
+          },
+          "seccion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seccion",
+            "description": "Dónde se edita un `dato`."
+          },
+          "aplicable": {
+            "type": "boolean",
+            "title": "Aplicable",
+            "description": "Si «Aplicar al borrador» puede escribirlo ahora."
+          },
+          "motivo_no_aplicable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo No Aplicable",
+            "description": "`tipo` (se edita a mano), `sin_borrador` o `ya_aplicado`."
+          },
+          "diff": {
+            "items": {
+              "$ref": "#/components/schemas/PruebasCambioOut"
+            },
+            "type": "array",
+            "title": "Diff",
+            "description": "Lo que cambiaría en el borrador de AHORA; vacío si no aplica."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "porque",
+          "aplicable",
+          "diff"
+        ],
+        "title": "PruebasArregloOut"
+      },
+      "PruebasArregloVistaOut": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "regla",
+              "respuesta",
+              "dato"
+            ],
+            "title": "Tipo"
+          },
+          "porque": {
+            "type": "string",
+            "title": "Porque"
+          },
+          "regla": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PruebasReglaOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Solo en `regla`."
+          },
+          "texto": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Texto",
+            "description": "La respuesta o el dato que falta (`respuesta` y `dato`)."
+          },
+          "procedimiento": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Procedimiento"
+          },
+          "seccion": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seccion",
+            "description": "Dónde se edita un `dato`."
+          },
+          "aplicable": {
+            "type": "boolean",
+            "title": "Aplicable",
+            "description": "Si «Aplicar al borrador» puede escribirlo ahora."
+          },
+          "motivo_no_aplicable": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo No Aplicable",
+            "description": "`tipo` (se edita a mano), `sin_borrador` o `ya_aplicado`."
+          },
+          "diff": {
+            "items": {
+              "$ref": "#/components/schemas/PruebasCambioOut"
+            },
+            "type": "array",
+            "title": "Diff",
+            "description": "Lo que cambiaría en el borrador de AHORA; vacío si no aplica."
+          },
+          "borrador_lock_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Borrador Lock Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "porque",
+          "aplicable",
+          "diff",
+          "borrador_lock_version"
+        ],
+        "title": "PruebasArregloVistaOut"
+      },
+      "PruebasCambioOut": {
+        "properties": {
+          "ruta": {
+            "type": "string",
+            "title": "Ruta",
+            "description": "Dónde cambia el borrador, p. ej. `guardrails[2]`."
+          },
+          "antes": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Antes",
+            "description": "Lo que había (`null` si es nuevo)."
+          },
+          "despues": {
+            "title": "Despues",
+            "description": "Lo que quedará."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ruta",
+          "antes",
+          "despues"
+        ],
+        "title": "PruebasCambioOut"
+      },
       "PublishIn": {
         "properties": {
           "lock_version": {
@@ -88443,6 +89334,33 @@
         ],
         "title": "PruebasCorridaOut"
       },
+      "PruebasEscenarioInformeOut": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Case Id"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "intentos": {
+            "items": {
+              "$ref": "#/components/schemas/PruebasIntentoOut"
+            },
+            "type": "array",
+            "title": "Intentos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_id",
+          "titulo",
+          "intentos"
+        ],
+        "title": "PruebasEscenarioInformeOut"
+      },
       "PruebasEstimadoDeKOut": {
         "properties": {
           "k": {
@@ -88582,6 +89500,403 @@
         ],
         "title": "PruebasEstimadoOut"
       },
+      "PruebasInformeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "k": {
+            "type": "integer",
+            "title": "K"
+          },
+          "reintento_de": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reintento De",
+            "description": "La corrida de la que esta repite las fallidas."
+          },
+          "version_probada": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version Probada",
+            "description": "`borrador`."
+          },
+          "iniciada_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Iniciada En"
+          },
+          "terminada_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminada En"
+          },
+          "creditos_estimados": {
+            "type": "number",
+            "title": "Creditos Estimados"
+          },
+          "creditos_reales": {
+            "type": "number",
+            "title": "Creditos Reales"
+          },
+          "creditos_reales_de_cuota": {
+            "type": "number",
+            "title": "Creditos Reales De Cuota",
+            "description": "De lo gastado, lo que cubre la cuota gratis de pruebas."
+          },
+          "creditos_reales_del_saldo": {
+            "type": "number",
+            "title": "Creditos Reales Del Saldo"
+          },
+          "tope_creditos": {
+            "type": "number",
+            "title": "Tope Creditos"
+          },
+          "progreso": {
+            "$ref": "#/components/schemas/PruebasProgresoOut"
+          },
+          "resumen": {
+            "$ref": "#/components/schemas/PruebasResumenOut"
+          },
+          "borrador_lock_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Borrador Lock Version",
+            "description": "El que hay que mandar al aplicar un arreglo."
+          },
+          "escenarios": {
+            "items": {
+              "$ref": "#/components/schemas/PruebasEscenarioInformeOut"
+            },
+            "type": "array",
+            "title": "Escenarios"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "estado",
+          "k",
+          "reintento_de",
+          "version_probada",
+          "iniciada_en",
+          "terminada_en",
+          "creditos_estimados",
+          "creditos_reales",
+          "creditos_reales_de_cuota",
+          "creditos_reales_del_saldo",
+          "tope_creditos",
+          "progreso",
+          "resumen",
+          "borrador_lock_version",
+          "escenarios"
+        ],
+        "title": "PruebasInformeOut"
+      },
+      "PruebasIntentoOut": {
+        "properties": {
+          "result_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Result Id"
+          },
+          "intento": {
+            "type": "integer",
+            "title": "Intento"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "pasa",
+              "falla",
+              "no_se_pudo_probar"
+            ],
+            "title": "Estado"
+          },
+          "fin": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fin"
+          },
+          "criterio_incumplido": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Criterio Incumplido"
+          },
+          "razon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Razon"
+          },
+          "transcripcion": {
+            "items": {
+              "$ref": "#/components/schemas/PruebasTurnoOut"
+            },
+            "type": "array",
+            "title": "Transcripcion"
+          },
+          "tools_llamadas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tools Llamadas"
+          },
+          "arreglo": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PruebasArregloOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "arreglo_aplicado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Arreglo Aplicado En"
+          },
+          "juez_equivocado": {
+            "type": "boolean",
+            "title": "Juez Equivocado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result_id",
+          "intento",
+          "estado",
+          "fin",
+          "criterio_incumplido",
+          "razon",
+          "transcripcion",
+          "tools_llamadas",
+          "arreglo",
+          "arreglo_aplicado_en",
+          "juez_equivocado"
+        ],
+        "title": "PruebasIntentoOut"
+      },
+      "PruebasJuezEquivocadoIn": {
+        "properties": {
+          "juez_equivocado": {
+            "type": "boolean",
+            "title": "Juez Equivocado",
+            "description": "`false` revierte la marca.",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PruebasJuezEquivocadoIn"
+      },
+      "PruebasJuezEquivocadoOut": {
+        "properties": {
+          "result_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Result Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "juez_equivocado": {
+            "type": "boolean",
+            "title": "Juez Equivocado"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result_id",
+          "estado",
+          "juez_equivocado"
+        ],
+        "title": "PruebasJuezEquivocadoOut"
+      },
+      "PruebasProgresoOut": {
+        "properties": {
+          "hechos": {
+            "type": "integer",
+            "title": "Hechos"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hechos",
+          "total"
+        ],
+        "title": "PruebasProgresoOut"
+      },
+      "PruebasReglaOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "phrases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Phrases"
+          },
+          "tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "action"
+        ],
+        "title": "PruebasReglaOut"
+      },
+      "PruebasResumenOut": {
+        "properties": {
+          "pasan": {
+            "type": "integer",
+            "title": "Pasan"
+          },
+          "fallan": {
+            "type": "integer",
+            "title": "Fallan",
+            "description": "Fallas vigentes: sin las marcadas `juez_equivocado`."
+          },
+          "no_se_pudo_probar": {
+            "type": "integer",
+            "title": "No Se Pudo Probar"
+          },
+          "juez_equivocado": {
+            "type": "integer",
+            "title": "Juez Equivocado"
+          },
+          "porcentaje": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Porcentaje",
+            "description": "Pasan sobre lo que se pudo juzgar; `null` si no hay nada que juzgar."
+          }
+        },
+        "type": "object",
+        "required": [
+          "pasan",
+          "fallan",
+          "no_se_pudo_probar",
+          "juez_equivocado",
+          "porcentaje"
+        ],
+        "title": "PruebasResumenOut"
+      },
       "PruebasTopeDeKIn": {
         "properties": {
           "k_maximo": {
@@ -88637,6 +89952,50 @@
           "k_maximo_de_plataforma"
         ],
         "title": "PruebasTopeDeKOut"
+      },
+      "PruebasTurnoOut": {
+        "properties": {
+          "quien": {
+            "type": "string",
+            "enum": [
+              "cliente",
+              "agente"
+            ],
+            "title": "Quien"
+          },
+          "texto": {
+            "type": "string",
+            "title": "Texto"
+          }
+        },
+        "type": "object",
+        "required": [
+          "quien",
+          "texto"
+        ],
+        "title": "PruebasTurnoOut"
+      },
+      "PruebasVolverIn": {
+        "properties": {
+          "k": {
+            "type": "integer",
+            "title": "K",
+            "description": "Intentos por escenario: de 1 al tope del negocio."
+          },
+          "confirmo_creditos": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Confirmo Creditos",
+            "description": "El `estimado` de ese `k` para las fallidas (409 `estimado_cambio` si cambió)."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "k",
+          "confirmo_creditos"
+        ],
+        "title": "PruebasVolverIn"
       }
     }
   }

@@ -11,7 +11,9 @@
    costo del cliente simulado y escribe una sola fila `prueba_agente` sin conversación (brutos, ADR-0212 §4), y recién
    entonces llama a `purge_test_conversation`. Si la transacción falla no se pierde ni se cobra dos veces: o están las
    dos cosas o ninguna, y el barrido (`barrido.py`) repite la consolidación;
-4. juzga (`core.pruebas.juez`): primero lo determinista sobre las tools que el agente llamó, sin LLM; después el juez.
+4. juzga (`core.pruebas.juez`): primero lo determinista sobre las tools que el agente llamó, sin LLM; después el juez;
+5. si falla, propone el arreglo (`core.pruebas.arreglo`, HU-AOS-104): una llamada por escenario fallido, se guarda en
+   el resultado y se suma al gasto de la corrida. Nada se aplica al borrador aquí.
 
 Estado de la corrida: el reclamo `en_cola → corriendo` es el candado (el índice único parcial deja UNA activa por
 negocio, y quien no gana el `UPDATE` sale sin hacer nada, así que un reenvío de la tarea no corre dos veces). Termina
@@ -102,6 +104,11 @@ class _Corrida:
     casos: list[_Caso]
     conexion_id: uuid.UUID
     version: dict[str, Any] = field(default_factory=dict)
+    # Para el arreglo sugerido (HU-AOS-104): el borrador que se prueba, las tools del agente y el catálogo del linter.
+    contenido: dict[str, Any] = field(default_factory=dict)
+    tools: list[str] = field(default_factory=list)
+    catalogo: Any = None
+    arreglos: dict[uuid.UUID, dict[str, Any] | None] = field(default_factory=dict)  # uno por escenario, aunque k > 1
 
 
 @dataclass
@@ -123,7 +130,8 @@ class _Intento:
     tools: list[str] = field(default_factory=list)
     criterio: str | None = None
     razon: str | None = None
-    creditos: Decimal = Decimal(0)  # todo lo gastado por este intento (turnos, simulador y juez)
+    arreglo: dict[str, Any] | None = None
+    creditos: Decimal = Decimal(0)  # todo lo gastado por este intento (turnos, simulador, juez y arreglo)
 
 
 # ----------------------------------------------------------------------------------------------- estado de la corrida
@@ -246,6 +254,7 @@ async def _cargar(corrida: AgentTestRun) -> _Corrida | None:
             ).scalars()
         }
         conexion = await asegurar_conexion_de_pruebas(session, tenant_id)
+    contenido = dict(borrador[0]) if isinstance(borrador[0], dict) else {}
     # Un escenario que dejó de estar aprobado o se borró entre la aprobación y la corrida se omite, no se corre.
     casos = [
         _Caso(
@@ -269,7 +278,27 @@ async def _cargar(corrida: AgentTestRun) -> _Corrida | None:
         casos=casos,
         conexion_id=conexion,
         version={"tipo": "borrador", "lock_version": borrador[1], "hash": _hash(borrador[0])},
+        contenido=contenido,
+        tools=await _tools_del_agente(tenant_id, agent_id),
+        catalogo=_catalogo(),
     )
+
+
+async def _tools_del_agente(tenant_id: uuid.UUID, agent_id: uuid.UUID) -> list[str]:
+    from core.pruebas import escenarios
+
+    try:
+        return sorted(await escenarios.tools_del_agente(tenant_id, agent_id))
+    except Exception as exc:  # sin tools no hay arreglo con `required_tool`, pero la corrida sigue
+        log.warning("prueba_tools_del_agente_fallo", agent_id=str(agent_id), error=type(exc).__name__)
+        return []
+
+
+def _catalogo() -> Any:
+    from core.kernel.procedures import catalogo_de_acciones
+    from core.plugin_manager import plugin_manager
+
+    return catalogo_de_acciones(plugin_manager.list_modules())
 
 
 # ------------------------------------------------------------------------------------- conversación de la corrida
@@ -592,6 +621,36 @@ async def _juzgar(caso: _Caso, parcial: _Intento, sin_simulador: list[str], ctx:
     parcial.criterio, parcial.razon = v.criterio_incumplido, v.razon
 
 
+async def _arreglar(caso: _Caso, parcial: _Intento, ctx: _Corrida) -> None:
+    """Arreglo sugerido de un intento que falla (`core.pruebas.arreglo`). Una llamada por escenario: los intentos
+    siguientes del mismo escenario que fallan guardan el mismo arreglo sin gastar otra. No levanta: sin arreglo la
+    falla sigue siendo la misma."""
+    from core.pruebas import arreglo as mod
+
+    if caso.id in ctx.arreglos:
+        parcial.arreglo = ctx.arreglos[caso.id]
+        return
+    try:
+        propuesto, gastado = await mod.proponer(
+            ctx.tenant_id,
+            run_id=ctx.run_id,
+            case_id=caso.id,
+            caso={"titulo": caso.titulo, "objetivo": caso.objetivo, "criterios": caso.criterios},
+            criterio=parcial.criterio,
+            razon=parcial.razon,
+            transcripcion=parcial.transcripcion,
+            contenido=ctx.contenido,
+            tools=ctx.tools,
+            catalogo=ctx.catalogo,
+        )
+    except Exception as exc:
+        log.warning("prueba_arreglo_fallo", run_id=str(ctx.run_id), error=type(exc).__name__)
+        propuesto, gastado = None, Decimal(0)
+    parcial.creditos += gastado
+    parcial.arreglo = mod.a_json(propuesto) if propuesto is not None else None
+    ctx.arreglos[caso.id] = parcial.arreglo
+
+
 async def _guardar_resultado(ctx: _Corrida, caso: _Caso, intento: int, r: _Intento) -> None:
     async with get_session() as session:
         session.add(
@@ -606,6 +665,7 @@ async def _guardar_resultado(ctx: _Corrida, caso: _Caso, intento: int, r: _Inten
                 tools_llamadas=r.tools,
                 criterio_incumplido=(r.criterio or None),
                 razon=(r.razon or None),
+                arreglo=r.arreglo,
             )
         )
 
@@ -650,6 +710,8 @@ async def _correr_intento(ctx: _Corrida, caso: _Caso, intento: int) -> _Intento:
         await _sumar_gasto(ctx.tenant_id, ctx.run_id, parcial.creditos)
         raise corte
     await _juzgar(caso, parcial, sin_simulador, ctx, intento)
+    if parcial.estado == "falla":
+        await _arreglar(caso, parcial, ctx)
     await _guardar_resultado(ctx, caso, intento, parcial)
     return parcial
 

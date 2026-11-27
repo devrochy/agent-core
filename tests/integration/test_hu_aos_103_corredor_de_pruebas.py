@@ -102,6 +102,8 @@ def modelos(monkeypatch):  # type: ignore[no-untyped-def]
         monkeypatch.setattr("core.orchestrator.loop.resolve_provider", lambda *x, **k: a)
         monkeypatch.setattr("core.pruebas.corredor._proveedor_del_simulador", lambda: c)
         monkeypatch.setattr("core.pruebas.juez._proveedor", lambda: j)
+        # El arreglo sugerido (HU-AOS-104) es otro papel: aquí no responde (sin arreglo) para no tocar lo del juez.
+        monkeypatch.setattr("core.pruebas.arreglo._proveedor", lambda: _Guion([]))
         return a, c, j
 
     return poner
