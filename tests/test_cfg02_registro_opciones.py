@@ -52,6 +52,12 @@ def test_las_opciones_de_identidad_son_las_31_del_primer_recorte_y_el_modo_del_h
     assert identidad == CLAVES_ESPERADAS and len(identidad) == 32
 
 
+def test_la_voz_de_marca_vive_en_voz_y_el_idioma_sigue_siendo_solo_lectura() -> None:
+    assert POR_CLAVE["brand_voice"].grupo == "voz"
+    assert POR_CLAVE["language"].grupo == "identidad"
+    assert POR_CLAVE["language"].solo_lectura is True
+
+
 def test_cada_opcion_tiene_etiqueta_y_explicacion_en_espanol() -> None:
     for o in OPCIONES:
         assert o.etiqueta.strip(), o.clave

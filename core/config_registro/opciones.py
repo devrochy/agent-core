@@ -167,16 +167,6 @@ IDENTIDAD = [
         almacen="columna:business_description",
     ),
     Opcion(
-        clave="brand_voice",
-        grupo="identidad",
-        tipo="texto_largo",
-        etiqueta="Voz de marca",
-        explicacion="Guía el estilo de las respuestas. Si queda vacía, el asistente no tiene una voz propia de tu marca.",
-        ejemplo="Cercana y breve; nunca promete tiempos de entrega.",
-        por_defecto="",
-        almacen="columna:brand_voice",
-    ),
-    Opcion(
         clave="language",
         grupo="identidad",
         tipo="elegir_una",
@@ -527,6 +517,19 @@ ESCALAMIENTO = [
 ]
 
 VOZ = [
+    Opcion(
+        clave="brand_voice",
+        grupo="voz",
+        tipo="texto_largo",
+        etiqueta="Voz de marca",
+        explicacion=(
+            "Guía el estilo de cada respuesta. Se usa en todos los turnos cuando está escrita; "
+            "si queda vacía, el asistente solo tiene el tono y la personalidad de abajo."
+        ),
+        ejemplo="Cercana y breve; nunca promete tiempos de entrega.",
+        por_defecto="",
+        almacen="columna:brand_voice",
+    ),
     Opcion(
         clave="persona_tone",
         grupo="voz",
