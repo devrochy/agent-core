@@ -246,22 +246,6 @@ RESPUESTA = [
         por_defecto=_CAMPOS_SETTINGS["message_split_style"].default,
         almacen="behavior_config:split_style",
     ),
-    Opcion(
-        clave="guardrail_fail_action",
-        grupo="respuesta",
-        tipo="elegir_una",
-        etiqueta="Si el asistente no logra corregir su respuesta",
-        explicacion=(
-            "Qué hace cuando agota los reintentos de una validación. Responder que va a verificar "
-            "no pausa el asistente; el escalamiento por turnos sin resolver sigue activo."
-        ),
-        valores=_valores(
-            ("escalate", "Escalar a una persona", "pasa la conversación a tu equipo"),
-            ("neutral", "Responder que va a verificar", "el asistente sigue atendiendo"),
-        ),
-        por_defecto="escalate",
-        almacen="behavior_config:guardrail_fail_action",
-    ),
 ]
 
 CALIDAD = [
@@ -278,6 +262,22 @@ CALIDAD = [
         maximo=rango("guardrail_max_retries").maximo,
         por_defecto=MAX_GUARDRAIL_RETRIES,
         almacen="behavior_config:guardrail_max_retries",
+    ),
+    Opcion(
+        clave="guardrail_fail_action",
+        grupo="calidad",
+        tipo="elegir_una",
+        etiqueta="Si el asistente no logra corregir su respuesta",
+        explicacion=(
+            "Qué hace cuando agota los reintentos de una validación. Responder que va a verificar "
+            "no pausa el asistente; el escalamiento por turnos sin resolver sigue activo."
+        ),
+        valores=_valores(
+            ("escalate", "Escalar a una persona", "pasa la conversación a tu equipo"),
+            ("neutral", "Responder que va a verificar", "el asistente sigue atendiendo"),
+        ),
+        por_defecto="escalate",
+        almacen="behavior_config:guardrail_fail_action",
     ),
     Opcion(
         clave="disabled_guardrails",
