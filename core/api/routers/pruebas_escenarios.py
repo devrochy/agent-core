@@ -157,7 +157,13 @@ async def escribir_escenario(
     "/proponer",
     response_model=EscenariosPropuestos,
     status_code=201,
-    responses=plan_limit_responses("creditos"),
+    responses={
+        **plan_limit_responses("creditos"),
+        502: {
+            "description": "`propuesta_invalida`: la IA respondió sin escenarios utilizables (ya se cobró la llamada)."
+        },
+        503: {"description": "`ia_no_disponible`: el proveedor no respondió; no se cobró nada."},
+    },
 )
 async def proponer_escenarios(
     agent_id: uuid.UUID, principal: Annotated[Principal, Depends(require("agents", write=True))]

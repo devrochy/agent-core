@@ -8708,6 +8708,12 @@
           "409": {
             "description": "Tope del plan: `error.code = plan_limit_creditos`, `error.details = {metric, used, limit}`; no se escribió nada."
           },
+          "502": {
+            "description": "`propuesta_invalida`: la IA respondió sin escenarios utilizables (ya se cobró la llamada)."
+          },
+          "503": {
+            "description": "`ia_no_disponible`: el proveedor no respondió; no se cobró nada."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
