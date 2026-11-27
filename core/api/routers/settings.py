@@ -87,6 +87,9 @@ class IdentitySettings(BaseModel):
     business_description: str
     brand_voice: str
     brand_voice_warning: bool = False  # True si quedó vacía (#158): el asistente no tiene voz de marca
+    # Idioma del negocio (se fija al crear el negocio). Solo lectura: la UI lo muestra como dato y
+    # no lo ofrece como control; el catálogo ya lo describe con `solo_lectura`.
+    language: str = "es"
     # Obsoleto (HU-CFG-01, D-SPEC-37-3): ningún código lo lee; la voz es `persona_tone`. Se sigue
     # devolviendo para la APK instalada, hasta que la mínima soportada deje de leerlo.
     tono: str = Field(default="calido", deprecated=True)
@@ -396,6 +399,7 @@ def _identity_out(app_settings: AppSettings | None, available: list[str]) -> Ide
         business_description=(app_settings.business_description if app_settings else "") or "",
         brand_voice=(app_settings.brand_voice if app_settings else "") or "",
         brand_voice_warning=not bool(((app_settings.brand_voice if app_settings else "") or "").strip()),
+        language=(app_settings.language if app_settings and app_settings.language else "es"),
         tono=behavior.get("tono", "calido"),
         debounce_mode=_modo_efectivo(behavior.get("debounce_mode"), DEBOUNCE_DELAY_MS, "natural", "inmediato"),
         split_style=_modo_efectivo(behavior.get("split_style"), CAPS, "un_mensaje", "pocos_cortos"),

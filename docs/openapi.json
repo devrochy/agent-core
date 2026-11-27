@@ -65450,6 +65450,11 @@
             "title": "Brand Voice Warning",
             "default": false
           },
+          "language": {
+            "type": "string",
+            "title": "Language",
+            "default": "es"
+          },
           "tono": {
             "type": "string",
             "title": "Tono",
