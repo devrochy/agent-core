@@ -1,8 +1,9 @@
-"""Cliente simulado de las pruebas del agente y de los evals de consistencia (HU-ARCH-28, ADR-0119; ADR-0212 §3).
+"""Cliente simulado de las pruebas del agente (derivado del de los evals, HU-ARCH-28, ADR-0119; ADR-0212 §3).
 
 Un LLM hace de cliente con un objetivo, los datos que conoce, un estilo y una semilla. Vive en `core/` (y no en
 `evals/`) porque `pyproject.toml` empaqueta solo `core*`: el corredor de las pruebas del dueño corre en el worker.
-`evals/simulador.py` lo reexporta para el gate.
+`evals/simulador.py` (con su `cliente.md` en voseo) queda aparte e intacto: sus cassettes de replay dependen del
+prompt byte a byte y regrabar gasta LLM real.
 
 - Las instrucciones viven en el playbook del core `cliente_simulado` (invariante 3). La semilla elige una variante de
   comportamiento de forma determinista, para que los k intentos de un escenario no sean todos iguales.
