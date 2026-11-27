@@ -1,0 +1,8 @@
+## Pruebas del agente: informe, arreglo sugerido y volver a probar las fallidas (HU-AOS-104) (2026-11-26)
+
+- **Informe.** `GET /api/v1/admin/agents/{agent_id}/pruebas/corridas/{run_id}`: estado, progreso, créditos (estimados, reales y cuánto cubre la cuota gratis), resumen con el porcentaje y, por escenario, sus intentos con la conversación, el criterio incumplido, la razón del juez y el arreglo con su diff contra el borrador de ahora.
+- **Arreglo sugerido.** Cuando un intento falla, el corredor propone UN arreglo tipado (`regla`, `respuesta` o `dato`) con `generar_estructurado` (`kind='prueba_agente'`, playbook del core `arreglo_de_pruebas`), una llamada por escenario fallido. Se valida contra el contrato del borrador (`AgentSpecV3` y su linter); una salida inválida deja la falla sin arreglo.
+- **Aplicar al borrador.** `POST …/resultados/{id}/aplicar` `{confirmo: true, lock_version}` escribe la regla en el borrador del agente con la confirmación explícita del dueño; nunca publica ni crea versión, es idempotente y queda auditado. Una `respuesta` o un `dato` no se aplican solos (409 `arreglo_no_aplicable` con la sección donde se editan). `GET …/resultados/{id}/arreglo` muestra el diff sin escribir.
+- **«Esto no es una falla».** `POST …/resultados/{id}/juez-equivocado`: el resultado sale del porcentaje y de volver a probar.
+- **Volver a probar las fallidas.** `POST …/corridas/{run_id}/volver-a-probar/estimado` y `…/volver-a-probar`: nueva corrida solo con los escenarios que fallaron, con su propio estimado y aprobación y la misma compuerta del dinero (una corrida activa por negocio).
+- Sin migración. Tras `PRUEBAS_AGENTE_ENABLED` (apagada). `docs/openapi.json` actualizado. El ADR-0212 queda alineado: `evals/simulador.py` no se toca.
