@@ -48543,6 +48543,346 @@
           }
         }
       }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/estimado": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Estimar",
+        "description": "Cuánto cuesta correr los escenarios con cada `k` y cuánto sale de la cuota gratis. No escribe nada.",
+        "operationId": "estimar_api_v1_admin_agents__agent_id__pruebas_estimado_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PruebasEstimadoIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasEstimadoOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente o escenario inexistente o de otro negocio (`not_found`, `escenario_no_encontrado`), o pruebas apagadas."
+          },
+          "422": {
+            "description": "`k_fuera_de_rango`, `demasiados_escenarios`, `sin_escenarios` o `escenario_no_aprobado`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/agents/{agent_id}/pruebas/corridas": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Crear Corrida",
+        "description": "Aprueba el estimado y deja la corrida en cola. Una a la vez por negocio, 5 por día.",
+        "operationId": "crear_corrida_api_v1_admin_agents__agent_id__pruebas_corridas_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PruebasCorridaIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasCorridaOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente o escenario inexistente o de otro negocio (`not_found`, `escenario_no_encontrado`), o pruebas apagadas."
+          },
+          "422": {
+            "description": "`k_fuera_de_rango`, `demasiados_escenarios`, `sin_escenarios` o `escenario_no_aprobado`."
+          },
+          "409": {
+            "description": "`plan_limit_creditos` (`details = {metric, used, limit}`), `estimado_cambio` (`details.estimado` trae el vigente) o `corrida_en_curso`; no se creó la corrida."
+          },
+          "429": {
+            "description": "`corridas_por_dia`."
+          }
+        }
+      }
+    },
+    "/api/v1/admin/platform/tenants/{tenant_id}/pruebas": {
+      "get": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Leer Tope",
+        "description": "Tope de `k` de las pruebas del negocio. Solo el master.",
+        "operationId": "leer_tope_api_v1_admin_platform_tenants__tenant_id__pruebas_get",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasTopeDeKOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "api",
+          "admin · plataforma"
+        ],
+        "summary": "Fijar Tope",
+        "description": "Baja o sube el tope de `k` de UN negocio (auditado como `pruebas_k_maximo`); `null` lo devuelve al de\nplataforma. Idempotente. Solo el master.",
+        "operationId": "fijar_tope_api_v1_admin_platform_tenants__tenant_id__pruebas_put",
+        "parameters": [
+          {
+            "name": "tenant_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Tenant Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PruebasTopeDeKIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasTopeDeKOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -87879,6 +88219,291 @@
           "fecha_hora"
         ],
         "title": "Payment"
+      },
+      "PruebasCorridaIn": {
+        "properties": {
+          "case_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Case Ids",
+            "description": "Escenarios aprobados del agente. Máximo 20 distintos por corrida."
+          },
+          "k": {
+            "type": "integer",
+            "title": "K",
+            "description": "Intentos por escenario: de 1 al tope del negocio (`k_fuera_de_rango` si no)."
+          },
+          "confirmo_creditos": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Confirmo Creditos",
+            "description": "Créditos que el dueño aprobó: el `estimado` de este `k`. Si cambió, 409 `estimado_cambio`."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_ids",
+          "k",
+          "confirmo_creditos"
+        ],
+        "title": "PruebasCorridaIn"
+      },
+      "PruebasCorridaOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "k": {
+            "type": "integer",
+            "title": "K"
+          },
+          "escenarios": {
+            "type": "integer",
+            "title": "Escenarios"
+          },
+          "creditos_estimados": {
+            "type": "number",
+            "title": "Creditos Estimados"
+          },
+          "creditos_de_cuota": {
+            "type": "number",
+            "title": "Creditos De Cuota"
+          },
+          "tope_creditos": {
+            "type": "number",
+            "title": "Tope Creditos"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "estado",
+          "k",
+          "escenarios",
+          "creditos_estimados",
+          "creditos_de_cuota",
+          "tope_creditos",
+          "created_at"
+        ],
+        "title": "PruebasCorridaOut"
+      },
+      "PruebasEstimadoDeKOut": {
+        "properties": {
+          "k": {
+            "type": "integer",
+            "title": "K",
+            "description": "Intentos por escenario."
+          },
+          "estimado": {
+            "type": "integer",
+            "title": "Estimado",
+            "description": "Créditos que cuesta correr con este `k` (es el de k = 1 por `k`)."
+          },
+          "de_la_cuota": {
+            "type": "integer",
+            "title": "De La Cuota",
+            "description": "Cuánto sale de la cuota gratis de pruebas y playground del ciclo."
+          },
+          "del_saldo": {
+            "type": "integer",
+            "title": "Del Saldo",
+            "description": "Cuánto sale del saldo: `estimado menos de_la_cuota`."
+          },
+          "saldo_despues": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saldo Despues",
+            "description": "Saldo tras la corrida; `null` si el negocio no tiene tope."
+          },
+          "alcanza": {
+            "type": "boolean",
+            "title": "Alcanza",
+            "description": "Si `del_saldo` cabe en el saldo."
+          },
+          "costo_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Costo Usd",
+            "description": "Costo real en USD. Solo lo ve el master."
+          }
+        },
+        "type": "object",
+        "required": [
+          "k",
+          "estimado",
+          "de_la_cuota",
+          "del_saldo",
+          "saldo_despues",
+          "alcanza"
+        ],
+        "title": "PruebasEstimadoDeKOut"
+      },
+      "PruebasEstimadoIn": {
+        "properties": {
+          "case_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Case Ids",
+            "description": "Escenarios aprobados del agente. Máximo 20 distintos por corrida."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "case_ids"
+        ],
+        "title": "PruebasEstimadoIn"
+      },
+      "PruebasEstimadoOut": {
+        "properties": {
+          "escenarios": {
+            "type": "integer",
+            "title": "Escenarios"
+          },
+          "nivel_ia": {
+            "type": "string",
+            "title": "Nivel Ia"
+          },
+          "k_por_defecto": {
+            "type": "integer",
+            "title": "K Por Defecto"
+          },
+          "k_maximo": {
+            "type": "integer",
+            "title": "K Maximo",
+            "description": "Tope de `k` del negocio (el de plataforma o el que fijó el master)."
+          },
+          "saldo": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saldo",
+            "description": "Créditos que le quedan al negocio en el ciclo; `null` si no hay tope."
+          },
+          "cuota_gratis_restante": {
+            "type": "integer",
+            "title": "Cuota Gratis Restante"
+          },
+          "por_k": {
+            "items": {
+              "$ref": "#/components/schemas/PruebasEstimadoDeKOut"
+            },
+            "type": "array",
+            "title": "Por K"
+          }
+        },
+        "type": "object",
+        "required": [
+          "escenarios",
+          "nivel_ia",
+          "k_por_defecto",
+          "k_maximo",
+          "saldo",
+          "cuota_gratis_restante",
+          "por_k"
+        ],
+        "title": "PruebasEstimadoOut"
+      },
+      "PruebasTopeDeKIn": {
+        "properties": {
+          "k_maximo": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 10.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "K Maximo",
+            "description": "Tope de `k` del negocio, de 1 a 10; `null` vuelve al de plataforma."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "k_maximo"
+        ],
+        "title": "PruebasTopeDeKIn"
+      },
+      "PruebasTopeDeKOut": {
+        "properties": {
+          "k_maximo": {
+            "type": "integer",
+            "title": "K Maximo",
+            "description": "Tope efectivo de `k` del negocio."
+          },
+          "k_maximo_propio": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "K Maximo Propio",
+            "description": "Lo que fijó el master; `null` si usa el de plataforma."
+          },
+          "k_maximo_de_plataforma": {
+            "type": "integer",
+            "title": "K Maximo De Plataforma"
+          }
+        },
+        "type": "object",
+        "required": [
+          "k_maximo",
+          "k_maximo_propio",
+          "k_maximo_de_plataforma"
+        ],
+        "title": "PruebasTopeDeKOut"
       }
     }
   }
