@@ -92,12 +92,16 @@ def _proveedor() -> Any:
 
 
 def _criterio_valido(texto: str | None, criterios: Sequence[str]) -> str | None:
-    """El criterio incumplido solo cuenta si es uno de los del escenario; si el LLM lo parafrasea se guarda tal cual,
-    recortado, pero nunca vacío si falló."""
-    if texto is None:
-        return criterios[0] if criterios else None
-    limpio = texto.strip()[:1000]
-    return limpio or (criterios[0] if criterios else None)
+    """El criterio incumplido es siempre uno de los del escenario: el que el LLM nombra si coincide (exacto o contenido
+    en uno), y si no, el primero. Nunca texto libre del LLM ni vacío si falló."""
+    if not criterios:
+        return None
+    limpio = (texto or "").strip().lower()
+    if limpio:
+        for c in criterios:
+            if limpio == c.strip().lower() or limpio in c.lower() or c.lower() in limpio:
+                return c
+    return criterios[0]
 
 
 async def juzgar(

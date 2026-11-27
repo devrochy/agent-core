@@ -20,7 +20,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import Text, cast, func, select
 
 from core.db.models import AgentTestRun, Conversation, Tenant
 from core.db.session import get_session
@@ -63,6 +63,15 @@ async def barrer_negocio(tenant_id: uuid.UUID, *, ahora: datetime | None = None)
                         Conversation.channel == TEST_CHANNEL,
                         Conversation.state["prueba_corrida"].astext.is_not(None),
                         Conversation.started_at < corte_conversacion,
+                        # Nunca la de una corrida que sigue viva (la tarea puede durar hasta 100 min): el corredor
+                        # la consolida y purga él. Solo las de corridas ya cerradas, colgadas o inexistentes.
+                        ~Conversation.state["prueba_corrida"].astext.in_(
+                            select(cast(AgentTestRun.id, Text)).where(
+                                AgentTestRun.tenant_id == tenant_id,
+                                AgentTestRun.estado.in_(corredor.ACTIVAS),
+                                func.coalesce(AgentTestRun.iniciada_en, AgentTestRun.created_at) >= corte_corrida,
+                            )
+                        ),
                     )
                 )
             ).all()
@@ -79,8 +88,10 @@ async def barrer_negocio(tenant_id: uuid.UUID, *, ahora: datetime | None = None)
             continue  # un `state` ilegible: dato, no orden; se deja y queda en el log
         try:
             creditos, _ = await corredor.consolidar_y_purgar(tenant_id, conversation_id, run_id=run_id)
-        except Exception:
-            log.exception("prueba_barrido_purga_fallo", tenant_id=str(tenant_id), conversation_id=str(conversation_id))
+        except corredor.ConversacionAusente:
+            continue  # otro proceso ya la purgó
+        except Exception as exc:
+            log.error("prueba_barrido_purga_fallo", tenant_id=str(tenant_id), conversation_id=str(conversation_id), error=type(exc).__name__)
             continue
         purgadas += 1
         if creditos > 0:

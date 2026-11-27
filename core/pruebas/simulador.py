@@ -22,6 +22,7 @@ PLAYBOOK = "cliente_simulado"
 CUMPLIDO = "[OBJETIVO_CUMPLIDO]"
 RINDE = "[ME_RINDO]"
 BLOQUE_DATOS = "DATOS_DEL_CLIENTE"
+MAX_DATOS = 8000  # caracteres del JSON de objetivo y datos
 
 
 def _cargar_plantilla() -> tuple[str, list[str], str]:
@@ -54,6 +55,8 @@ class ClienteSimulado:
         sistema, _, _ = _cargar_plantilla()
         instrucciones = sistema.replace("{estilo}", self.estilo).replace("{variante}", self.variante)
         datos = json.dumps({"objetivo": self.objetivo, "datos": self.datos}, ensure_ascii=False, default=str)
+        if len(datos) > MAX_DATOS:  # el costo del prompt crece por turno, intento y k: lo desmedido se omite
+            datos = json.dumps({"objetivo": self.objetivo, "datos": {}}, ensure_ascii=False)
         return [instrucciones, f"{BLOQUE_DATOS}:\n{datos}"]
 
     async def siguiente(self, provider: Any) -> str:

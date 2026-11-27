@@ -69,6 +69,10 @@ FALLO = "fallo"
 ACTIVAS = ("en_cola", "corriendo")
 
 
+class ConversacionAusente(Exception):
+    """La conversación no existe, es de otro negocio o de otra corrida: no se consolidó ni se purgó nada."""
+
+
 class _Corte(Exception):
     """El intento no sigue: la corrida se cortó (`estado` final) o la cancelaron."""
 
@@ -327,8 +331,8 @@ async def consolidar_y_purgar(
 ) -> tuple[Decimal, list[str]]:
     """UNA transacción: suma los turnos de la conversación, le suma `extra_*` (el cliente simulado, que llama al
     proveedor directo y no escribe en el ledger), escribe la fila `prueba_agente` sin conversación y purga.
-    Devuelve `(créditos brutos consolidados, tools que el agente llamó)`. Si la conversación ya no existe (otra
-    purga la ganó) no escribe nada: `purge_test_conversation` falla y la transacción se revierte.
+    Devuelve `(créditos brutos consolidados, tools que el agente llamó)`. Si la conversación ya no existe o no es de
+    esta corrida y negocio (otra purga la ganó) lanza `ConversacionAusente` sin escribir nada.
 
     Los créditos de cada turno son los del propio ledger; en filas sin `credits` se usa la fórmula de siempre
     (`medir_creditos`), así que no se cobra distinto de lo que mediría el cubo.
@@ -352,7 +356,7 @@ async def consolidar_y_purgar(
             )
         ).scalar_one_or_none()
         if dueno is None:
-            return Decimal(0), []
+            raise ConversacionAusente(str(conversation_id))
         creditos_fila = _creditos_de_la_fila(trm, TARIFARIO_V1)
         totales = (
             await session.execute(
@@ -526,8 +530,9 @@ async def _correr_conversacion(
         except Exception as exc:  # el simulador o el turno fallaron: ese intento no se pudo probar, la corrida sigue
             log.warning("prueba_intento_fallo", run_id=str(ctx.run_id), error=type(exc).__name__)
             parcial.fin = None
+            # Texto fijo: el mensaje de la excepción es interno y no debe llegar al panel.
             parcial.razon = (
-                f"No se pudo procesar el turno: {str(exc)[:200]}"
+                "El turno no se pudo procesar."
                 if isinstance(exc, PlaygroundError)
                 else "La prueba se interrumpió por un error interno."
             )
@@ -616,17 +621,24 @@ async def _correr_intento(ctx: _Corrida, caso: _Caso, intento: int) -> _Intento:
         corte = exc
     finally:
         # Siempre: sin esto se perdería el cobro de lo gastado (la purga borra los turnos).
-        consolidado, tools = await consolidar_y_purgar(
-            ctx.tenant_id,
-            conversation_id,
-            run_id=ctx.run_id,
-            case_id=caso.id,
-            intento=intento,
-            extra_creditos=gasto.creditos,
-            extra_usd=gasto.usd,
-            extra_input=gasto.entrada,
-            extra_output=gasto.salida,
-        )
+        try:
+            consolidado, tools = await consolidar_y_purgar(
+                ctx.tenant_id,
+                conversation_id,
+                run_id=ctx.run_id,
+                case_id=caso.id,
+                intento=intento,
+                extra_creditos=gasto.creditos,
+                extra_usd=gasto.usd,
+                extra_input=gasto.entrada,
+                extra_output=gasto.salida,
+            )
+        except ConversacionAusente:
+            # Otro proceso (el barrido) la purgó: no hay tools ni gasto que medir, y juzgar sin ellas daría falsos
+            # verdes o rojos. El intento no se pudo probar.
+            consolidado, tools = Decimal(0), []
+            parcial.fin = None
+            parcial.razon = "La conversación de la prueba se cerró antes de terminar."
     parcial.creditos += consolidado
     parcial.tools = tools
     if corte is not None:
@@ -670,7 +682,8 @@ async def correr(tenant_id: uuid.UUID, run_id: uuid.UUID) -> str:
             await _guardar_version(ctx)
             final = await _recorrer(ctx)
         except Exception as exc:  # cualquier fallo del corredor deja la corrida cerrada, no colgada
-            log.exception("prueba_corrida_fallo", tenant_id=str(tenant_id), run_id=str(run_id))
+            # Sin traza: un error de SQL trae los parámetros de la fila (la transcripción).
+            log.error("prueba_corrida_fallo", tenant_id=str(tenant_id), run_id=str(run_id), error=type(exc).__name__)
             await cerrar(tenant_id, run_id, FALLO, codigo=type(exc).__name__)
             return FALLO
         await cerrar(tenant_id, run_id, final)
@@ -709,6 +722,7 @@ __all__ = [
     "POR_TOPE",
     "TERMINADA",
     "TOPE_TURNOS",
+    "ConversacionAusente",
     "cerrar",
     "consolidar_y_purgar",
     "correr",

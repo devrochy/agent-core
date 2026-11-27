@@ -43,7 +43,10 @@ def test_la_transcripcion_va_en_json_como_dato_y_se_recorta() -> None:
     assert len(datos["transcripcion"][0]["texto"]) == juez.MAX_TEXTO_TURNO
 
 
-@pytest.mark.parametrize("pasa,incumplido,esperado", [(True, "algo", None), (False, None, "Saluda"), (False, "  ", "Saluda")])
+@pytest.mark.parametrize(
+    "pasa,incumplido,esperado",
+    [(True, "algo", None), (False, None, "Saluda"), (False, "  ", "Saluda"), (False, "inventado por el LLM", "Saluda")],
+)
 def test_el_criterio_incumplido_solo_existe_si_falla_y_nunca_queda_vacio(pasa: bool, incumplido: str | None, esperado: str | None, monkeypatch: pytest.MonkeyPatch) -> None:
     salida = json.dumps({"pasa": pasa, "criterio_incumplido": incumplido, "razon": "turno 1"})
 

@@ -504,9 +504,11 @@ async def test_no_se_consolida_ni_purga_una_conversacion_de_otro_negocio_o_de_ot
 
     async with tenant_scope(tid_a):
         # Con el negocio equivocado, o con la corrida equivocada, no pasa nada.
-        assert await corredor.consolidar_y_purgar(tid_a, conv, run_id=run_b) == (Decimal(0), [])
+        with pytest.raises(corredor.ConversacionAusente):
+            await corredor.consolidar_y_purgar(tid_a, conv, run_id=run_b)
     async with tenant_scope(tid_b):
-        assert await corredor.consolidar_y_purgar(tid_b, conv, run_id=uuid.uuid4()) == (Decimal(0), [])
+        with pytest.raises(corredor.ConversacionAusente):
+            await corredor.consolidar_y_purgar(tid_b, conv, run_id=uuid.uuid4())
     assert len(await _sql(tid_b, "select 1 from conversations where tenant_id = :t and id = :c", c=conv)) == 1
     async with tenant_scope(tid_b):
         await corredor.consolidar_y_purgar(tid_b, conv, run_id=run_b)
@@ -624,3 +626,25 @@ async def test_cancelar_una_corrida_de_otro_negocio_es_404(app_client, negocios)
         assert r.status_code == 404 and str(run_b) not in r.text
 
     assert (await _run(tid_b, run_b))[0] == "en_cola"
+
+
+async def test_el_barrido_no_purga_la_conversacion_de_una_corrida_viva(negocios) -> None:  # type: ignore[no-untyped-def]
+    from core.db.models import Conversation
+    from core.db.session import get_session
+    from core.pruebas import barrido, corredor
+    from core.shared.tenant import tenant_scope
+
+    tid, _ = negocios
+    agente = await _agente(tid)
+    caso = await _caso(tid, agente)
+    viva = await _corrida(tid, agente, [caso], estado="corriendo", iniciada_en=datetime.now(UTC))
+    async with tenant_scope(tid):
+        conv = await corredor.crear_conversacion_de_corrida(tid, viva, caso, agente, await _conexion(tid))
+    async with tenant_scope(tid), get_session() as s:
+        c = await s.get(Conversation, conv)
+        assert c is not None
+        c.started_at = datetime.now(UTC) - timedelta(hours=2)  # vieja, pero su corrida arrancó hace segundos
+
+    async with tenant_scope(tid):
+        assert await barrido.barrer_negocio(tid) == {"corridas": 0, "conversaciones": 0}
+    assert len(await _sql(tid, "select 1 from conversations where tenant_id = :t and id = :c", c=conv)) == 1
