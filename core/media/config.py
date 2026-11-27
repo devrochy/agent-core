@@ -22,10 +22,12 @@ from core.media.catalog import (
     AudioProviderKey,
     VisionProviderKey,
     audio_model_or_default,
+    audio_price_per_minute,
     is_audio_provider,
     is_vision_mode,
     is_vision_provider,
     vision_model_or_default,
+    vision_price_per_image,
 )
 from core.shared.crypto import get_secret_box
 
@@ -227,7 +229,19 @@ async def read_media_config(tenant_id: uuid.UUID) -> dict[str, Any]:
                     "key": entry.key,
                     "label": entry.label,
                     "default_model": entry.default_model,
-                    "models": [{"id": m.id, "label": m.label} for m in entry.models],
+                    "models": [
+                        {
+                            "id": m.id,
+                            "label": m.label,
+                            "quality": m.quality,
+                            "tier": m.tier,
+                            "legacy": m.legacy,
+                            "offered": m.offered,
+                            "cost_usd": audio_price_per_minute(entry.key, m.id),
+                            "cost_unit": "minute",
+                        }
+                        for m in entry.models
+                    ],
                 }
                 for entry in AUDIO_CATALOG.values()
             ],
@@ -236,7 +250,19 @@ async def read_media_config(tenant_id: uuid.UUID) -> dict[str, Any]:
                     "key": entry.key,
                     "label": entry.label,
                     "default_model": entry.default_model,
-                    "models": [{"id": m.id, "label": m.label} for m in entry.models],
+                    "models": [
+                        {
+                            "id": m.id,
+                            "label": m.label,
+                            "quality": m.quality,
+                            "tier": m.tier,
+                            "legacy": m.legacy,
+                            "offered": m.offered,
+                            "cost_usd": vision_price_per_image(entry.key, m.id),
+                            "cost_unit": "image",
+                        }
+                        for m in entry.models
+                    ],
                 }
                 for entry in VISION_CATALOG.values()
             ],

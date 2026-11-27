@@ -1714,6 +1714,17 @@ class MediaVisionSettings(MediaAudioSettings):
 class MediaCatalogModel(BaseModel):
     id: str
     label: str
+    # Escala 1–5 definida por capacidad; el panel la muestra como barras + palabra.
+    quality: int
+    # Identidad de la opción para el panel (no es el nombre del modelo).
+    tier: str
+    # Válido para configuraciones guardadas, pero no se ofrece como opción nueva.
+    legacy: bool = False
+    # Se ofrece en el panel; un modelo vigente pero dominado puede quedar fuera.
+    offered: bool = True
+    # Costo de referencia por minuto de audio o por imagen estimada.
+    cost_usd: float
+    cost_unit: Literal["minute", "image"]
 
 
 class MediaCatalogProvider(BaseModel):

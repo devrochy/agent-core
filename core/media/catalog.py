@@ -1,11 +1,17 @@
 """Catálogo de proveedores de audio (STT) y visión (SPEC-04, ADR-0151).
 
-Es la única fuente de verdad de modelos, URLs y precios de referencia de las dos
-capacidades. El panel lo expone para poblar los selects y el resolver lo usa para
-validar la configuración guardada.
+Es la única fuente de verdad de modelos, URLs, calidad y precios de referencia de
+las dos capacidades. El panel lo expone para poblar las opciones de calidad/costo;
+el resolver lo usa para validar la configuración guardada.
 
-Los precios son de referencia para el ledger en modo sombra; un cambio de precio
-no reescribe filas viejas (cada fila guarda su costo).
+`quality` es una escala de 1 a 5 que el equipo define por capacidad y revisa cuando
+entra o sale un modelo. `tier` es la identidad semántica de la opción (económico,
+equilibrado, rápido, preciso, detallado, máxima); el panel la usa para elegir el
+nombre, la descripción y el icono sin mostrar el modelo. `legacy` conserva un modelo
+válido para configuraciones guardadas, pero no se ofrece en el panel.
+
+Los precios son de referencia para el ledger en modo sombra; un cambio de precio no
+reescribe filas viejas (cada fila guarda su costo).
 """
 
 from __future__ import annotations
@@ -17,11 +23,24 @@ AudioProviderKey = Literal["groq", "openai"]
 VisionProviderKey = Literal["deepseek", "anthropic", "openai"]
 VisionMode = Literal["describir", "sin_descripcion"]
 
+# Referencia para estimar el costo por imagen sin tokens reales. El ledger usa los
+# tokens que informa el proveedor; esto es solo para la etiqueta de la opción.
+VISION_REF_INPUT_TOKENS = 1_200
+VISION_REF_OUTPUT_TOKENS = 300
+
 
 @dataclass(frozen=True, slots=True)
 class ModelOption:
     id: str
     label: str
+    # 1 = no sirve · 2 = simple · 3 = uso diario · 4 = difícil · 5 = máxima.
+    quality: int
+    # Identidad de la opción para el panel; no es el nombre del modelo.
+    tier: str
+    # Válido para configuraciones guardadas, pero no se ofrece como opción nueva.
+    legacy: bool = False
+    # Se ofrece en el panel. `False` retira un modelo vigente pero dominado en costo/calidad.
+    offered: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,8 +75,18 @@ AUDIO_CATALOG: dict[AudioProviderKey, AudioProvider] = {
         base_url="https://api.groq.com/openai/v1",
         default_model="whisper-large-v3-turbo",
         models=(
-            ModelOption("whisper-large-v3-turbo", "Whisper Large v3 Turbo · el más rápido y barato"),
-            ModelOption("whisper-large-v3", "Whisper Large v3 · más preciso"),
+            ModelOption(
+                "whisper-large-v3-turbo",
+                "Whisper Large v3 Turbo · rápido",
+                quality=4,
+                tier="rapido",
+            ),
+            ModelOption(
+                "whisper-large-v3",
+                "Whisper Large v3 · preciso",
+                quality=4,
+                tier="precision",
+            ),
         ),
         usd_per_minute={
             "whisper-large-v3-turbo": 0.04 / 60,
@@ -71,11 +100,31 @@ AUDIO_CATALOG: dict[AudioProviderKey, AudioProvider] = {
         base_url="https://api.openai.com/v1",
         default_model="gpt-4o-mini-transcribe",
         models=(
-            ModelOption("gpt-4o-mini-transcribe", "GPT-4o mini Transcribe · económico"),
-            ModelOption("whisper-1", "Whisper-1 · clásico"),
+            ModelOption(
+                "gpt-4o-mini-transcribe",
+                "GPT-4o mini Transcribe · básico (no se ofrece)",
+                quality=3,
+                tier="basico",
+                offered=False,
+            ),
+            ModelOption(
+                "gpt-4o-transcribe",
+                "GPT-4o Transcribe · máxima",
+                quality=5,
+                tier="maxima",
+            ),
+            ModelOption(
+                "whisper-1",
+                "Whisper-1 · clásico (legado)",
+                quality=2,
+                tier="legado",
+                legacy=True,
+                offered=False,
+            ),
         ),
         usd_per_minute={
             "gpt-4o-mini-transcribe": 0.003,
+            "gpt-4o-transcribe": 0.006,
             "whisper-1": 0.006,
         },
         key_placeholder="sk-…",
@@ -89,7 +138,14 @@ VISION_CATALOG: dict[VisionProviderKey, VisionProvider] = {
         family="openai_compatible",
         base_url="https://api.deepseek.com",
         default_model="deepseek-flash",
-        models=(ModelOption("deepseek-flash", "DeepSeek Flash · económico y multimodal"),),
+        models=(
+            ModelOption(
+                "deepseek-flash",
+                "DeepSeek Flash · económico y multimodal",
+                quality=2,
+                tier="economico",
+            ),
+        ),
         usd_per_mtok={"deepseek-flash": (0.14, 0.28)},
         key_placeholder="sk-…",
     ),
@@ -100,8 +156,18 @@ VISION_CATALOG: dict[VisionProviderKey, VisionProvider] = {
         base_url="https://api.anthropic.com/v1",
         default_model="claude-haiku-4-5",
         models=(
-            ModelOption("claude-haiku-4-5", "Claude Haiku 4.5 · rápido y económico"),
-            ModelOption("claude-sonnet-4-5", "Claude Sonnet 4.5 · más preciso"),
+            ModelOption(
+                "claude-haiku-4-5",
+                "Claude Haiku 4.5 · rápido y económico",
+                quality=4,
+                tier="detallado",
+            ),
+            ModelOption(
+                "claude-sonnet-4-5",
+                "Claude Sonnet 4.5 · más preciso",
+                quality=5,
+                tier="maxima",
+            ),
         ),
         usd_per_mtok={
             "claude-haiku-4-5": (1.00, 5.00),
@@ -116,11 +182,29 @@ VISION_CATALOG: dict[VisionProviderKey, VisionProvider] = {
         base_url="https://api.openai.com/v1",
         default_model="gpt-4o-mini",
         models=(
-            ModelOption("gpt-4o-mini", "GPT-4o mini · económico"),
-            ModelOption("gpt-4o", "GPT-4o · más preciso"),
+            ModelOption(
+                "gpt-4o-mini",
+                "GPT-4o mini · económico",
+                quality=3,
+                tier="equilibrado",
+            ),
+            ModelOption(
+                "gpt-4.1-mini",
+                "GPT-4.1 mini · preciso",
+                quality=4,
+                tier="preciso",
+            ),
+            ModelOption(
+                "gpt-4o",
+                "GPT-4o · detallado (legado)",
+                quality=4,
+                tier="detallado",
+                legacy=True,
+            ),
         ),
         usd_per_mtok={
             "gpt-4o-mini": (0.15, 0.60),
+            "gpt-4.1-mini": (0.40, 1.60),
             "gpt-4o": (2.50, 10.00),
         },
         key_placeholder="sk-…",
@@ -189,20 +273,43 @@ def vision_cost_usd(
     return round((input_tokens / 1_000_000) * entrada + (output_tokens / 1_000_000) * salida, 6)
 
 
+def audio_price_per_minute(provider: AudioProviderKey, model: str) -> float:
+    """Precio de referencia por minuto, tal como lo publica el proveedor."""
+    return round(AUDIO_CATALOG[provider].usd_per_minute.get(model, 0.0), 6)
+
+
+def vision_price_per_image(
+    provider: VisionProviderKey,
+    model: str,
+    input_tokens: int = VISION_REF_INPUT_TOKENS,
+    output_tokens: int = VISION_REF_OUTPUT_TOKENS,
+) -> float:
+    """Estimado de referencia por imagen con los tokens típicos de una foto."""
+    entrada, salida = VISION_CATALOG[provider].usd_per_mtok.get(model, (0.0, 0.0))
+    return round(
+        (input_tokens / 1_000_000) * entrada + (output_tokens / 1_000_000) * salida,
+        6,
+    )
+
+
 __all__ = [
     "AUDIO_CATALOG",
     "TTS_USD_POR_MILLON_DE_CARACTERES",
     "VISION_CATALOG",
+    "VISION_REF_INPUT_TOKENS",
+    "VISION_REF_OUTPUT_TOKENS",
     "AudioProviderKey",
     "ModelOption",
     "VisionMode",
     "VisionProviderKey",
     "audio_cost_usd",
     "audio_model_or_default",
+    "audio_price_per_minute",
     "is_audio_provider",
     "is_vision_mode",
     "is_vision_provider",
     "tts_cost_usd",
     "vision_cost_usd",
     "vision_model_or_default",
+    "vision_price_per_image",
 ]
