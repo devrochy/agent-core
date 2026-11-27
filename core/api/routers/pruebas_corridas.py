@@ -7,7 +7,9 @@ Bajo `/api/v1/admin/agents/{agent_id}/pruebas`, con el permiso de escritura de l
 - `POST …/corridas` `{case_ids, k, confirmo_creditos}` → 202 con la corrida `en_cola`. `confirmo_creditos` tiene
   que ser el estimado vigente de ese `k`. Errores: 404 `escenario_no_encontrado`; 422 `k_fuera_de_rango`,
   `demasiados_escenarios`, `sin_escenarios`, `escenario_no_aprobado`; 409 `estimado_cambio`, `corrida_en_curso`,
-  `plan_limit_creditos`; 429 `corridas_por_dia`. No ejecuta nada: el corredor es HU-AOS-103.
+  `plan_limit_creditos`; 429 `corridas_por_dia`. Tras crearla la manda al worker (`core.pruebas.correr`, HU-AOS-103).
+- `POST …/corridas/{run_id}/cancelar` → la corrida `cancelada`: el corredor termina el intento abierto y no sigue; se
+  cobra solo lo gastado. 409 `corrida_no_activa` si ya terminó.
 
 Y, solo master, el tope de `k` de un negocio: `GET|PUT /api/v1/admin/platform/tenants/{tenant_id}/pruebas`.
 
@@ -74,6 +76,14 @@ class PruebasCorridaIn(PruebasEstimadoIn):
     confirmo_creditos: int = Field(
         ge=0, description="Créditos que el dueño aprobó: el `estimado` de este `k`. Si cambió, 409 `estimado_cambio`."
     )
+
+
+class PruebasCorridaCanceladaOut(BaseModel):
+    id: uuid.UUID
+    agent_id: uuid.UUID
+    estado: str
+    creditos_reales: float = Field(description="Lo gastado hasta ahora (puede crecer un poco: el intento abierto termina).")
+    terminada_en: datetime | None
 
 
 class PruebasCorridaOut(BaseModel):
@@ -184,6 +194,7 @@ async def crear_corrida(
         raise _error(exc) from exc
     except QuotaExceeded as exc:
         raise plan_limit_error(exc) from exc
+    await _encolar(_tenant(principal), corrida.id)
     return PruebasCorridaOut(
         id=corrida.id,
         agent_id=corrida.agent_id,
@@ -194,6 +205,48 @@ async def crear_corrida(
         creditos_de_cuota=float(corrida.creditos_de_cuota),
         tope_creditos=float(corrida.tope_creditos),
         created_at=corrida.created_at,
+    )
+
+
+async def _encolar(tenant_id: uuid.UUID, run_id: uuid.UUID) -> None:
+    """Manda la corrida al worker, ya confirmada en la base. Si el broker falla, la corrida se cierra en `fallo` (nada se
+    gastó) para no dejar al negocio con una corrida «en cola» que bloquea las demás hasta el barrido."""
+    from core.pruebas import corredor
+    from core.shared.logger import get_logger
+    from core.shared.tenant import tenant_scope
+    from core.tasks.pruebas_tasks import encolar
+
+    try:
+        encolar(tenant_id, run_id)
+    except Exception as exc:
+        get_logger(__name__).error("prueba_corrida_encolar_fallo", run_id=str(run_id), error=type(exc).__name__)
+        async with tenant_scope(tenant_id):
+            await corredor.cerrar(tenant_id, run_id, corredor.FALLO, codigo="cola_no_disponible")
+        raise ApiError(503, "cola_no_disponible", "No se pudo iniciar la corrida. Inténtalo de nuevo en un momento.") from exc
+
+
+@router.post(
+    "/{agent_id}/pruebas/corridas/{run_id}/cancelar",
+    response_model=PruebasCorridaCanceladaOut,
+    responses={**_ERRORES, 409: {"description": "`corrida_no_activa`: la corrida ya terminó."}},
+)
+async def cancelar_corrida(
+    agent_id: uuid.UUID,
+    run_id: uuid.UUID,
+    principal: Annotated[Principal, Depends(require("agents", write=True))],
+) -> PruebasCorridaCanceladaOut:
+    """Cancela una corrida en cola o corriendo. Se cobra solo lo gastado."""
+    _habilitado()
+    try:
+        corrida = await svc.cancelar(_tenant(principal), agent_id, run_id, actor=f"admin:{principal.admin.email}")
+    except svc.ErrorPruebas as exc:
+        raise _error(exc) from exc
+    return PruebasCorridaCanceladaOut(
+        id=corrida.id,
+        agent_id=corrida.agent_id,
+        estado=corrida.estado,
+        creditos_reales=float(corrida.creditos_reales),
+        terminada_en=corrida.terminada_en,
     )
 
 

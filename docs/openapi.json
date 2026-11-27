@@ -48722,6 +48722,95 @@
         }
       }
     },
+    "/api/v1/admin/agents/{agent_id}/pruebas/corridas/{run_id}/cancelar": {
+      "post": {
+        "tags": [
+          "api",
+          "admin · pruebas del agente"
+        ],
+        "summary": "Cancelar Corrida",
+        "description": "Cancela una corrida en cola o corriendo. Se cobra solo lo gastado.",
+        "operationId": "cancelar_corrida_api_v1_admin_agents__agent_id__pruebas_corridas__run_id__cancelar_post",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PruebasCorridaCanceladaOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Sin permiso de escritura en la sección `agents`."
+          },
+          "404": {
+            "description": "Agente o escenario inexistente o de otro negocio (`not_found`, `escenario_no_encontrado`), o pruebas apagadas."
+          },
+          "422": {
+            "description": "`k_fuera_de_rango`, `demasiados_escenarios`, `sin_escenarios` o `escenario_no_aprobado`."
+          },
+          "409": {
+            "description": "`corrida_no_activa`: la corrida ya terminó."
+          }
+        }
+      }
+    },
     "/api/v1/admin/platform/tenants/{tenant_id}/pruebas": {
       "get": {
         "tags": [
@@ -88219,6 +88308,50 @@
           "fecha_hora"
         ],
         "title": "Payment"
+      },
+      "PruebasCorridaCanceladaOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "estado": {
+            "type": "string",
+            "title": "Estado"
+          },
+          "creditos_reales": {
+            "type": "number",
+            "title": "Creditos Reales",
+            "description": "Lo gastado hasta ahora (puede crecer un poco: el intento abierto termina)."
+          },
+          "terminada_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminada En"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "agent_id",
+          "estado",
+          "creditos_reales",
+          "terminada_en"
+        ],
+        "title": "PruebasCorridaCanceladaOut"
       },
       "PruebasCorridaIn": {
         "properties": {

@@ -44,6 +44,7 @@ log = get_logger(__name__)
 
 CORRIDAS_POR_DIA = 5
 ACCION_AUDITORIA = "prueba_corrida_creada"
+ACCION_CANCELAR = "prueba_corrida_cancelada"
 _ACTIVAS = ("en_cola", "corriendo")
 
 
@@ -229,4 +230,42 @@ async def crear(
         return corrida
 
 
-__all__ = ["CORRIDAS_POR_DIA", "ErrorPruebas", "crear", "estimar"]
+async def cancelar(tenant_id: uuid.UUID, agent_id: uuid.UUID, run_id: uuid.UUID, *, actor: str) -> AgentTestRun:
+    """Cancela una corrida activa del agente (`en_cola` o `corriendo`). El corredor lo ve entre turnos, termina el
+    intento que tenía abierto (consolida lo gastado y purga) y no sigue; se cobra solo lo gastado. 404 sin eco si la
+    corrida no es de este agente y negocio; 409 `corrida_no_activa` si ya terminó."""
+    async with tenant_scope(tenant_id), get_session() as session:
+        corrida = (
+            await session.execute(
+                select(AgentTestRun)
+                .where(
+                    AgentTestRun.tenant_id == tenant_id,
+                    AgentTestRun.agent_id == agent_id,
+                    AgentTestRun.id == run_id,
+                    AgentTestRun.deleted_at.is_(None),
+                )
+                .with_for_update()
+            )
+        ).scalar_one_or_none()
+        if corrida is None:
+            raise _agente_no_encontrado()
+        if corrida.estado not in _ACTIVAS:
+            raise ErrorPruebas(409, "corrida_no_activa", "La corrida ya terminó.", {"estado": corrida.estado})
+        ahora = datetime.now(UTC)
+        corrida.estado = "cancelada"
+        corrida.terminada_en = ahora
+        session.add(
+            AuditLog(
+                tenant_id=tenant_id,
+                actor=actor[:120],
+                action=ACCION_CANCELAR,
+                input={"run_id": str(run_id), "agent_id": str(agent_id)},
+            )
+        )
+        await session.flush()
+        log.info(ACCION_CANCELAR, tenant_id=str(tenant_id), run_id=str(run_id))
+        session.expunge(corrida)
+        return corrida
+
+
+__all__ = ["CORRIDAS_POR_DIA", "ErrorPruebas", "cancelar", "crear", "estimar"]

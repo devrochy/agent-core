@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     pruebas_agente_enabled: bool = Field(default=False, alias="PRUEBAS_AGENTE_ENABLED")
     pruebas_k_por_defecto: int = Field(default=1, ge=1, alias="PRUEBAS_K_POR_DEFECTO")
     pruebas_k_maximo: int = Field(default=4, ge=1, alias="PRUEBAS_K_MAXIMO")
+    # Modelo FIJO de plataforma del cliente simulado y del juez (ADR-0212 §3): no depende del nivel de IA del agente ni
+    # de la llave del negocio. Vacío = el modelo por defecto del proveedor de plataforma (`LLM_MODEL`).
+    pruebas_modelo: str = Field(default="", alias="PRUEBAS_MODELO")
     # HU-CRM-06 (ADR-0150): números (con o sin `+`) que pueden recibir un envío a un segmento
     # cuando el entorno no es producción real (desarrollo o test con QA_TESTERS_ENABLED). Vacío =
     # en esos entornos no sale ningún envío a un segmento. En producción no se mira.

@@ -18,6 +18,8 @@ también es de prueba.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 
@@ -28,6 +30,29 @@ TEST_CHANNEL = "test"
 # Marca del turno: alguna tool se ejecutó en modo simulado. El loop la consume al cerrar
 # el turno y el panel pinta «Acción simulada».
 _simulado: ContextVar[bool] = ContextVar("turno_simulado", default=False)
+
+# Tools con efectos que el sandbox no pudo simular (`herramienta_sin_simulador`, HU-ARCH-14). Solo lo abre el corredor
+# de las pruebas del agente (HU-AOS-103) con `capturar_sin_simulador`: fuera de él `registrar_sin_simulador` no hace
+# nada. Es una lista mutable en un ContextVar, así que las tareas hijas del turno escriben en la misma.
+_sin_simulador: ContextVar[list[str] | None] = ContextVar("turno_sin_simulador", default=None)
+
+
+@contextmanager
+def capturar_sin_simulador() -> Iterator[list[str]]:
+    """Recoge los nombres de las tools que fallaron cerradas por no tener simulador dentro del bloque."""
+    visto: list[str] = []
+    ficha = _sin_simulador.set(visto)
+    try:
+        yield visto
+    finally:
+        _sin_simulador.reset(ficha)
+
+
+def registrar_sin_simulador(tool: str) -> None:
+    visto = _sin_simulador.get()
+    if visto is not None:
+        visto.append(tool)
+
 
 def is_test_channel(channel: str | None) -> bool:
     """True si la conversación es del playground (no es atención real)."""
