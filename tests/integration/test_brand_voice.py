@@ -77,3 +77,5 @@ def test_identity_out_marca_warning_si_vacio() -> None:
     out = _identity_out(None, available=[])
     assert out.brand_voice == ""
     assert out.brand_voice_warning is True
+    # El idioma viaja como dato de solo lectura para que el panel lo muestre sin ofrecer un control.
+    assert out.language == "es"
