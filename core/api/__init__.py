@@ -65,6 +65,7 @@ from core.api.routers import (
     plugins,
     procedures,
     pruebas_corridas,
+    pruebas_escenarios,
     push,
     qa,
     search,
@@ -102,6 +103,7 @@ api_router.include_router(captar_leads.router)
 api_router.include_router(plugins.router)
 api_router.include_router(skill_installations.router)
 api_router.include_router(procedures.router)
+api_router.include_router(pruebas_escenarios.router)
 # HU-AOS-47: antes que `agents` (su `/{agent_id}` capturaría `/overview`).
 api_router.include_router(agent_data.router)
 api_router.include_router(datos_de_prueba.router)

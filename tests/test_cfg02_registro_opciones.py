@@ -287,7 +287,7 @@ def _registradas() -> dict[str, set[str]]:
 NO_LECTORES = {
     "core/admin/settings_service.py", "core/admin/views.py", "core/agents/spec.py", "core/alta_negocio.py",
     "core/api/routers/settings.py", "core/api/routers/datos_cliente.py", "core/datos_cliente/ajustes.py", "core/datos_cliente/aviso_chat.py", "core/datos_cliente/guardar.py", "core/api/routers/leads_acciones.py", "core/db/models.py", "core/llm/difficulty_router.py", "core/mcp/host.py",
-    "core/orchestrator/guardrails.py", "core/orchestrator/verificador/verificador.py", "core/presets/apply.py",
+    "core/orchestrator/guardrails.py", "core/pruebas/generador.py", "core/orchestrator/verificador/verificador.py", "core/presets/apply.py",
     # HU-AOS-98 (ADR-0211): las claves `recepcion_*` del Coordinador no son del registro del asistente de Configuración.
     "core/releases/build.py", "core/coordinador/recepcion_config.py", "core/api/routers/coordinator.py",
 }  # fmt: skip
