@@ -225,6 +225,9 @@ CATALOGO: dict[str, CronMeta] = dict(
         _m("core.canary_no_inferioridad", "Releases y canary", "Canary: no inferioridad",
            "Compara la versión canary contra la estable.", "0 * * * *"),
         # ---- Agent OS
+        _m("core.pruebas_barrido", "Agent OS", "Pruebas del agente colgadas",
+           "Cierra las corridas de pruebas que llevan más de 2 horas activas y purga sus conversaciones huérfanas "
+           "cobrando lo gastado.", "*/30 * * * *"),
         _m("core.kernel_esperas_vencidas", "Agent OS", "Esperas vencidas",
            "Cancela las tareas que esperan un pago más de 72 horas.", "25 * * * *"),
         # ---- Notificaciones

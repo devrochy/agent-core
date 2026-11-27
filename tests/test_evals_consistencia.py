@@ -95,8 +95,10 @@ def test_reporte_incluye_intentos_y_aserciones(tmp_path: Path) -> None:
 
 def test_plantilla_del_simulador_se_parsea() -> None:
     sistema, variantes, inicio = simulador._cargar_plantilla()
-    for marcador in ("{objetivo}", "{datos}", "{estilo}", "{variante}"):
+    # Estilo y variante son de la plataforma; el objetivo y los datos del escenario van aparte, como dato.
+    for marcador in ("{estilo}", "{variante}"):
         assert marcador in sistema
+    assert "{objetivo}" not in sistema and "{datos}" not in sistema
     assert simulador.CUMPLIDO in sistema and simulador.RINDE in sistema
     assert len(variantes) >= 2
     assert inicio
@@ -137,7 +139,9 @@ def test_el_cliente_simulado_invierte_roles_y_detecta_el_fin() -> None:
     llamada = proveedor.llamadas[-1]
     roles = [m.role for m in llamada["messages"]]
     assert roles == ["user", "assistant", "user"]  # el negocio es el "user" del simulador
-    assert "Comprar el Basic" in llamada["system_blocks"][0] and "Ana" in llamada["system_blocks"][0]
+    instrucciones, dato = llamada["system_blocks"]
+    assert "Comprar el Basic" not in instrucciones and "Ana" not in instrucciones  # nunca en las instrucciones
+    assert dato.startswith("DATOS_DEL_CLIENTE:") and "Comprar el Basic" in dato and "Ana" in dato
     traza = cliente.traza("objetivo")
     assert traza["turnos"] == 1 and traza["fin"] == "objetivo" and traza["semilla"] == 1
 

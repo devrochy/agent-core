@@ -38,6 +38,7 @@ celery = Celery(
         "core.tasks.push_tasks",
         "core.tasks.production_readiness",
         "core.tasks.gate_tasks",  # HU-AOS-21 parte 4: medición del gate de pass^k
+        "core.tasks.pruebas_tasks",  # HU-AOS-103: corredor de las pruebas del agente (SPEC-53)
         "core.tasks.twilio_costos",  # ADR-0186: costo por mensaje de WhatsApp vía Twilio
     ],
 )
@@ -444,6 +445,18 @@ def _outbound_sweeper() -> Any:
     from core.tasks.outbound_sweeper import barrer_salientes_atascadas
 
     return barrer_salientes_atascadas()
+
+
+# Corridas de pruebas del agente colgadas (HU-AOS-103, ADR-0212 §5): las que llevan más de 2 h activas pasan a `fallo`
+# (si no, bloquean al negocio) y sus conversaciones huérfanas se consolidan y purgan.
+_PRUEBAS_BARRIDO_TASK = "core.pruebas_barrido"
+
+
+@core_cron(_PRUEBAS_BARRIDO_TASK, crontab(minute="*/30"))
+def _pruebas_barrido() -> Any:
+    from core.pruebas.barrido import barrer_corridas_colgadas
+
+    return barrer_corridas_colgadas()
 
 
 # Mantenimiento del historial de crons (ADR-0183): borra a los 30 días y cierra las ejecuciones

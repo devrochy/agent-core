@@ -411,7 +411,7 @@ async def ejecutar_tool(
       (memoria/perfil), que no cuenta y se purga al cerrar.
     - sin `context.sandbox` (canales reales y evals): handler real, sin cambios.
     """
-    from core.shared.test_mode import marcar_simulado
+    from core.shared.test_mode import marcar_simulado, registrar_sin_simulador
 
     # Solo la prueba del panel inyecta sandbox; los evals del canal `test` corren las tools reales.
     en_prueba = context.sandbox is not None
@@ -421,6 +421,7 @@ async def ejecutar_tool(
             resultado = await tool.simular(arguments, context)
             simulado = True
         elif en_prueba and tool.side_effects and not tool.permite_en_prueba:
+            registrar_sin_simulador(tool.name)  # el corredor de pruebas lo distingue de un fallo del agente
             resultado = {
                 "error": "herramienta_sin_simulador",
                 "simulado": True,
