@@ -1,0 +1,3 @@
+## Escenarios de prueba del agente (2026-11-26)
+
+- HU-AOS-101 (SPEC-53, ADR-0212). `/api/v1/admin/agents/{id}/pruebas`: `GET` lista los escenarios y la última corrida; `POST` escribe uno (`origen='manual'`); `PATCH` edita o aprueba; `DELETE` es lógico; `POST /proponer` pide a la IA hasta 10 en `borrador`, solo con tools del agente, y cobra una fila `generacion` (créditos de plataforma, `alcanza` antes, un pedido a la vez por agente). Máx. 50 por agente, título único sin distinguir mayúsculas, escribir exige `agents` en escritura. El prompt es el playbook del core `escenarios_de_prueba` y solo recibe la configuración del agente. Sin migración.
