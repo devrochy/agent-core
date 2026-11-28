@@ -16,6 +16,8 @@ proveedor lo fija `core.observability.metricas.configure_metrics()`.
 | `agentcore_twilio_sandbox_events_total` | `evento` (conjunto cerrado de `core/gateway/twilio/sandbox.py`) | alta, webhook, envío y operación del Sandbox de Twilio (HU-CONN-20) |
 | `agentcore_kill_switch_changes_total` | `level` (global, agent), `action` (activated, deactivated, denied) | interruptor global y pausa por agente (HU-ARCH-38) |
 | `agentcore_kill_switch_read_failures_total` | — | lectura fallida del interruptor global (se trata como activo) |
+| `agentcore_feedback_creditos_otorgados_total` | `tipo` (error, mejora, idea) | aprobación de un reporte de cliente (HU-FB-04) |
+| `agentcore_feedback_decision_seconds` | `decision` (aprobado, rechazado) | idem y rechazo: del envío a la decisión |
 
 **Etiquetas prohibidas** (cada valor es una serie y el plan gratis da 10k): `tenant_id`,
 `agent_id`, `conversation_id`, teléfonos, correos y rutas sin agrupar. Las etiquetas son conjuntos
@@ -73,6 +75,16 @@ _kill_switch_cambios = _meter.create_counter(
 )
 _kill_switch_fallos = _meter.create_counter(
     "agentcore_kill_switch_read_failures_total", description="Lecturas fallidas del interruptor global (falla cerrado)"
+)
+_feedback_creditos = _meter.create_counter(
+    "agentcore_feedback_creditos_otorgados_total", description="Créditos de regalo acreditados al aprobar reportes de clientes"
+)
+_feedback_decision = _meter.create_histogram(
+    "agentcore_feedback_decision_seconds",
+    unit="s",
+    description="Tiempo del envío de un reporte de cliente a su decisión",
+    # 1 h, 6 h, 1 día, 3 días, 1 semana, 2 semanas y 30 días.
+    explicit_bucket_boundaries_advisory=[3600, 21600, 86400, 259200, 604800, 1209600, 2592000],
 )
 
 
@@ -196,3 +208,18 @@ def kill_switch_cambio(nivel: str, accion: str) -> None:
 
 def kill_switch_lectura_fallida() -> None:
     _seguro(lambda: _kill_switch_fallos.add(1))
+
+
+# ------------------------------------------------------------------- reportes de clientes
+def feedback_aprobado(tipo: str, creditos: int, segundos: float) -> None:
+    """Un master aprobó un reporte (HU-FB-04): créditos acreditados y tiempo hasta la decisión."""
+
+    def _registrar() -> None:
+        _feedback_creditos.add(int(creditos), {"tipo": _etiqueta(tipo)})
+        _feedback_decision.record(max(0.0, segundos), {"decision": "aprobado"})
+
+    _seguro(_registrar)
+
+
+def feedback_rechazado(segundos: float) -> None:
+    _seguro(lambda: _feedback_decision.record(max(0.0, segundos), {"decision": "rechazado"}))
