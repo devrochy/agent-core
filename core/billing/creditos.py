@@ -332,15 +332,18 @@ def cotizar(concepto: Concepto, unidades: int, key_mode: KeyMode) -> int:
     return int((por_unidad * unidades).to_integral_value(rounding=ROUND_CEILING))
 
 
-# ----------------------------------------- saldo del ciclo: mes, acumulado y recargas (ADR-0209)
+# ------------------------- saldo del ciclo: mes, acumulado, bonificaciones y recargas (ADR-0209, ADR-0213)
 
-TIPOS_DE_ABONO = ("acumulado", "recarga")
+TIPOS_DE_ABONO = ("acumulado", "recarga", "bonificacion")
+# Rango de cada tipo en el orden de gasto (ADR-0213 §2): lo regalado se gasta antes que lo pagado.
+_RANGO_DE_GASTO = {"acumulado": 0, "bonificacion": 1, "recarga": 2}
 _DECIMA = Decimal("0.1")
 
 
 @dataclass(frozen=True)
 class Abono:
-    """Un `credit_grant` del ciclo (ADR-0209 §1): `acumulado` con `vence_en` o `recarga` sin él."""
+    """Un `credit_grant` del ciclo (ADR-0209 §1, ADR-0213 §1): `acumulado` con `vence_en`, o `recarga` y
+    `bonificacion` sin él."""
 
     tipo: str
     creditos: Decimal
@@ -360,9 +363,10 @@ class UsoDeAbono:
 
 @dataclass(frozen=True)
 class RepartoDelSaldo:
-    """Lo consumido en el ciclo repartido entre las fuentes del saldo, en el orden de gasto (ADR-0209 §2):
-    primero el mes, luego lo acumulado (el que vence antes primero) y al final las recargas. Lo que pasa
-    del saldo es el colchón (`sobre_el_saldo`, ADR-0208 §5): no se le carga a ninguna fuente."""
+    """Lo consumido en el ciclo repartido entre las fuentes del saldo, en el orden de gasto (ADR-0209 §2,
+    enmendado por ADR-0213 §2): primero el mes, luego lo acumulado (el que vence antes primero), luego las
+    bonificaciones (créditos de regalo) y al final las recargas. Lo que pasa del saldo es el colchón
+    (`sobre_el_saldo`, ADR-0208 §5): no se le carga a ninguna fuente."""
 
     mes: Decimal
     usado_mes: Decimal
@@ -385,6 +389,14 @@ class RepartoDelSaldo:
         return sum((u.usado for u in self._de("acumulado")), Decimal(0))
 
     @property
+    def bonificaciones(self) -> Decimal:
+        return sum((u.abono.creditos for u in self._de("bonificacion")), Decimal(0))
+
+    @property
+    def usado_bonificaciones(self) -> Decimal:
+        return sum((u.usado for u in self._de("bonificacion")), Decimal(0))
+
+    @property
     def recargas(self) -> Decimal:
         return sum((u.abono.creditos for u in self._de("recarga")), Decimal(0))
 
@@ -394,7 +406,7 @@ class RepartoDelSaldo:
 
     @property
     def total(self) -> Decimal:
-        return self.mes + self.acumulado + self.recargas
+        return self.mes + self.acumulado + self.bonificaciones + self.recargas
 
     @property
     def acumulado_vence_en(self) -> datetime | None:
@@ -404,12 +416,12 @@ class RepartoDelSaldo:
 
 
 def orden_de_gasto(abonos: list[Abono] | tuple[Abono, ...]) -> list[Abono]:
-    """Acumulado antes que recargas; entre acumulados, el que vence antes; el `origen` desempata para que
-    el reparto sea reproducible."""
+    """Acumulado, luego bonificaciones y al final recargas (ADR-0213 §2); entre acumulados, el que vence
+    antes; el `origen` desempata para que el reparto sea reproducible. Un tipo desconocido va al final."""
     lejano = datetime.max.replace(tzinfo=UTC)
     return sorted(
         abonos,
-        key=lambda a: (a.tipo != "acumulado", a.vence_en or lejano, a.origen),
+        key=lambda a: (_RANGO_DE_GASTO.get(a.tipo, len(_RANGO_DE_GASTO)), a.vence_en or lejano, a.origen),
     )
 
 
@@ -488,7 +500,7 @@ async def alcanza(
     *,
     now: datetime | None = None,
 ) -> SaldoDeCreditos:
-    """Verifica que el saldo del ciclo (mes + acumulado + recargas, ADR-0209) alcance para gastar `creditos`
+    """Verifica que el saldo del ciclo (mes + acumulado + bonificaciones + recargas, ADR-0209/0213) alcance para gastar `creditos`
     más; si no, levanta
     `QuotaExceeded("creditos", usado, límite)`, que `core.api.plan_limits.plan_limit_error`
     convierte en 409 `plan_limit_creditos` con `{metric, used, limit}` (ADR-0142 §6).
@@ -559,7 +571,7 @@ class DecisionDelTurno:
 
 def tamano_del_colchon(credito_mensual: int | Decimal | None) -> Decimal:
     """Créditos del colchón del ciclo: el 5 % del crédito MENSUAL del plan (ADR-0208 §5), sin contar lo
-    acumulado ni las recargas; 0 sin crédito mensual."""
+    acumulado, las bonificaciones ni las recargas; 0 sin crédito mensual."""
     return Decimal(0) if not credito_mensual else Decimal(credito_mensual) * COLCHON_FRACCION
 
 
@@ -640,8 +652,8 @@ async def _saldo_del_mes(
     saldo (ADR-0209 §2, HU-BILL-22).
 
     La ventana es la de `ventana_mensual` desde el ciclo de la suscripción. El límite es
-    `Plan.monthly_credits` + Σ `credit_grants` con `ciclo` = inicio de esa ventana (lo acumulado y las
-    recargas), igual que `/admin/plan` (`plan_view.credito_del_mes`). Sin contador ni columna de saldo
+    `Plan.monthly_credits` + Σ `credit_grants` con `ciclo` = inicio de esa ventana (lo acumulado, las
+    bonificaciones y las recargas), igual que `/admin/plan` (`plan_view.credito_del_mes`). Sin contador ni columna de saldo
     (ADR-0045): lo consumido sale del ledger y se reparte con `repartir`. Sin suscripción, sin
     `period_start` o sin crédito en el plan, `limite=None` (no se limita). Con `con_lock`, toma
     `pg_advisory_xact_lock('billing:creditos:<tenant>')` antes de medir (ver `alcanza`)."""
@@ -660,7 +672,7 @@ async def _saldo_del_mes(
         )
     usado = (await medir_creditos(session, tenant_id, desde=inicio, hasta=fin)).total
     desglose = repartir(usado, plan.monthly_credits, await leer_abonos(session, tenant_id, inicio))
-    limite = plan.monthly_credits + desglose.acumulado + desglose.recargas
+    limite = plan.monthly_credits + desglose.acumulado + desglose.bonificaciones + desglose.recargas
     return SaldoDeCreditos(usado=usado, limite=limite, inicio=inicio, fin=fin, desglose=desglose)
 
 

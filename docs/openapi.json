@@ -60909,6 +60909,11 @@
             ],
             "title": "Accumulated Expires At"
           },
+          "bonuses": {
+            "type": "number",
+            "title": "Bonuses",
+            "default": 0
+          },
           "top_ups": {
             "type": "number",
             "title": "Top Ups",
@@ -60922,6 +60927,11 @@
           "used_accumulated": {
             "type": "number",
             "title": "Used Accumulated",
+            "default": 0
+          },
+          "used_bonuses": {
+            "type": "number",
+            "title": "Used Bonuses",
             "default": 0
           },
           "used_top_ups": {
@@ -60941,7 +60951,7 @@
           "month"
         ],
         "title": "CreditBalance",
-        "description": "Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22): el crédito del mes del plan más lo\nacumulado (sobrante de ciclos anteriores, en Premium y Empresarial) y las recargas. Se gasta en ese\norden: mes, acumulado (el que vence antes primero) y recargas. `over_balance` es lo consumido por\nencima del saldo (colchón de las conversaciones abiertas, lo absorbe la plataforma). En créditos con\ndécimas (1 crédito = COP 10)."
+        "description": "Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22; ADR-0213 §10): el crédito del mes del plan\nmás lo acumulado (sobrante de ciclos anteriores, en Premium y Empresarial), las bonificaciones\n(«Regalos»: créditos de regalo por reportes aprobados, no vencen) y las recargas. Se gasta en ese\norden: mes, acumulado (el que vence antes primero), regalos y recargas. `over_balance` es lo consumido por\nencima del saldo (colchón de las conversaciones abiertas, lo absorbe la plataforma). En créditos con\ndécimas (1 crédito = COP 10)."
       },
       "CreditByAgent": {
         "properties": {

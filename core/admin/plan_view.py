@@ -76,7 +76,8 @@ async def credito_del_mes(
     except Exception as exc:
         log.warning("billing_credit_failed", tenant_id=str(tenant_id), error=type(exc).__name__)
         return None
-    # Mismo reparto que el turno (`creditos._saldo_del_mes`): mes → acumulado → recargas (ADR-0209 §2).
+    # Mismo reparto que el turno (`creditos._saldo_del_mes`): mes → acumulado → bonificaciones → recargas
+    # (ADR-0209 §2, ADR-0213 §2).
     reparto = repartir(consumo.total, (plan.monthly_credits if plan else None) or 0, abonos)
     return {
         "balance": {
@@ -84,9 +85,11 @@ async def credito_del_mes(
             "month": float(reparto.mes),
             "accumulated": float(reparto.acumulado),
             "accumulated_expires_at": reparto.acumulado_vence_en,
+            "bonuses": float(reparto.bonificaciones),
             "top_ups": float(reparto.recargas),
             "used_month": float(reparto.usado_mes),
             "used_accumulated": float(reparto.usado_acumulado),
+            "used_bonuses": float(reparto.usado_bonificaciones),
             "used_top_ups": float(reparto.usado_recargas),
             "over_balance": float(reparto.sobre_el_saldo),
         },
