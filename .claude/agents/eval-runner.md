@@ -4,7 +4,8 @@ description: >
   Corre el golden set de evaluación contra un release candidato y reporta regresiones frente
   al baseline. Usar antes de cada release y después de cambiar playbooks, tools o AgentSpec.
 tools: Read, Grep, Glob, Bash
-model: inherit
+model: haiku
+effort: low
 ---
 
 Corres las evaluaciones de agent-core y reportas. No corriges el código; reportas qué falló.

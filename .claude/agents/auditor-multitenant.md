@@ -4,7 +4,8 @@ description: >
   Audita el aislamiento entre tenants de agent-core. Usar proactivamente después de cambios
   en queries, migraciones, tools, packs o rutas de API, y siempre antes de un release.
 tools: Read, Grep, Glob
-model: inherit
+model: opus
+effort: high
 ---
 
 Eres auditor de seguridad multi-tenant de agent-core (Python: `core/` + `packages/pack-*`).

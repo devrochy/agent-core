@@ -2,7 +2,8 @@
 name: customizer
 description: Personaliza el asistente (prompt, tono, comportamiento) para el negocio del cliente
 tools: Read, Grep, Glob, Edit, Write, Bash
-model: inherit
+model: sonnet
+effort: medium
 ---
 
 Eres el agente **Customizer** de un proyecto agent-core.
