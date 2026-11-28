@@ -1,9 +1,11 @@
 """Cierre del ciclo de créditos: arrastre de abonos y acumulación del sobrante (ADR-0209 §3, HU-BILL-22).
 
 Al cerrar un ciclo se reparte lo consumido con el mismo orden que el saldo (`creditos.repartir`: mes →
-acumulado → recargas) y se inserta para el ciclo siguiente, en `credit_grants`:
+acumulado → bonificaciones → recargas) y se inserta para el ciclo siguiente, en `credit_grants`:
 
-- lo que queda de cada **recarga**, con su mismo `origen` (no vence);
+- lo que queda de cada **recarga** y de cada **bonificación** (créditos de regalo, ADR-0213 §3), con su
+  mismo `origen` (no vencen). Con la suscripción cancelada o vencida el cron sigue cerrando el ciclo, así
+  que las dos se conservan igual y vuelven a contar al reactivar;
 - lo que queda de cada **acumulado** con `vence_en >= fin del ciclo siguiente`, con su `origen` y su
   `vence_en`;
 - el **sobrante del mes** como `acumulado` nuevo si el plan acumula (`features.acumulable_meses > 0`) y
@@ -46,6 +48,7 @@ class CierreDeCiclo:
     medido: bool  # False: no había abonos ni nada que acumular (no se midió el ledger)
     insertados: int = 0
     recargas: Decimal = Decimal(0)
+    bonificaciones: Decimal = Decimal(0)
     acumulado: Decimal = Decimal(0)  # arrastrado + sobrante nuevo
 
 
@@ -117,6 +120,7 @@ async def cerrar_ciclo(
     )
     insertados = int(resultado.rowcount or 0)
     recargas = sum((Decimal(str(f["creditos"])) for f in filas if f["tipo"] == "recarga"), Decimal(0))
+    bonificaciones = sum((Decimal(str(f["creditos"])) for f in filas if f["tipo"] == "bonificacion"), Decimal(0))
     acumulado = sum((Decimal(str(f["creditos"])) for f in filas if f["tipo"] == "acumulado"), Decimal(0))
     if insertados:
         log.info(
@@ -126,10 +130,13 @@ async def cerrar_ciclo(
             siguiente=siguiente_inicio.isoformat(),
             insertados=insertados,
             recargas=float(recargas),
+            bonificaciones=float(bonificaciones),
             acumulado=float(acumulado),
             colchon=float(reparto.sobre_el_saldo),
         )
-    return CierreDeCiclo(medido=True, insertados=insertados, recargas=recargas, acumulado=acumulado)
+    return CierreDeCiclo(
+        medido=True, insertados=insertados, recargas=recargas, bonificaciones=bonificaciones, acumulado=acumulado
+    )
 
 
 def meses_que_acumula(plan_id: str | None, status: str | None) -> int:

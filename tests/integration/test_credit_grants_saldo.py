@@ -413,9 +413,11 @@ async def test_admin_plan_muestra_el_saldo_desglosado(app_client) -> None:
         "total": 43_000.5,
         "month": 40_000.0,
         "accumulated": 2_000.0,
+        "bonuses": 0.0,
         "top_ups": 1_000.5,
         "used_month": 40_000.0,
         "used_accumulated": 1_000.0,
+        "used_bonuses": 0.0,
         "used_top_ups": 0.0,
         "over_balance": 0.0,
     }

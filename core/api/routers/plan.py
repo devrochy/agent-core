@@ -93,7 +93,8 @@ class CreditUsage(BaseModel):
     # Playground del panel: consumo, gratuito restante y cobrado (null si no se pudo medir).
     playground: PlaygroundCredit | None = None
     # Saldo del ciclo desglosado (HU-BILL-22). `limit`/`percent` siguen siendo del crédito mensual del plan;
-    # `balance_percent` es lo usado sobre el saldo total (mes + acumulado + recargas). Null si no se midió.
+    # `balance_percent` es lo usado sobre el saldo total (mes + acumulado + regalos + recargas). Null si no
+    # se midió.
     balance: CreditBalance | None = None
     balance_percent: float | None = None
 
@@ -102,9 +103,10 @@ MAX_AGENTES_EN_CREDITO = 50
 
 
 class CreditBalance(BaseModel):
-    """Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22): el crédito del mes del plan más lo
-    acumulado (sobrante de ciclos anteriores, en Premium y Empresarial) y las recargas. Se gasta en ese
-    orden: mes, acumulado (el que vence antes primero) y recargas. `over_balance` es lo consumido por
+    """Saldo del ciclo desglosado (ADR-0209 §2 y §5, HU-BILL-22; ADR-0213 §10): el crédito del mes del plan
+    más lo acumulado (sobrante de ciclos anteriores, en Premium y Empresarial), las bonificaciones
+    («Regalos»: créditos de regalo por reportes aprobados, no vencen) y las recargas. Se gasta en ese
+    orden: mes, acumulado (el que vence antes primero), regalos y recargas. `over_balance` es lo consumido por
     encima del saldo (colchón de las conversaciones abiertas, lo absorbe la plataforma). En créditos con
     décimas (1 crédito = COP 10)."""
 
@@ -113,9 +115,12 @@ class CreditBalance(BaseModel):
     accumulated: float = 0
     # Vencimiento más próximo de lo acumulado que todavía queda (fin del último ciclo en que cuenta).
     accumulated_expires_at: datetime | None = None
+    # Créditos de regalo del ciclo («Regalos» en el panel, ADR-0213 §10). Entran en `total`.
+    bonuses: float = 0
     top_ups: float = 0
     used_month: float = 0
     used_accumulated: float = 0
+    used_bonuses: float = 0
     used_top_ups: float = 0
     over_balance: float = 0
 
