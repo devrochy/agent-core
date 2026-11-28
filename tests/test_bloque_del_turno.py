@@ -109,3 +109,20 @@ def test_la_clave_incluye_el_ancla_solo_con_bloque_del_turno() -> None:
     assert con.sistema == sin.sistema
     assert con.clave != sin.clave
     assert _pedido(["fijo", BloqueDelTurno("dinámico", 1)]).clave != con.clave
+
+
+# ---------------------------------------------------------------- tools del turno
+def test_el_resumen_de_tools_lleva_solo_los_nombres() -> None:
+    from core.mcp.translator import skills_summary
+    from core.mcp.types import MCPTool
+
+    tools = [
+        MCPTool(name="ver_agenda", description="Descripción larga que ya va en el esquema.", parameters={}, handler=_sin_uso),
+        MCPTool(name="crear_cita", description="Otra descripción larga.", parameters={}, handler=_sin_uso),
+    ]
+    assert skills_summary(tools) == "Puedes usar estas herramientas: ver_agenda, crear_cita."
+    assert skills_summary([]) == ""
+
+
+async def _sin_uso(*_args: object, **_kwargs: object) -> dict[str, object]:
+    return {}

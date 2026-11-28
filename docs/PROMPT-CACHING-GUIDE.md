@@ -74,8 +74,9 @@ porcentaje cacheado.
 - Cualquier dato con fecha/hora/estado
 - El aviso de las etapas del flujo sin herramientas disponibles en el turno
 
-Las tools del turno **no** se repiten aquí: el modelo ya las ve, con su descripción, en el
-esquema de funciones.
+De las tools del turno van **solo los nombres**: la descripción ya viaja en el esquema de
+funciones. La lista sí hace falta, porque sin ella el modelo llama tools que los bloques
+fijos nombran pero la etapa no ofrece.
 
 ## Checklist al tocar el prompt
 

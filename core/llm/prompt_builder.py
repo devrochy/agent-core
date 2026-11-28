@@ -78,6 +78,7 @@ class PromptContext:
     max_length: int = 500
     brand_voice: str = ""
     flow_summary: str = ""            # flujo de atención del tenant (ADR-0054)
+    active_skills_summary: str = ""   # nombres de las tools que se ofrecen en este turno
     recalled_memories: list[str] = field(default_factory=list)  # Capa 3 (RAG)
     entity_profile: str = ""          # Capa 2 (perfil del cliente)
     relacion: str = ""                # ficha de la relación con cada módulo (HU-CRM-14); "" sin datos
@@ -173,13 +174,15 @@ async def _render_playbook(
 
 
 def bloque_dinamico(ctx: PromptContext) -> str:
-    """El último bloque del prompt: el contexto dinámico del turno (perfil, memorias,
+    """El último bloque del prompt: el contexto dinámico del turno (tools del turno, perfil, memorias,
     referencias, tarjeta de estado y la fecha y hora al final). Puro. Lo usa `build_system_blocks`
     y, con el motor activo, el loop para refrescar solo este bloque cuando la etapa cambia a mitad
     del turno (adenda 2026-10-13 de ADR-0113): el prefijo cacheado no se toca."""
-    # Las tools del turno no se repiten aquí: el modelo ya las ve con su descripción en el esquema
-    # de funciones (~1k tokens sin caché por llamada que se cobraban dos veces).
+    # Solo los nombres de las tools del turno: la descripción ya viaja en el esquema de funciones.
+    # Sin la lista, el modelo llamaba tools que los bloques fijos nombran pero esta etapa no ofrece.
     dynamic_parts: list[str] = []
+    if ctx.active_skills_summary:
+        dynamic_parts.append(f"## Capacidades activas en este turno\n{ctx.active_skills_summary}")
     if ctx.entity_profile:
         # Ya serializado y escapado por `core/memory/memoria_en_prompt.py` (rótulos en su playbook).
         dynamic_parts.append(ctx.entity_profile)

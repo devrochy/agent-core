@@ -17,3 +17,10 @@ def to_llm_schemas(tools: list[MCPTool]) -> list[LLMToolSchema]:
         for t in tools
     ]
 
+
+def skills_summary(tools: list[MCPTool]) -> str:
+    """Los nombres de las tools activas, para el bloque dinámico del system prompt. Sin descripción:
+    la del esquema de funciones basta y repetirla costaba ~1k tokens sin caché por llamada."""
+    if not tools:
+        return ""
+    return "Puedes usar estas herramientas: " + ", ".join(t.name for t in tools) + "."

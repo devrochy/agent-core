@@ -70,7 +70,7 @@ from core.llm.prompt_builder import (
 )
 from core.llm.types import BloqueDelTurno, LLMMessage, LLMToolCall
 from core.mcp.host import ejecutar_tool, mcp_host, new_tool_context
-from core.mcp.translator import to_llm_schemas
+from core.mcp.translator import skills_summary, to_llm_schemas
 from core.mcp.types import GuardrailResult, ScopedHttp
 from core.memory import entity as entity_memory
 from core.memory import notas as notas_del_equipo
@@ -509,6 +509,7 @@ async def _procesar_turno(conversation_id: uuid.UUID, latest_message: str, costo
         max_length=spec.persona.maxLength,
         brand_voice=app_settings.brand_voice if app_settings else "",
         flow_summary=flow_summary,
+        active_skills_summary=skills_summary(active_tools),
         recalled_memories=recalled,
         entity_profile=entity_memory.profile_to_prompt(profile),
         relacion=relacion,
@@ -798,9 +799,11 @@ async def _procesar_turno(conversation_id: uuid.UUID, latest_message: str, costo
             if motor is not None and await motor.tras_lote():
                 active_tools = motor.herramientas()
                 tool_schemas = to_llm_schemas(active_tools) if routing.allow_tools else None
-                # Adenda 2026-10-13: y ve la tarjeta vigente (solo el bloque dinámico, el último; el
-                # prefijo cacheado y `contexto_urls` no cambian). Las tools vigentes van en su esquema.
-                prompt_ctx = dataclasses.replace(prompt_ctx, state_card=motor.tarjeta)
+                # Adenda 2026-10-13: y ve la tarjeta y las capacidades vigentes (solo el bloque
+                # dinámico, el último; el prefijo cacheado y `contexto_urls` no cambian).
+                prompt_ctx = dataclasses.replace(
+                    prompt_ctx, state_card=motor.tarjeta, active_skills_summary=skills_summary(active_tools)
+                )
                 system_blocks = [*system_blocks[:-1], BloqueDelTurno(bloque_dinamico(prompt_ctx), ancla_del_turno)]
             if motor is not None and tope < techo and all(
                 motor.es_comando(tc.name) for tc in response.tool_calls
