@@ -73,10 +73,12 @@ async def _negocio(*, con_ciclo: bool = True) -> uuid.UUID:
             .values(
                 plan_id="basic",
                 status="active",
-                period_start=inicio if con_ciclo else None,
+                period_start=inicio,
                 period_end=inicio + timedelta(days=60),
                 dia_ancla=inicio.day,
                 trial_ends_at=None,
+                # `period_start` es NOT NULL: «sin ciclo» es no tener suscripción viva.
+                deleted_at=None if con_ciclo else datetime.now(UTC),
             )
         )
     return tid

@@ -209,16 +209,7 @@ async def _detalle(report_id: uuid.UUID, reporte: dict[str, Any] | None = None) 
     async with tenant_scope(tenant_id):
         async with get_session() as session:
             if reporte is None:
-                reporte = (
-                    await session.execute(
-                        text(
-                            "SELECT id, tenant_id, autor_admin_id, tipo, area, titulo, descripcion, estado, "
-                            "revisado_por, tomado_en, decidido_en, motivo_codigo, motivo, nota_interna, "
-                            "creditos_otorgados, duplicado_de, created_at FROM feedback_reports WHERE id = :id"
-                        ),
-                        {"id": report_id},
-                    )
-                ).mappings().first()
+                reporte = await revision.leer_reporte(session, report_id)
                 if reporte is None:
                     raise ApiError.not_found("No existe ese reporte.")
             adjuntos = await _adjuntos(session, report_id)

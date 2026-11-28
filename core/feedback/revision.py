@@ -136,7 +136,7 @@ async def _negocio_o_404(report_id: uuid.UUID) -> uuid.UUID:
     return tenant_id
 
 
-async def _leer(session, report_id: uuid.UUID) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
+async def leer_reporte(session, report_id: uuid.UUID) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
     fila = (
         await session.execute(text(f"SELECT {_COLUMNAS} FROM feedback_reports WHERE id = :id"), {"id": report_id})
     ).mappings().first()
@@ -171,7 +171,7 @@ async def tomar(report_id: uuid.UUID, *, revisor_id: uuid.UUID, revisor_email: s
             )
             repetido = fila is None
             if fila is None:
-                fila = await _leer(session, report_id)
+                fila = await leer_reporte(session, report_id)
                 if fila is None:
                     raise _no_encontrado()
                 if fila["estado"] != "en_revision":
@@ -250,7 +250,7 @@ async def aprobar(
                     text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
                     {"k": f"billing:creditos:{tenant_id}"},
                 )
-                actual = await _leer(session, report_id)
+                actual = await leer_reporte(session, report_id)
                 if actual is None:
                     raise _no_encontrado()
                 if actual["estado"] not in ESTADOS_ABIERTOS:
@@ -281,7 +281,7 @@ async def aprobar(
                 )
                 if fila is None:
                     # Lo decidió un rechazo concurrente (el rechazo no toma el lock del saldo).
-                    otro = await _leer(session, report_id)
+                    otro = await leer_reporte(session, report_id)
                     raise _ya_decidido(otro["estado"] if otro else "desconocido")
 
                 abono = await acreditar_bonificacion(
@@ -373,7 +373,7 @@ async def rechazar(
                 },
             )
             if fila is None:
-                actual = await _leer(session, report_id)
+                actual = await leer_reporte(session, report_id)
                 if actual is None:
                     raise _no_encontrado()
                 if es_mismo_rechazo(actual, revisor_id, motivo_codigo):
@@ -408,6 +408,7 @@ __all__ = [
     "aprobar",
     "es_misma_aprobacion",
     "es_mismo_rechazo",
+    "leer_reporte",
     "negocio_del_reporte",
     "rechazar",
     "tomar",
