@@ -241,7 +241,10 @@ async def test_acreditar_bonificacion_es_idempotente_en_el_ciclo() -> None:
     assert await _acreditar(tid, f"feedback:{uuid.uuid4()}", 1_000, ahora) == "acreditada"
     filas = await _abonos(tid)
     # El ciclo es el inicio de la ventana actual, no el instante de la aprobación.
-    assert [(f[0], f[1], f[2]) for f in filas] == [(OCT, "bonificacion", D("1000.0")), (OCT, "bonificacion", D("5000.0"))]
+    # `_abonos` ordena por `origen`, que aquí es un uuid al azar: se compara ordenado por monto.
+    assert sorted((f[0], f[1], f[2]) for f in filas) == [
+        (OCT, "bonificacion", D("1000.0")), (OCT, "bonificacion", D("5000.0")),
+    ]
     assert (await _saldo(tid, ahora)).limite == D(1_500 + 6_000)  # Free: 1.500 al mes + 6.000 de regalo
 
 
