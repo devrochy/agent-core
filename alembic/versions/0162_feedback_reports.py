@@ -20,9 +20,12 @@ apaga los triggers con `session_replication_role`; la carpeta `<slug>/feedback/`
 
 Bandeja entre negocios (ADR-0012, patrón de 0033): dos funciones `SECURITY DEFINER` de solo lectura que devuelven
 **solo** ids y tenants; el contenido se lee después bajo `tenant_scope`. `REVOKE` a PUBLIC y `GRANT EXECUTE` solo a
-`app_runtime`. Las migraciones corren con un dueño `BYPASSRLS` (0148), así que la RLS forzada no las afecta.
+`app_runtime`. Las migraciones corren con un dueño `BYPASSRLS` (0148), así que la RLS forzada no las afecta. Como
+`app_runtime` es el rol de TODAS las peticiones, el «solo master» lo pone la aplicación (`actua_como_master` en el
+router de HU-FB-04), igual que en 0033.
 
-Permisos de `app_runtime`: reportes SELECT, INSERT y UPDATE (la revisión, HU-FB-04); adjuntos SELECT e INSERT.
+Permisos de `app_runtime`: reportes SELECT, INSERT y UPDATE solo de las columnas de la revisión (HU-FB-04): el autor,
+el negocio, la clave y la fecha no se reescriben; adjuntos SELECT e INSERT.
 
 Aditiva: tablas nuevas y vacías, sin locks sobre tablas existentes. **Rollback:** primero el código anterior (o la
 bandera `FEEDBACK_ENABLED` apagada), después el `downgrade`, que borra las tablas con sus reportes; los archivos de
@@ -199,9 +202,9 @@ def _funciones() -> None:
             p_estado text, p_tipo text, p_tenant uuid, p_cursor_ts timestamptz, p_cursor_id uuid, p_limit integer
         )
         RETURNS TABLE(id uuid, tenant_id uuid, created_at timestamptz, estado text, tipo text)
-        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
             SELECT r.id, r.tenant_id, r.created_at, r.estado, r.tipo
-            FROM feedback_reports r
+            FROM public.feedback_reports r
             WHERE (p_estado IS NULL OR r.estado = p_estado)
               AND (p_tipo IS NULL OR r.tipo = p_tipo)
               AND (p_tenant IS NULL OR r.tenant_id = p_tenant)
@@ -213,8 +216,8 @@ def _funciones() -> None:
         -- Negocio de un reporte, o null si no existe: el detalle de la bandeja y la validación de `duplicado_de`.
         CREATE OR REPLACE FUNCTION feedback_reporte_tenant(p_id uuid)
         RETURNS uuid
-        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-            SELECT r.tenant_id FROM feedback_reports r WHERE r.id = p_id;
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+            SELECT r.tenant_id FROM public.feedback_reports r WHERE r.id = p_id;
         $$;
 
         REVOKE ALL ON FUNCTION {_BANDEJA} FROM PUBLIC;
@@ -234,7 +237,11 @@ def upgrade() -> None:
     op.execute("SET LOCAL lock_timeout = '5s'")
     _tablas()
     _inmutabilidad()
-    _rls("feedback_reports", "SELECT, INSERT, UPDATE")
+    _rls(
+        "feedback_reports",
+        "SELECT, INSERT, UPDATE (estado, revisado_por, tomado_en, decidido_en, motivo_codigo, motivo, nota_interna, "
+        "creditos_otorgados, duplicado_de, updated_at)",
+    )
     _rls("feedback_attachments", "SELECT, INSERT")
     _funciones()
 
