@@ -29,7 +29,7 @@ def upgrade() -> None:
         f"""
         CREATE OR REPLACE FUNCTION feedback_pendientes()
         RETURNS TABLE(estado text, n bigint)
-        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+        LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
             SELECT r.estado, count(*)
             FROM feedback_reports r
             WHERE r.estado IN ('recibido', 'en_revision')

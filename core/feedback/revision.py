@@ -394,7 +394,8 @@ async def rechazar(
         await _auditar(
             revisor_email,
             "feedback.rechazado",
-            {"report_id": str(report_id), "motivo_codigo": motivo_codigo, "duplicado_de": str(duplicado_de) if duplicado_de else None},
+            # Sin el id del original: puede ser de otro negocio y esta fila queda en el audit de este (ADR-0213 §8).
+            {"report_id": str(report_id), "motivo_codigo": motivo_codigo, "es_duplicado": duplicado_de is not None},
             {"estado": "rechazado"},
         )
     return Resultado(reporte=fila, repetido=False)
