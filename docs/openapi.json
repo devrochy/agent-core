@@ -70652,6 +70652,13 @@
             ],
             "title": "Ultima Actividad"
           },
+          "conexiones": {
+            "items": {
+              "$ref": "#/components/schemas/LeadConnection"
+            },
+            "type": "array",
+            "title": "Conexiones"
+          },
           "extras": {
             "additionalProperties": true,
             "type": "object",

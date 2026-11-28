@@ -133,6 +133,12 @@ class LeadAgentOut(BaseModel):
     columns: list[LeadColumn]
 
 
+class LeadConnection(BaseModel):
+    id: uuid.UUID
+    label: str
+    channel: str
+
+
 class LeadRow(BaseModel):
     id: uuid.UUID
     cliente: str
@@ -142,6 +148,8 @@ class LeadRow(BaseModel):
     alta: str
     # Último mensaje de cualquiera de sus conversaciones (ISO 8601 con zona); `None` si no hay.
     ultima_actividad: datetime | None = None
+    # Conexiones por las que escribió el cliente (puede ser más de una).
+    conexiones: list[LeadConnection] = Field(default_factory=list)
     extras: dict[str, Any]
     perfil: LeadPerfilOut
     agentes: list[str]
@@ -170,12 +178,6 @@ class LeadsResponse(BaseModel):
     page: int
     page_size: int
     has_more: bool
-
-
-class LeadConnection(BaseModel):
-    id: uuid.UUID
-    label: str
-    channel: str
 
 
 class LeadFact(BaseModel):
@@ -623,6 +625,39 @@ def _ultima_actividad(tenant_id: uuid.UUID, customer_ids: list[uuid.UUID] | None
     return query
 
 
+async def _conexiones_de_clientes(
+    tenant_id: uuid.UUID, customer_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[LeadConnection]]:
+    """Conexiones por las que escribió cada cliente de la página, sin repetir."""
+    if not customer_ids:
+        return {}
+    async with get_session() as session:
+        filas = (
+            await session.execute(
+                select(
+                    Conversation.customer_id,
+                    ChannelConnection.id,
+                    ChannelConnection.label,
+                    ChannelConnection.channel,
+                )
+                .join(ChannelConnection, ChannelConnection.id == Conversation.connection_id)
+                .where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.customer_id.in_(customer_ids),
+                    Conversation.deleted_at.is_(None),
+                    ChannelConnection.deleted_at.is_(None),
+                )
+                .order_by(ChannelConnection.label)
+            )
+        ).all()
+    salida: dict[uuid.UUID, list[LeadConnection]] = {}
+    for customer_id, connection_id, label, channel in filas:
+        conexiones = salida.setdefault(customer_id, [])
+        if not any(c.id == connection_id for c in conexiones):
+            conexiones.append(LeadConnection(id=connection_id, label=label, channel=channel))
+    return salida
+
+
 async def _ordenar(
     query: Select[Any], orden: Orden, tenant_id: uuid.UUID, enabled: set[str] | None = None
 ) -> Select[Any]:
@@ -858,6 +893,7 @@ async def list_leads(
                 cid: ultima
                 for cid, ultima in (await session.execute(_ultima_actividad(tenant_id, ids_pagina))).all()
             }
+    conexiones = await _conexiones_de_clientes(tenant_id, ids_pagina)
     contadores = (
         await _facetas(
             tenant_id,
@@ -886,6 +922,7 @@ async def list_leads(
                 bot_paused=bool(cliente.bot_paused),
                 alta=cliente.created_at.strftime("%Y-%m-%d") if cliente.created_at else "—",
                 ultima_actividad=actividad.get(cliente.id),
+                conexiones=conexiones.get(cliente.id, []),
                 extras=extras,
                 perfil=perfil_cliente_,
                 agentes=_agentes_de_la_fila(providers, extras, meta, cliente.id, con_datos),
