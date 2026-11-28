@@ -331,7 +331,7 @@ async def test_el_loop_marca_el_resultado_como_escalado() -> None:
 
     from core.orchestrator import loop
 
-    fuente = inspect.getsource(loop.process_conversation)
+    fuente = inspect.getsource(loop._procesar_turno)
     assert "escalated=bloqueo.escalado" in fuente
 
 
