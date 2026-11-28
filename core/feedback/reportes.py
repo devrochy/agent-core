@@ -18,7 +18,7 @@ import hashlib
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from sqlalchemy import and_, func, or_, select
@@ -380,6 +380,7 @@ async def _detalle(tenant_id: uuid.UUID, reporte: FeedbackReport) -> dict[str, A
             .all()
         )
     salida = _base(reporte)
+    expira = datetime.now(UTC) + timedelta(seconds=URL_TTL_ADJUNTO)
     salida["adjuntos"] = [
         {
             "id": a.id,
@@ -387,6 +388,7 @@ async def _detalle(tenant_id: uuid.UUID, reporte: FeedbackReport) -> dict[str, A
             "bytes": a.bytes,
             "nombre_original": a.nombre_original,
             "url": almacenamiento.url(a.storage_key, ttl_s=URL_TTL_ADJUNTO),
+            "url_expira_en": expira,
         }
         for a in adjuntos
         if _clave_del_reporte(a.storage_key, slug, reporte.id)
@@ -448,7 +450,7 @@ async def listar_reportes(
                     ).all()
                 }
     return {
-        "items": [{**_base(f), "adjuntos": conteo.get(f.id, 0)} for f in filas],
+        "items": [{**_base(f), "adjuntos_total": conteo.get(f.id, 0)} for f in filas],
         "next_cursor": _cursor(filas[-1].created_at, filas[-1].id) if hay_mas and filas else None,
     }
 

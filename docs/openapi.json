@@ -2318,6 +2318,9 @@
               }
             }
           },
+          "404": {
+            "description": "Reportes apagados (`FEEDBACK_ENABLED`): ocultar la entrada del menú."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -2339,26 +2342,8 @@
         ],
         "summary": "Post Report",
         "description": "Envía un reporte de error, mejora o idea con evidencia. Idempotente por `Idempotency-Key`.",
-        "operationId": "post_report_api_v1_feedback_reports_post",
+        "operationId": "post_feedback_report",
         "parameters": [
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Obligatoria: una por formulario abierto.",
-              "title": "Idempotency-Key"
-            },
-            "description": "Obligatoria: una por formulario abierto."
-          },
           {
             "name": "X-Tenant-Id",
             "in": "header",
@@ -2390,6 +2375,18 @@
               ],
               "title": "X-Device-Id"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Una por envío del formulario; se repite solo en los reintentos de ese mismo envío.",
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
           }
         ],
         "requestBody": {
@@ -2397,7 +2394,7 @@
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_post_report_api_v1_feedback_reports_post"
+                "$ref": "#/components/schemas/Body_post_feedback_report"
               }
             }
           }
@@ -2427,7 +2424,7 @@
             "description": "`idempotency_key_requerida` o `idempotency_key_invalida`."
           },
           "404": {
-            "description": "Reportes apagados (`FEEDBACK_ENABLED`)."
+            "description": "Reportes apagados (`FEEDBACK_ENABLED`): ocultar la entrada del menú."
           },
           "409": {
             "description": "`idempotency_key_en_uso`: la clave es de un reporte de otro usuario."
@@ -2566,6 +2563,15 @@
               }
             }
           },
+          "400": {
+            "description": "`cursor_invalido`."
+          },
+          "403": {
+            "description": "`alcance_no_permitido`: `alcance=negocio` es solo para el propietario."
+          },
+          "404": {
+            "description": "Reportes apagados (`FEEDBACK_ENABLED`): ocultar la entrada del menú."
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -2642,6 +2648,9 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "`not_found`: no existe, es de otro usuario (sin ser propietario) o de otro negocio; o reportes apagados."
           },
           "422": {
             "description": "Validation Error",
@@ -90428,57 +90437,6 @@
         ],
         "title": "PruebasVolverIn"
       },
-      "Body_post_report_api_v1_feedback_reports_post": {
-        "properties": {
-          "tipo": {
-            "type": "string",
-            "title": "Tipo",
-            "description": "`error`, `mejora` o `idea`."
-          },
-          "area": {
-            "type": "string",
-            "maxLength": 80,
-            "title": "Area",
-            "description": "Clave de un área de `GET /feedback/catalogo`."
-          },
-          "titulo": {
-            "type": "string",
-            "maxLength": 120,
-            "minLength": 3,
-            "title": "Titulo"
-          },
-          "descripcion": {
-            "type": "string",
-            "maxLength": 2000,
-            "minLength": 10,
-            "title": "Descripcion"
-          },
-          "adjuntos": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string",
-                  "contentMediaType": "application/octet-stream"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Adjuntos",
-            "description": "Hasta 5: imágenes o PDF."
-          }
-        },
-        "type": "object",
-        "required": [
-          "tipo",
-          "area",
-          "titulo",
-          "descripcion"
-        ],
-        "title": "Body_post_report_api_v1_feedback_reports_post"
-      },
       "FeedbackAdjunto": {
         "properties": {
           "id": {
@@ -90508,7 +90466,13 @@
           "url": {
             "type": "string",
             "title": "Url",
-            "description": "URL firmada de vida corta (10 minutos)."
+            "description": "URL firmada de vida corta: no se guarda; se vuelve a pedir el detalle al abrirla."
+          },
+          "url_expira_en": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Url Expira En",
+            "description": "Cuándo deja de servir `url` (10 minutos después de emitida)."
           }
         },
         "type": "object",
@@ -90517,7 +90481,8 @@
           "mimetype",
           "bytes",
           "nombre_original",
-          "url"
+          "url",
+          "url_expira_en"
         ],
         "title": "FeedbackAdjunto"
       },
@@ -90673,7 +90638,14 @@
           "motivo_codigo": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "duplicado",
+                  "no_reproducible",
+                  "fuera_de_alcance",
+                  "informacion_insuficiente",
+                  "otro"
+                ]
               },
               {
                 "type": "null"
@@ -90795,7 +90767,14 @@
           "motivo_codigo": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "enum": [
+                  "duplicado",
+                  "no_reproducible",
+                  "fuera_de_alcance",
+                  "informacion_insuficiente",
+                  "otro"
+                ]
               },
               {
                 "type": "null"
@@ -90845,10 +90824,10 @@
             ],
             "title": "Decidido En"
           },
-          "adjuntos": {
+          "adjuntos_total": {
             "type": "integer",
-            "title": "Adjuntos",
-            "description": "Cuántos adjuntos tiene."
+            "title": "Adjuntos Total",
+            "description": "Cuántos adjuntos tiene (la lista viene en el detalle)."
           }
         },
         "type": "object",
@@ -90865,9 +90844,65 @@
           "creditos_otorgados",
           "created_at",
           "decidido_en",
-          "adjuntos"
+          "adjuntos_total"
         ],
         "title": "FeedbackReporteResumen"
+      },
+      "Body_post_feedback_report": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "error",
+              "mejora",
+              "idea"
+            ],
+            "title": "Tipo",
+            "description": "`error`, `mejora` o `idea`."
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Area",
+            "description": "Clave de un área de `GET /feedback/catalogo`."
+          },
+          "titulo": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "Titulo"
+          },
+          "descripcion": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 10,
+            "title": "Descripcion"
+          },
+          "adjuntos": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adjuntos",
+            "description": "Hasta 5: imágenes o PDF."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "area",
+          "titulo",
+          "descripcion"
+        ],
+        "title": "Body_post_feedback_report"
       }
     }
   }

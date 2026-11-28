@@ -41,6 +41,7 @@ router = APIRouter(prefix="/feedback", tags=["feedback"], dependencies=[Depends(
 
 Tipo = Literal["error", "mejora", "idea"]
 Estado = Literal["recibido", "en_revision", "aprobado", "rechazado"]
+MotivoCodigo = Literal["duplicado", "no_reproducible", "fuera_de_alcance", "informacion_insuficiente", "otro"]
 
 
 class FeedbackOpcion(BaseModel):
@@ -66,7 +67,8 @@ class FeedbackAdjunto(BaseModel):
     mimetype: str
     bytes: int
     nombre_original: str | None
-    url: str = Field(description="URL firmada de vida corta (10 minutos).")
+    url: str = Field(description="URL firmada de vida corta: no se guarda; se vuelve a pedir el detalle al abrirla.")
+    url_expira_en: datetime = Field(description="Cuándo deja de servir `url` (10 minutos después de emitida).")
 
 
 class _FeedbackBase(BaseModel):
@@ -77,7 +79,7 @@ class _FeedbackBase(BaseModel):
     titulo: str
     descripcion: str
     estado: Estado
-    motivo_codigo: str | None = Field(description="Por qué se rechazó (`duplicado`, `no_reproducible`, …).")
+    motivo_codigo: MotivoCodigo | None = Field(description="Por qué se rechazó (`duplicado`, `no_reproducible`, …).")
     motivo: str | None = Field(description="Explicación del revisor para el cliente.")
     creditos_otorgados: int | None = Field(description="Créditos de regalo, si se aprobó.")
     created_at: datetime
@@ -89,7 +91,7 @@ class FeedbackReporte(_FeedbackBase):
 
 
 class FeedbackReporteResumen(_FeedbackBase):
-    adjuntos: int = Field(description="Cuántos adjuntos tiene.")
+    adjuntos_total: int = Field(description="Cuántos adjuntos tiene (la lista viene en el detalle).")
 
 
 class FeedbackPagina(BaseModel):
@@ -97,10 +99,32 @@ class FeedbackPagina(BaseModel):
     next_cursor: str | None
 
 
+_APAGADO: dict[str, Any] = {"description": "Reportes apagados (`FEEDBACK_ENABLED`): ocultar la entrada del menú."}
+_ERRORES_LISTA: dict[int | str, dict[str, Any]] = {
+    400: {"description": "`cursor_invalido`."},
+    403: {"description": "`alcance_no_permitido`: `alcance=negocio` es solo para el propietario."},
+    404: _APAGADO,
+}
+_ERRORES_DETALLE: dict[int | str, dict[str, Any]] = {
+    404: {"description": "`not_found`: no existe, es de otro usuario (sin ser propietario) o de otro negocio; o reportes apagados."},
+}
+# La cabecera es obligatoria en el contrato; el código la recibe opcional para responder 400 propio (no 422).
+_CABECERA_IDEMPOTENCIA = {
+    "parameters": [
+        {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": True,
+            "description": "Una por envío del formulario; se repite solo en los reintentos de ese mismo envío.",
+            "schema": {"type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:-]{8,128}$"},
+        }
+    ]
+}
+
 _ERRORES_ENVIO: dict[int | str, dict[str, Any]] = {
     200: {"description": "Replay: la `Idempotency-Key` ya se usó; devuelve el reporte original.", "model": FeedbackReporte},
     400: {"description": "`idempotency_key_requerida` o `idempotency_key_invalida`."},
-    404: {"description": "Reportes apagados (`FEEDBACK_ENABLED`)."},
+    404: _APAGADO,
     409: {"description": "`idempotency_key_en_uso`: la clave es de un reporte de otro usuario."},
     413: {"description": "`adjunto_muy_grande` (8 MB por archivo) o `adjuntos_muy_grandes` (25 MB en total)."},
     422: {
@@ -122,7 +146,7 @@ def _error(exc: svc.ErrorFeedback) -> ApiError:
     return ApiError(exc.status, exc.code, exc.message, details=exc.details, headers=exc.headers)
 
 
-@router.get("/catalogo", response_model=FeedbackCatalogo)
+@router.get("/catalogo", response_model=FeedbackCatalogo, responses={404: _APAGADO})
 async def get_catalogo(principal: Annotated[Principal, Depends(get_principal)]) -> FeedbackCatalogo:
     """Tipos, áreas y límites del formulario de reporte."""
     return FeedbackCatalogo(
@@ -137,18 +161,25 @@ async def get_catalogo(principal: Annotated[Principal, Depends(get_principal)]) 
     )
 
 
-@router.post("/reports", status_code=201, response_model=FeedbackReporte, responses=_ERRORES_ENVIO)
+@router.post(
+    "/reports",
+    status_code=201,
+    response_model=FeedbackReporte,
+    responses=_ERRORES_ENVIO,
+    operation_id="post_feedback_report",
+    openapi_extra=_CABECERA_IDEMPOTENCIA,
+)
 async def post_report(
     response: Response,
     principal: Annotated[Principal, Depends(get_principal)],
-    tipo: Annotated[str, Form(description="`error`, `mejora` o `idea`.")],
+    tipo: Annotated[
+        str, Form(description="`error`, `mejora` o `idea`.", json_schema_extra={"enum": ["error", "mejora", "idea"]})
+    ],
     area: Annotated[str, Form(max_length=80, description="Clave de un área de `GET /feedback/catalogo`.")],
     titulo: Annotated[str, Form(min_length=3, max_length=120)],
     descripcion: Annotated[str, Form(min_length=10, max_length=2000)],
     adjuntos: Annotated[list[UploadFile] | None, File(description="Hasta 5: imágenes o PDF.")] = None,
-    idempotency_key: Annotated[
-        str | None, Header(alias="Idempotency-Key", description="Obligatoria: una por formulario abierto.")
-    ] = None,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key", include_in_schema=False)] = None,
 ) -> FeedbackReporte:
     """Envía un reporte de error, mejora o idea con evidencia. Idempotente por `Idempotency-Key`."""
     tenant_id = _tenant(principal)
@@ -183,7 +214,7 @@ async def post_report(
     return FeedbackReporte.model_validate(reporte)
 
 
-@router.get("/reports", response_model=FeedbackPagina)
+@router.get("/reports", response_model=FeedbackPagina, responses=_ERRORES_LISTA)
 async def list_reports(
     principal: Annotated[Principal, Depends(get_principal)],
     alcance: Annotated[Literal["mios", "negocio"], Query(description="`negocio` solo para el propietario.")] = "mios",
@@ -207,7 +238,7 @@ async def list_reports(
     return FeedbackPagina.model_validate(pagina)
 
 
-@router.get("/reports/{report_id}", response_model=FeedbackReporte)
+@router.get("/reports/{report_id}", response_model=FeedbackReporte, responses=_ERRORES_DETALLE)
 async def get_report(
     report_id: uuid.UUID,
     principal: Annotated[Principal, Depends(get_principal)],
