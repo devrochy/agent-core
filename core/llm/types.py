@@ -35,6 +35,32 @@ class LLMMessage:
     reasoning_content: str = ""
 
 
+class BloqueDelTurno(str):
+    """El bloque dinámico del turno (último de `system_blocks`), marcado para viajar detrás del
+    historial: justo antes de `messages[ancla]`, el mensaje del cliente de este turno.
+
+    Lleva la fecha y hora al minuto, la tarjeta y las memorias: cambia en cada turno. Delante del
+    historial, como antes, cortaba la caché por prefijo del proveedor justo antes del historial;
+    detrás, el historial de turnos anteriores entra al prefijo cacheado. Es un `str` para que los
+    llamadores y los dobles de prueba que leen `system_blocks` sigan funcionando igual; un
+    proveedor que no lo mueve (Anthropic) lo trata como el último bloque de sistema, como siempre.
+    """
+
+    ancla: int
+
+    def __new__(cls, texto: str, ancla: int) -> BloqueDelTurno:
+        bloque = super().__new__(cls, texto)
+        bloque.ancla = ancla
+        return bloque
+
+
+def separar_bloque_del_turno(system_blocks: list[str]) -> tuple[list[str], BloqueDelTurno | None]:
+    """Los bloques fijos y el bloque del turno, si el último lo es."""
+    if system_blocks and isinstance(system_blocks[-1], BloqueDelTurno):
+        return list(system_blocks[:-1]), system_blocks[-1]
+    return list(system_blocks), None
+
+
 @dataclass
 class LLMToolSchema:
     """Schema neutro de una tool (el MCP Translator lo genera desde MCPTool)."""

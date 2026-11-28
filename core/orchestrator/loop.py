@@ -68,7 +68,7 @@ from core.llm.prompt_builder import (
     bloque_dinamico,
     build_system_blocks,
 )
-from core.llm.types import LLMMessage, LLMToolCall
+from core.llm.types import BloqueDelTurno, LLMMessage, LLMToolCall
 from core.mcp.host import ejecutar_tool, mcp_host, new_tool_context
 from core.mcp.translator import skills_summary, to_llm_schemas
 from core.mcp.types import GuardrailResult, ScopedHttp
@@ -621,6 +621,11 @@ async def _procesar_turno(conversation_id: uuid.UUID, latest_message: str, costo
     # primero de la conversación.
     if not messages or messages[-1].role != "user" or messages[-1].content != latest_message:
         messages.append(LLMMessage(role="user", content=latest_message))
+    # El bloque dinámico viaja justo antes del mensaje del cliente de este turno, detrás del
+    # historial (adenda 2026-11-27 de ADR-0117): el historial anterior entra al prefijo cacheado.
+    # El ancla no se mueve en el turno: las vueltas con tools y los reintentos se agregan al final.
+    ancla_del_turno = len(messages) - 1
+    system_blocks = [*system_blocks[:-1], BloqueDelTurno(system_blocks[-1], ancla_del_turno)]
     all_tool_results: list[dict[str, Any]] = []
     # Un comando del hilo aplicado (HU-AOS-06) resuelve el turno aunque no sea una acción.
     hubo_comando_ok = False
@@ -799,7 +804,7 @@ async def _procesar_turno(conversation_id: uuid.UUID, latest_message: str, costo
                 prompt_ctx = dataclasses.replace(
                     prompt_ctx, state_card=motor.tarjeta, active_skills_summary=skills_summary(active_tools)
                 )
-                system_blocks = [*system_blocks[:-1], bloque_dinamico(prompt_ctx)]
+                system_blocks = [*system_blocks[:-1], BloqueDelTurno(bloque_dinamico(prompt_ctx), ancla_del_turno)]
             if motor is not None and tope < techo and all(
                 motor.es_comando(tc.name) for tc in response.tool_calls
             ):

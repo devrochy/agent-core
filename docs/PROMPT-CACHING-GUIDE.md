@@ -11,7 +11,7 @@ cuánto pagas por tokens de entrada.
 | 1 | Base (identidad + reglas de operación) | Byte-idéntico entre turnos | ✅ |
 | 2 | Tono (3 variantes fijas: calido/formal/divertido) | Fijo por variante | ✅ (compartible entre asistentes con el mismo tono) |
 | 3 | Voz de marca | Estable por negocio | ✅ |
-| 4 | Contexto dinámico (skills del turno + perfil + recall RAG + fecha y hora actual del negocio, siempre la última parte, ADR-0091) | CAMBIA cada turno | ❌ (por eso va al FINAL) |
+| 4 | Contexto dinámico (perfil + recall RAG + tarjeta + fecha y hora actual del negocio, siempre la última parte, ADR-0091) | CAMBIA cada turno | ❌ (va al FINAL; con DeepSeek, detrás del historial, justo antes del mensaje del cliente) |
 
 ## La regla de oro
 
@@ -35,6 +35,9 @@ dynamic_block = f"## Contexto del turno\nFecha actual: {today}"
 ### DeepSeek (default)
 Context caching **automático por prefijo**: no configuras nada, pero SOLO aplica si
 el prefijo (bloques 1-3 concatenados + primeros mensajes) es byte-idéntico.
+- El bloque 4 va como un segundo mensaje `system` justo antes del mensaje del cliente del
+  turno (`BloqueDelTurno`, adenda 2026-11-27 de ADR-0117): el historial de los turnos
+  anteriores queda dentro del prefijo cacheado.
 - Cache hit: ~10× más barato en tokens de entrada.
 - Verificación: campo `prompt_cache_hit_tokens` en la respuesta (OpenAI lo da en
   `prompt_tokens_details.cached_tokens`). El core lo registra como `cache_read_tokens` y lo
@@ -44,7 +47,9 @@ el prefijo (bloques 1-3 concatenados + primeros mensajes) es byte-idéntico.
 Una sola marca `cache_control: {type: "ephemeral"}`, en el **último bloque fijo** (el
 penúltimo de la lista: el último es el dinámico, que va sin marca). Con un solo bloque no
 hay marca. Así no se pasa del máximo de 4 marcas de la API, tenga los playbooks que tenga
-(adenda HU-AOS-35 de ADR-0117).
+(adenda HU-AOS-35 de ADR-0117). Con Anthropic el bloque 4 se queda en `system`: la API no
+acepta `system` entre los mensajes, y como texto del usuario quedaría pegado al del cliente
+(adenda 2026-11-27).
 - TTL 5 minutos, se renueva con cada hit.
 - Verificación: `cache_creation_input_tokens` (primera vez, va a
   `usage_ledger.cache_write_tokens`) y `cache_read_input_tokens` (hits, va a
@@ -65,10 +70,13 @@ porcentaje cacheado.
 
 ## Qué SÍ va en el bloque dinámico (4)
 
-- Resumen de skills activas del turno (cambia según el SkillRouter)
 - Perfil del cliente (Capa 2) y recall semántico (Capa 3)
 - Cualquier dato con fecha/hora/estado
 - El aviso de las etapas del flujo sin herramientas disponibles en el turno
+
+De las tools del turno van **solo los nombres**: la descripción ya viaja en el esquema de
+funciones. La lista sí hace falta, porque sin ella el modelo llama tools que los bloques
+fijos nombran pero la etapa no ofrece.
 
 ## Checklist al tocar el prompt
 
