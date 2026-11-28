@@ -356,3 +356,54 @@ def canary_lentitud(
         body=f"{_version(numero)} tarda más de un 30 % más en responder que la actual. No se retira por esto: decide antes de publicarla.",
     )
 
+
+
+# ------------------------------------------------------------------ reportes de clientes (SPEC-54)
+_MOTIVOS_DE_RECHAZO = {
+    "duplicado": "ya lo había reportado alguien más",
+    "no_reproducible": "no pudimos reproducirlo",
+    "fuera_de_alcance": "queda fuera de lo que cubre SolversHub",
+    "informacion_insuficiente": "le falta información para revisarlo",
+    "otro": "no aplica para el programa",
+}
+
+
+def _miles(n: int) -> str:
+    return f"{n:,}".replace(",", ".")
+
+
+def feedback_aprobado(report_id: uuid.UUID | str, autor_admin_id: uuid.UUID, creditos: int) -> NotificationSpec:
+    """El equipo de SolversHub aprobó un reporte y acreditó créditos de regalo al negocio (HU-FB-04).
+
+    Dirigida al autor (`audience_admin_id`): la ve aunque sea colaborador sin acceso a nada; el dueño y los
+    masters también. Sin título ni descripción del reporte en el texto: el detalle está en «Mis reportes»."""
+    return NotificationSpec(
+        event_key="core.feedback_approved",
+        category="sistema",
+        severity="success",
+        title="Reporte aprobado",
+        body=f"Gracias por tu reporte: el negocio recibió {_miles(creditos)} créditos de regalo.",
+        dedupe_key=f"feedback_aprobado:{report_id}",
+        section=None,
+        audience_admin_id=autor_admin_id,
+        data={"type": "core.feedback_approved", "reportId": str(report_id), "creditos": creditos},
+        target={"entity": "feedback_reporte", "id": str(report_id), "section": None},
+    )
+
+
+def feedback_rechazado(report_id: uuid.UUID | str, autor_admin_id: uuid.UUID, motivo_codigo: str) -> NotificationSpec:
+    """El equipo de SolversHub rechazó un reporte (HU-FB-04). El motivo escrito por el revisor se lee en el
+    detalle del reporte; aquí solo el código, y nunca a qué reporte duplica."""
+    razon = _MOTIVOS_DE_RECHAZO.get(motivo_codigo, _MOTIVOS_DE_RECHAZO["otro"])
+    return NotificationSpec(
+        event_key="core.feedback_rejected",
+        category="sistema",
+        severity="info",
+        title="Reporte revisado",
+        body=f"Revisamos tu reporte y esta vez no aplica para créditos: {razon}. Mira el detalle en «Mis reportes».",
+        dedupe_key=f"feedback_rechazado:{report_id}",
+        section=None,
+        audience_admin_id=autor_admin_id,
+        data={"type": "core.feedback_rejected", "reportId": str(report_id), "motivoCodigo": motivo_codigo},
+        target={"entity": "feedback_reporte", "id": str(report_id), "section": None},
+    )
