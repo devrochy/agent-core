@@ -101,6 +101,9 @@ PERFILES: dict[str, Perfil] = {
     "qa": Perfil("qa", ".plataforma/pruebas", _IMAGENES | {MIME_PDF}, 5 * MB, tenant_scoped=False),
     "media": Perfil("media", "media", _IMAGENES | _AUDIO | _VIDEO | {MIME_PDF}, 25 * MB),
     "comprobante": Perfil("comprobante", "comprobantes", _IMAGENES | {MIME_PDF}, 10 * MB),
+    # Evidencia de los reportes de clientes (ADR-0213 §5): `<slug>/feedback/<report_id>/`. El máximo de 5 por envío
+    # y 25 MB en total lo valida `core/feedback`.
+    "feedback": Perfil("feedback", "feedback", _IMAGENES | {MIME_PDF}, 8 * MB),
 }
 
 

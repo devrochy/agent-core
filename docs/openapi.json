@@ -2264,6 +2264,398 @@
         }
       }
     },
+    "/api/v1/feedback/catalogo": {
+      "get": {
+        "tags": [
+          "api",
+          "feedback"
+        ],
+        "summary": "Get Catalogo",
+        "description": "Tipos, áreas y límites del formulario de reporte.",
+        "operationId": "get_catalogo_api_v1_feedback_catalogo_get",
+        "parameters": [
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackCatalogo"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/feedback/reports": {
+      "post": {
+        "tags": [
+          "api",
+          "feedback"
+        ],
+        "summary": "Post Report",
+        "description": "Envía un reporte de error, mejora o idea con evidencia. Idempotente por `Idempotency-Key`.",
+        "operationId": "post_report_api_v1_feedback_reports_post",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Obligatoria: una por formulario abierto.",
+              "title": "Idempotency-Key"
+            },
+            "description": "Obligatoria: una por formulario abierto."
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_post_report_api_v1_feedback_reports_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReporte"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Replay: la `Idempotency-Key` ya se usó; devuelve el reporte original.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReporte"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`idempotency_key_requerida` o `idempotency_key_invalida`."
+          },
+          "404": {
+            "description": "Reportes apagados (`FEEDBACK_ENABLED`)."
+          },
+          "409": {
+            "description": "`idempotency_key_en_uso`: la clave es de un reporte de otro usuario."
+          },
+          "413": {
+            "description": "`adjunto_muy_grande` (8 MB por archivo) o `adjuntos_muy_grandes` (25 MB en total)."
+          },
+          "422": {
+            "description": "`adjunto_invalido` (tipo o firma), `demasiados_adjuntos` (más de 5), `adjunto_repetido`, `tipo_invalido`, `area_invalida`, `titulo_invalido`, `descripcion_invalida` o `validation_error`."
+          },
+          "429": {
+            "description": "`demasiados_reportes` o `demasiados_reportes_del_negocio`, con `Retry-After`."
+          },
+          "503": {
+            "description": "`almacenamiento_no_disponible`, con `Retry-After`; no se guardó nada."
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "api",
+          "feedback"
+        ],
+        "summary": "List Reports",
+        "description": "Mis reportes, del más nuevo al más viejo; el propietario puede ver todos los del negocio.",
+        "operationId": "list_reports_api_v1_feedback_reports_get",
+        "parameters": [
+          {
+            "name": "alcance",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "mios",
+                "negocio"
+              ],
+              "type": "string",
+              "description": "`negocio` solo para el propietario.",
+              "default": "mios",
+              "title": "Alcance"
+            },
+            "description": "`negocio` solo para el propietario."
+          },
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "recibido",
+                    "en_revision",
+                    "aprobado",
+                    "rechazado"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estado"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackPagina"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/feedback/reports/{report_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "feedback"
+        ],
+        "summary": "Get Report",
+        "description": "Detalle de un reporte con los enlaces firmados de su evidencia.",
+        "operationId": "get_report_api_v1_feedback_reports__report_id__get",
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Report Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReporte"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/search": {
       "get": {
         "tags": [
@@ -71682,7 +72074,7 @@
           "entity": {
             "type": "string",
             "title": "Entity",
-            "description": "conversacion, escalacion, lead, cliente, pedido, pago, suscripcion, cobro, cita, conexion, mensaje_fallido, cobranza"
+            "description": "conversacion, escalacion, lead, cliente, pedido, pago, suscripcion, cobro, cita, conexion, mensaje_fallido, cobranza, feedback_reporte"
           },
           "id": {
             "anyOf": [
@@ -90035,6 +90427,447 @@
           "confirmo_creditos"
         ],
         "title": "PruebasVolverIn"
+      },
+      "Body_post_report_api_v1_feedback_reports_post": {
+        "properties": {
+          "tipo": {
+            "type": "string",
+            "title": "Tipo",
+            "description": "`error`, `mejora` o `idea`."
+          },
+          "area": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Area",
+            "description": "Clave de un área de `GET /feedback/catalogo`."
+          },
+          "titulo": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 3,
+            "title": "Titulo"
+          },
+          "descripcion": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 10,
+            "title": "Descripcion"
+          },
+          "adjuntos": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adjuntos",
+            "description": "Hasta 5: imágenes o PDF."
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipo",
+          "area",
+          "titulo",
+          "descripcion"
+        ],
+        "title": "Body_post_report_api_v1_feedback_reports_post"
+      },
+      "FeedbackAdjunto": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "mimetype": {
+            "type": "string",
+            "title": "Mimetype"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "nombre_original": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre Original"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "URL firmada de vida corta (10 minutos)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "mimetype",
+          "bytes",
+          "nombre_original",
+          "url"
+        ],
+        "title": "FeedbackAdjunto"
+      },
+      "FeedbackCatalogo": {
+        "properties": {
+          "tipos": {
+            "items": {
+              "$ref": "#/components/schemas/FeedbackOpcion"
+            },
+            "type": "array",
+            "title": "Tipos"
+          },
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/FeedbackOpcion"
+            },
+            "type": "array",
+            "title": "Areas",
+            "description": "Secciones del panel más `otra`."
+          },
+          "limites": {
+            "$ref": "#/components/schemas/FeedbackLimites"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tipos",
+          "areas",
+          "limites"
+        ],
+        "title": "FeedbackCatalogo"
+      },
+      "FeedbackLimites": {
+        "properties": {
+          "max_adjuntos": {
+            "type": "integer",
+            "title": "Max Adjuntos"
+          },
+          "max_bytes_por_archivo": {
+            "type": "integer",
+            "title": "Max Bytes Por Archivo"
+          },
+          "max_bytes_total": {
+            "type": "integer",
+            "title": "Max Bytes Total"
+          },
+          "mimetypes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Mimetypes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "max_adjuntos",
+          "max_bytes_por_archivo",
+          "max_bytes_total",
+          "mimetypes"
+        ],
+        "title": "FeedbackLimites"
+      },
+      "FeedbackOpcion": {
+        "properties": {
+          "clave": {
+            "type": "string",
+            "title": "Clave"
+          },
+          "etiqueta": {
+            "type": "string",
+            "title": "Etiqueta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clave",
+          "etiqueta"
+        ],
+        "title": "FeedbackOpcion"
+      },
+      "FeedbackPagina": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FeedbackReporteResumen"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "FeedbackPagina"
+      },
+      "FeedbackReporte": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "autor_admin_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Autor Admin Id"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "error",
+              "mejora",
+              "idea"
+            ],
+            "title": "Tipo"
+          },
+          "area": {
+            "type": "string",
+            "title": "Area"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "recibido",
+              "en_revision",
+              "aprobado",
+              "rechazado"
+            ],
+            "title": "Estado"
+          },
+          "motivo_codigo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Codigo",
+            "description": "Por qué se rechazó (`duplicado`, `no_reproducible`, …)."
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Explicación del revisor para el cliente."
+          },
+          "creditos_otorgados": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creditos Otorgados",
+            "description": "Créditos de regalo, si se aprobó."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "decidido_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decidido En"
+          },
+          "adjuntos": {
+            "items": {
+              "$ref": "#/components/schemas/FeedbackAdjunto"
+            },
+            "type": "array",
+            "title": "Adjuntos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "autor_admin_id",
+          "tipo",
+          "area",
+          "titulo",
+          "descripcion",
+          "estado",
+          "motivo_codigo",
+          "motivo",
+          "creditos_otorgados",
+          "created_at",
+          "decidido_en",
+          "adjuntos"
+        ],
+        "title": "FeedbackReporte"
+      },
+      "FeedbackReporteResumen": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "autor_admin_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Autor Admin Id"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "error",
+              "mejora",
+              "idea"
+            ],
+            "title": "Tipo"
+          },
+          "area": {
+            "type": "string",
+            "title": "Area"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "recibido",
+              "en_revision",
+              "aprobado",
+              "rechazado"
+            ],
+            "title": "Estado"
+          },
+          "motivo_codigo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Codigo",
+            "description": "Por qué se rechazó (`duplicado`, `no_reproducible`, …)."
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo",
+            "description": "Explicación del revisor para el cliente."
+          },
+          "creditos_otorgados": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creditos Otorgados",
+            "description": "Créditos de regalo, si se aprobó."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "decidido_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decidido En"
+          },
+          "adjuntos": {
+            "type": "integer",
+            "title": "Adjuntos",
+            "description": "Cuántos adjuntos tiene."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "autor_admin_id",
+          "tipo",
+          "area",
+          "titulo",
+          "descripcion",
+          "estado",
+          "motivo_codigo",
+          "motivo",
+          "creditos_otorgados",
+          "created_at",
+          "decidido_en",
+          "adjuntos"
+        ],
+        "title": "FeedbackReporteResumen"
       }
     }
   }

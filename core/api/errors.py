@@ -38,6 +38,7 @@ class ApiError(Exception):
         message: str,
         fields: dict[str, str] | None = None,
         details: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -48,6 +49,8 @@ class ApiError(Exception):
         self.fields = fields
         # Estado real para el cliente (p. ej. la cuota: `used`, `limit`, `enabled`).
         self.details = details
+        # Cabeceras de la respuesta (p. ej. `Retry-After` en un 429).
+        self.headers = headers
 
     @classmethod
     def unauthorized(cls, message: str = "Sesión requerida.") -> ApiError:
@@ -75,7 +78,7 @@ async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
         error["fields"] = exc.fields
     if exc.details:
         error["details"] = exc.details
-    return JSONResponse({"error": error}, status_code=exc.status_code)
+    return JSONResponse({"error": error}, status_code=exc.status_code, headers=exc.headers)
 
 
 async def validation_error_handler(request: Request, exc: RequestValidationError) -> Response:
