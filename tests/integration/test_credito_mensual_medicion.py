@@ -262,6 +262,10 @@ async def test_la_migracion_0096_sube_y_baja() -> None:
     # no la ve; con xdist depende del reparto. El test prepara su propio estado.
     async with _como_dueno_de_tablas() as conn:
         await conn.execute(text("truncate usage_ledger"))
+        # Igual con 0161: no baja si hay abonos `bonificacion` (ADR-0213 §11), y la tabla es solo de inserción.
+        await conn.execute(text("ALTER TABLE credit_grants DISABLE TRIGGER credit_grants_inmutable"))
+        await conn.execute(text("DELETE FROM credit_grants WHERE tipo = 'bonificacion'"))
+        await conn.execute(text("ALTER TABLE credit_grants ENABLE TRIGGER credit_grants_inmutable"))
     try:
         _alembic("downgrade", "0095")
         assert await _columnas_de_credito() == set()
