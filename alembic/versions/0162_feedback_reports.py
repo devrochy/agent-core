@@ -31,8 +31,7 @@ Aditiva: tablas nuevas y vacías, sin locks sobre tablas existentes. **Rollback:
 bandera `FEEDBACK_ENABLED` apagada), después el `downgrade`, que borra las tablas con sus reportes; los archivos de
 `<slug>/feedback/` quedan en disco y se borran a mano.
 
-**Numeración:** 0162. La 0161 (bonificación en `credit_grants`, HU-FB-02) va en otro PR; mientras no esté en develop
-esta cuelga de la 0160 y se reencadena a la 0161 cuando esa se mergee.
+**Numeración:** 0162, después de `0161_credit_grants_bonificacion` (HU-FB-02, ADR-0213 §11).
 
 Revision ID: 0162
 Revises: 0161
