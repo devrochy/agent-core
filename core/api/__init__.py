@@ -38,6 +38,7 @@ from core.api.routers import (
     dlq,
     domain_events,
     escalations,
+    feedback,
     fiabilidad,
     files,
     invitations,
@@ -87,6 +88,7 @@ api_router.include_router(me.router)
 api_router.include_router(push.router)
 api_router.include_router(access.router)
 api_router.include_router(notifications.router)
+api_router.include_router(feedback.router)
 api_router.include_router(search.router)
 api_router.include_router(sync.router)
 api_router.include_router(audit.router)

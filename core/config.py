@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # Modelo FIJO de plataforma del cliente simulado y del juez (ADR-0212 §3): no depende del nivel de IA del agente ni
     # de la llave del negocio. Vacío = el modelo por defecto del proveedor de plataforma (`LLM_MODEL`).
     pruebas_modelo: str = Field(default="", alias="PRUEBAS_MODELO")
+    # Reportes de clientes (SPEC-54, ADR-0213). Apagada hasta las pruebas del dueño: sin ella las rutas de
+    # `/api/v1/feedback` responden 404.
+    feedback_enabled: bool = Field(default=False, alias="FEEDBACK_ENABLED")
     # HU-CRM-06 (ADR-0150): números (con o sin `+`) que pueden recibir un envío a un segmento
     # cuando el entorno no es producción real (desarrollo o test con QA_TESTERS_ENABLED). Vacío =
     # en esos entornos no sale ningún envío a un segmento. En producción no se mira.

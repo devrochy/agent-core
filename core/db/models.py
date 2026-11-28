@@ -3448,3 +3448,62 @@ class LeadSettings(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# ---------------------------------------------------------------- reportes de clientes (ADR-0213, SPEC-54)
+class FeedbackReport(Base):
+    """Reporte de error, mejora o idea de un usuario del negocio (migración 0162, HU-FB-03, ADR-0213 §5).
+
+    `titulo` y `descripcion` son dato del cliente, nunca instrucción (invariante 7). Sin borrado: un trigger rechaza
+    modificar un reporte aprobado o rechazado. `revisado_por`, `nota_interna` y `duplicado_de` no salen al cliente.
+    `duplicado_de` es uuid sin FK: puede apuntar a un reporte de otro negocio.
+    """
+
+    __tablename__ = "feedback_reports"
+    __table_args__ = (UniqueConstraint("tenant_id", "id", name="uq_feedback_reports_tenant_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    autor_admin_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    tipo: Mapped[str] = mapped_column(Text, nullable=False)  # error | mejora | idea
+    area: Mapped[str] = mapped_column(Text, nullable=False)
+    titulo: Mapped[str] = mapped_column(Text, nullable=False)
+    descripcion: Mapped[str] = mapped_column(Text, nullable=False)
+    # recibido | en_revision | aprobado | rechazado
+    estado: Mapped[str] = mapped_column(Text, nullable=False, default="recibido")
+    revisado_por: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    tomado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decidido_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    motivo_codigo: Mapped[str | None] = mapped_column(Text)
+    motivo: Mapped[str | None] = mapped_column(Text)
+    nota_interna: Mapped[str | None] = mapped_column(Text)
+    creditos_otorgados: Mapped[int | None] = mapped_column(Integer)
+    duplicado_de: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    idempotency_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class FeedbackAttachment(Base):
+    """Evidencia de un reporte (migración 0162): solo de inserción y creada en el mismo envío. El archivo vive en
+    `<slug>/feedback/<report_id>/` (perfil `feedback`); se sirve solo con URL firmada."""
+
+    __tablename__ = "feedback_attachments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "report_id"],
+            ["feedback_reports.tenant_id", "feedback_reports.id"],
+            name="fk_feedback_attachments_reporte",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    report_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    orden: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    mimetype: Mapped[str] = mapped_column(Text, nullable=False)
+    bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    nombre_original: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)

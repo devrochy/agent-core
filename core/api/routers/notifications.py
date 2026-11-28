@@ -34,7 +34,7 @@ class NotificationTarget(BaseModel):
     que gobierna la visibilidad (no una ruta). Un `entity` nuevo es aditivo: el cliente debe
     tener un valor por defecto."""
 
-    entity: str = Field(description="conversacion, escalacion, lead, cliente, pedido, pago, suscripcion, cobro, cita, conexion, mensaje_fallido, cobranza")
+    entity: str = Field(description="conversacion, escalacion, lead, cliente, pedido, pago, suscripcion, cobro, cita, conexion, mensaje_fallido, cobranza, feedback_reporte")
     id: str | None
     section: str | None
     # Filtro con el que abrir la lista del destino, en la forma de la propia lista (`clave:valor`,
