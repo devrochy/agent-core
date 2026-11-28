@@ -180,6 +180,11 @@ async def post_report(
         raise _error(exc) from exc
     if not creado:
         response.status_code = 200
+    else:
+        # Tras el commit y de mejor esfuerzo: el aviso al equipo de SolversHub (HU-FB-04) no tumba el envío.
+        from core.tasks import feedback as tareas_feedback
+
+        tareas_feedback.encolar_aviso(tenant_id, reporte["id"])
     return FeedbackReporte.model_validate(reporte)
 
 

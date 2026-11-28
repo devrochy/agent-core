@@ -440,3 +440,58 @@ async def test_bandera_apagada_404(app_client, tenant_setup, monkeypatch) -> Non
     monkeypatch.setattr(get_settings(), "feedback_enabled", False)
     t1, _ = tenant_setup
     assert (await app_client.get(BASE, headers=await _master(app_client, t1))).status_code == 404
+
+
+# ------------------------------------------------------------------- aviso y pendientes
+async def test_el_envio_encola_el_aviso_solo_la_primera_vez(app_client, monkeypatch) -> None:
+    import core.tasks.feedback as tareas
+
+    encolados: list[tuple[uuid.UUID, uuid.UUID]] = []
+    monkeypatch.setattr(tareas, "encolar_aviso", lambda t, r: encolados.append((t, r)))
+    tid = await _negocio()
+    dueno = await api_headers(app_client, tid, email=await _dueno(tid), password=PASSWORD_TESTER)
+    cabeceras = {**dueno, "Idempotency-Key": uuid.uuid4().hex}
+    datos = {"tipo": "mejora", "area": "otra", "titulo": "Exportar a Excel", "descripcion": "Quisiera bajar la lista."}
+    primero = await app_client.post("/api/v1/feedback/reports", data=datos, headers=cabeceras)
+    segundo = await app_client.post("/api/v1/feedback/reports", data=datos, headers=cabeceras)
+    assert (primero.status_code, segundo.status_code) == (201, 200), primero.text
+    assert encolados == [(tid, uuid.UUID(primero.json()["id"]))]
+
+
+async def test_el_aviso_lee_el_reporte_en_su_negocio(monkeypatch) -> None:
+    import core.gateway.system_email as system_email
+    from core.config import get_settings
+    from core.tasks.feedback import enviar_aviso
+
+    enviados: list[tuple[str, str, str]] = []
+
+    async def _correo(to, subject, body, html=None):
+        enviados.append((to, subject, body))
+        return "<id>"
+
+    monkeypatch.setattr(system_email, "send_system_email", _correo)
+    monkeypatch.setattr(get_settings(), "feedback_aviso_email", "equipo@solvershub.test")
+    tid = await _negocio()
+    rid = await _reporte(tid, await _admin_id(), tipo="idea")
+    assert await enviar_aviso(tid, rid) == "enviado"
+    ((to, asunto, cuerpo),) = enviados
+    assert to == "equipo@solvershub.test" and "idea" in asunto
+    assert "No carga el resumen" not in cuerpo  # el texto del cliente no viaja en el correo
+    assert await enviar_aviso(uuid.uuid4(), rid) == "no_existe"  # con otro negocio la RLS no lo deja ver
+
+
+async def test_feedback_pendientes_cuenta_entre_negocios_sin_scope(app_client, tenant_setup) -> None:
+    from core.observability.sondas import _feedback_pendientes
+
+    antes = await _feedback_pendientes()
+    a, b = await _negocio(), await _negocio()
+    autor = await _admin_id()
+    await _reporte(a, autor)
+    await _reporte(b, autor)
+    tomado = await _reporte(b, autor)
+    t1, _ = tenant_setup
+    r = await app_client.post(f"{BASE}/{tomado}/tomar", headers=await _master(app_client, t1))
+    assert r.status_code == 200, r.text
+    despues = await _feedback_pendientes()
+    assert despues["recibido"] - antes["recibido"] == 2
+    assert despues["en_revision"] - antes["en_revision"] == 1

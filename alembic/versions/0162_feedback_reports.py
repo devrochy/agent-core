@@ -32,7 +32,7 @@ bandera `FEEDBACK_ENABLED` apagada), después el `downgrade`, que borra las tabl
 esta cuelga de la 0160 y se reencadena a la 0161 cuando esa se mergee.
 
 Revision ID: 0162
-Revises: 0160
+Revises: 0161
 Create Date: 2026-11-27
 """
 
@@ -41,7 +41,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0162"
-down_revision = "0160"
+down_revision = "0161"
 branch_labels = None
 depends_on = None
 
