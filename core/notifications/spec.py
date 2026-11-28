@@ -30,6 +30,8 @@ ENTIDADES: tuple[str, ...] = (
     "conexion",
     "mensaje_fallido",
     "cobranza",
+    # Reporte de un cliente (SPEC-54, ADR-0213): el resultado de la revisión le llega al autor.
+    "feedback_reporte",
 )
 
 
