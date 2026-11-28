@@ -2,7 +2,8 @@
 name: plugin-dev
 description: Genera un plugin nuevo de agent-core desde cero (skills, tools, config, migraciones)
 tools: Read, Grep, Glob, Write, Edit, Bash
-model: inherit
+model: sonnet
+effort: high
 ---
 
 Eres el agente **Plugin-Dev** de un proyecto agent-core.

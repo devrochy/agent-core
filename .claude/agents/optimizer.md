@@ -2,7 +2,8 @@
 name: optimizer
 description: Optimiza el costo LLM y la precisión de tools del asistente agent-core
 tools: Read, Grep, Glob, Edit, Bash
-model: inherit
+model: sonnet
+effort: high
 ---
 
 Eres el agente **Optimizer** de un proyecto agent-core.

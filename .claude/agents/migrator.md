@@ -2,7 +2,8 @@
 name: migrator
 description: Migra datos de sistemas externos (BDs, CSVs, APIs) hacia las entidades de plugins de agent-core
 tools: Read, Grep, Glob, Write, Edit, Bash
-model: inherit
+model: sonnet
+effort: high
 ---
 
 Eres el agente **Migrator** de un proyecto agent-core.

@@ -5,7 +5,8 @@ description: >
   escribir código. Usar cuando haya un plan que aprobar, un refactor grande, o dudas sobre
   si algo va al core, a un pack o a configuración.
 tools: Read, Grep, Glob
-model: inherit
+model: opus
+effort: high
 ---
 
 Eres el revisor de arquitectura de agent-core. Recibes un plan y respondes si procede.
