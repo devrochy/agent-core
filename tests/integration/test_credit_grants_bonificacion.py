@@ -5,6 +5,8 @@
 - al cierre, lo que queda de cada bonificación pasa al ciclo siguiente con su mismo `origen`, también con
   la suscripción cancelada (misma regla que la recarga);
 - `acreditar_bonificacion` es idempotente dentro del ciclo y no abona sin ciclo;
+- `acreditar_bonificacion_unica` (HU-REF-02, ADR-0214): un `origen` de referido se abona una sola vez aunque el
+  reintento caiga en otro ciclo, con el abono gastado o arrastrado, bajo concurrencia y sin ciclo;
 - `GET /admin/plan` muestra «Regalos» (`bonuses`, `used_bonuses`) y los suma al total;
 - la migración 0161 sube y baja, y no baja si ya hay bonificaciones.
 
@@ -279,6 +281,136 @@ async def test_admin_plan_muestra_los_regalos(app_client) -> None:
     assert (balance["total"], balance["bonuses"], balance["used_bonuses"]) == (15_000.0, 2_000.0, 500.0)
     assert (balance["top_ups"], balance["used_top_ups"]) == (1_000.0, 0.0)
     assert r.json()["credit"]["balance_percent"] == 83.3
+
+
+# ------------------------------------------------------------------ `acreditar_bonificacion_unica` (HU-REF-02)
+async def _unica(tid: uuid.UUID, origen: str, creditos: int, now: datetime) -> str:
+    from core.billing.bonificacion import acreditar_bonificacion_unica
+
+    async with _scope(tid) as s:
+        return await acreditar_bonificacion_unica(s, tid, origen, creditos, now=now)
+
+
+async def _filas_de(tid: uuid.UUID, origen: str) -> list[Any]:
+    return [f for f in await _abonos(tid) if f[3] == origen]
+
+
+async def test_unica_reintento_en_el_mismo_ciclo_no_duplica() -> None:
+    tid = await _negocio("free", period_start=OCT)
+    origen = f"referral:{uuid.uuid4()}:referidor"
+    ahora = OCT + timedelta(days=5)
+    assert await _unica(tid, origen, 3_000, ahora) == "acreditada"
+    assert await _unica(tid, origen, 3_000, ahora + UNA_HORA) == "ya_acreditada"
+    assert await _filas_de(tid, origen) == [(OCT, "bonificacion", D("3000.0"), origen, None)]
+
+
+async def test_unica_reintento_en_otro_ciclo_con_el_abono_gastado_no_duplica() -> None:
+    """El caso que la unicidad de `credit_grants` (incluye `ciclo`) no cubre: el abono se gastó entero, el cierre
+    no lo arrastró y el reintento cae en el ciclo siguiente."""
+    tid = await _negocio("basic")  # ciclos [10-sep, 10-oct), [10-oct, 10-nov), …
+    origen = f"referral:{uuid.uuid4()}:referidor"
+    assert await _unica(tid, origen, 800, INICIO + timedelta(days=2)) == "acreditada"
+    await _consumo(tid, "12800", INICIO + timedelta(days=3))  # 12.000 del mes + las 800 del regalo
+    await _cerrar(OCT + UNA_HORA)
+    assert await _abonos(tid, OCT) == []  # gastado entero: no se arrastra
+    # Sin la defensa, el adaptador de HU-FB-02 abonaría otra vez en octubre: es el hueco que cierra HU-REF-02.
+    assert await _unica(tid, origen, 800, OCT + timedelta(days=5)) == "ya_acreditada"
+    assert await _unica(tid, origen, 800, NOV + timedelta(days=5)) == "ya_acreditada"
+    assert await _filas_de(tid, origen) == [(INICIO, "bonificacion", D("800.0"), origen, None)]
+
+
+async def test_unica_reintento_tras_cerrar_ciclo_con_saldo_arrastrado_no_duplica() -> None:
+    tid = await _negocio("basic")
+    origen = f"referral:{uuid.uuid4()}:referido"
+    assert await _unica(tid, origen, 5_000, INICIO + timedelta(days=2)) == "acreditada"
+    await _cerrar(OCT + UNA_HORA)
+    assert await _filas_de(tid, origen) == [
+        (INICIO, "bonificacion", D("5000.0"), origen, None),
+        (OCT, "bonificacion", D("5000.0"), origen, None),  # arrastre del cierre
+    ]
+    assert await _unica(tid, origen, 5_000, OCT + timedelta(days=5)) == "ya_acreditada"
+    assert await _unica(tid, origen, 5_000, NOV + timedelta(days=5)) == "ya_acreditada"
+    assert len(await _filas_de(tid, origen)) == 2
+
+
+async def test_unica_concurrente_acredita_una_sola_vez() -> None:
+    """Dos corridas del cron sobre el mismo `origen`, cada una con el candado del saldo como en ADR-0214 §6."""
+    import asyncio
+
+    tid = await _negocio("free", period_start=OCT)
+    origen = f"referral:{uuid.uuid4()}:referidor"
+    ahora = OCT + timedelta(days=5)
+
+    async def _una() -> str:
+        from core.billing.bonificacion import acreditar_bonificacion_unica
+
+        async with _scope(tid) as s:
+            await s.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"), {"k": f"billing:creditos:{tid}"}
+            )
+            return await acreditar_bonificacion_unica(s, tid, origen, 1_000, now=ahora)
+
+    resultados = await asyncio.gather(*(_una() for _ in range(4)))
+    assert sorted(resultados) == ["acreditada", "ya_acreditada", "ya_acreditada", "ya_acreditada"]
+    assert len(await _filas_de(tid, origen)) == 1
+
+
+async def test_unica_sin_ciclo_no_inserta_nada() -> None:
+    from core.db.models import TenantSubscription
+
+    tid = await _negocio("free")
+    async with _scope(tid) as s:
+        await s.execute(
+            TenantSubscription.__table__.update()
+            .where(TenantSubscription.tenant_id == tid)
+            .values(deleted_at=datetime.now(UTC))
+        )
+    assert await _unica(tid, f"referral:{uuid.uuid4()}:referidor", 100, OCT) == "sin_ciclo"
+    assert await _abonos(tid) == []
+
+
+async def test_unica_valida_los_argumentos_y_el_scope_antes_de_consultar() -> None:
+    from core.billing.bonificacion import acreditar_bonificacion_unica
+
+    tid = await _negocio("free", period_start=OCT)
+    otro = await _negocio("free", period_start=OCT)
+    origen = f"referral:{uuid.uuid4()}:referidor"
+    assert await _unica(tid, origen, 10, OCT + timedelta(days=1)) == "acreditada"
+    async with _scope(tid) as s:
+        for malo in (0, -5, True, 1.5):
+            with pytest.raises(ValueError):
+                await acreditar_bonificacion_unica(s, tid, origen, malo, now=OCT)  # type: ignore[arg-type]
+        for origen_malo in ("", "x" * 201):
+            with pytest.raises(ValueError):
+                await acreditar_bonificacion_unica(s, tid, origen_malo, 10, now=OCT)
+        with pytest.raises(RuntimeError, match="fuera del tenant_scope"):
+            await acreditar_bonificacion_unica(s, otro, origen, 10, now=OCT)
+
+
+async def test_unica_aisla_por_negocio_y_distingue_referidor_de_referido() -> None:
+    a = await _negocio("free", period_start=OCT)
+    b = await _negocio("free", period_start=OCT)
+    ahora = OCT + timedelta(days=2)
+    rid = uuid.uuid4()
+    assert await _unica(a, f"referral:{rid}:referidor", 100, ahora) == "acreditada"
+    # El mismo `origen` en otro negocio es otro abono: la búsqueda va bajo RLS, no ve el de `a`.
+    assert await _unica(b, f"referral:{rid}:referidor", 100, ahora) == "acreditada"
+    assert await _unica(a, f"referral:{rid}:referido", 100, ahora) == "acreditada"
+    assert len(await _abonos(a)) == 2 and len(await _abonos(b)) == 1
+
+
+async def test_unica_el_abono_de_referidos_aparece_en_regalos_de_admin_plan(app_client) -> None:
+    from _api_helpers import api_headers
+
+    inicio = datetime.now(UTC) - timedelta(days=3)
+    tid = await _negocio("basic", period_start=inicio)
+    assert await _unica(tid, f"referral:{uuid.uuid4()}:referido", 2_000, datetime.now(UTC)) == "acreditada"
+    await _abono(tid, inicio, "bonificacion", "500", origen="feedback:conviven")
+
+    r = await app_client.get("/api/v1/admin/plan", headers=await api_headers(app_client, tid))
+    assert r.status_code == 200, r.text
+    balance = r.json()["credit"]["balance"]
+    assert (balance["bonuses"], balance["total"]) == (2_500.0, 14_500.0)
 
 
 # ------------------------------------------------------------------ migración 0161 arriba y abajo

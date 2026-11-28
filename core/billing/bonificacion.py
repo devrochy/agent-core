@@ -4,7 +4,8 @@ Lo inserta la aprobación de un reporte de feedback (`origen = 'feedback:<report
 actual del negocio. No vence: el cierre lo arrastra como una recarga (`cierre_de_ciclo.cerrar_ciclo`) y se
 gasta después de lo acumulado y antes de las recargas (`creditos.orden_de_gasto`).
 
-Todavía no lo llama nadie: la aprobación llega en HU-FB-04.
+`acreditar_bonificacion_unica` (HU-REF-02, ADR-0214) suma la defensa que los referidos necesitan: buscar el
+`origen` en cualquier ciclo, porque la unicidad de `credit_grants` incluye `ciclo`.
 """
 
 from __future__ import annotations
@@ -83,4 +84,48 @@ async def acreditar_bonificacion(
     return "acreditada"
 
 
-__all__ = ["ResultadoDeLaBonificacion", "acreditar_bonificacion"]
+async def acreditar_bonificacion_unica(
+    session,  # type: ignore[no-untyped-def]
+    tenant_id: uuid.UUID,
+    origen: str,
+    creditos: int,
+    *,
+    now: datetime | None = None,
+) -> ResultadoDeLaBonificacion:
+    """Como `acreditar_bonificacion`, pero el `origen` se abona una sola vez en CUALQUIER ciclo.
+
+    La unicidad de `credit_grants` es `(tenant_id, ciclo, tipo, origen)`: un reintento que cae en otro ciclo
+    (p. ej. tras `cerrar_ciclo`) insertaría un segundo abono, y uno ya gastado ni siquiera se arrastra. Aquí se
+    busca primero cualquier `bonificacion` con ese `origen` y, si existe, se devuelve `ya_acreditada` sin
+    insertar. Lo usan los referidos (`referral:<id>:referidor` / `referral:<id>:referido`, ADR-0214 §6).
+
+    La búsqueda y el abono no son atómicos por sí solos: quien llama debe sostener
+    `pg_advisory_xact_lock('billing:creditos:<tenant>')` (mismo candado que `creditos.py`, ADR-0213 §7) en la
+    misma transacción. `credit_grants` es de solo inserción, así que la fila encontrada no desaparece. Misma
+    firma, validaciones y scope que `acreditar_bonificacion`, que es quien inserta y no cambia."""
+    from core.db.models import CreditGrant
+
+    # Valida antes de consultar para no devolver `ya_acreditada` con argumentos que el abono rechazaría.
+    if isinstance(creditos, bool) or not isinstance(creditos, int) or creditos <= 0:
+        raise ValueError("creditos debe ser un entero mayor que 0")
+    if not origen or len(origen) > 200:
+        raise ValueError("origen debe tener entre 1 y 200 caracteres")
+    _exigir_scope(tenant_id)
+    existente = (
+        await session.execute(
+            select(CreditGrant.ciclo)
+            .where(
+                CreditGrant.tenant_id == tenant_id,
+                CreditGrant.tipo == "bonificacion",
+                CreditGrant.origen == origen,
+            )
+            .limit(1)
+        )
+    ).first()
+    if existente is not None:
+        log.info("bonificacion_ya_acreditada_en_otro_ciclo", tenant_id=str(tenant_id), origen=origen)
+        return "ya_acreditada"
+    return await acreditar_bonificacion(session, tenant_id, origen, creditos, now=now)
+
+
+__all__ = ["ResultadoDeLaBonificacion", "acreditar_bonificacion", "acreditar_bonificacion_unica"]
