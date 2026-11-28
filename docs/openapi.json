@@ -49965,6 +49965,522 @@
           }
         }
       }
+    },
+    "/api/v1/platform/feedback/reports": {
+      "get": {
+        "tags": [
+          "api",
+          "plataforma · reportes de clientes"
+        ],
+        "summary": "Bandeja",
+        "description": "Reportes de todos los negocios, del más reciente al más antiguo, paginados por `(created_at, id)`.",
+        "operationId": "bandeja_api_v1_platform_feedback_reports_get",
+        "parameters": [
+          {
+            "name": "estado",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "recibido",
+                    "en_revision",
+                    "aprobado",
+                    "rechazado"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Estado"
+            }
+          },
+          {
+            "name": "tipo",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "error",
+                    "mejora",
+                    "idea"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tipo"
+            }
+          },
+          {
+            "name": "tenant_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Solo los reportes de este negocio.",
+              "title": "Tenant Id"
+            },
+            "description": "Solo los reportes de este negocio."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 25,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackBandeja"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: no actúa como master (o, al decidir, no es master estricto)"
+          },
+          "404": {
+            "description": "`not_found`: el reporte no existe o `FEEDBACK_ENABLED` está apagada"
+          },
+          "400": {
+            "description": "`cursor_invalido`"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/feedback/reports/{report_id}": {
+      "get": {
+        "tags": [
+          "api",
+          "plataforma · reportes de clientes"
+        ],
+        "summary": "Detalle",
+        "operationId": "detalle_api_v1_platform_feedback_reports__report_id__get",
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Report Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReporteMaster"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: no actúa como master (o, al decidir, no es master estricto)"
+          },
+          "404": {
+            "description": "`not_found`: el reporte no existe o `FEEDBACK_ENABLED` está apagada"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/feedback/reports/{report_id}/tomar": {
+      "post": {
+        "tags": [
+          "api",
+          "plataforma · reportes de clientes"
+        ],
+        "summary": "Tomar",
+        "description": "`recibido → en_revision`. Repetirlo el mismo master responde 200; si lo tomó otro, 409.",
+        "operationId": "tomar_api_v1_platform_feedback_reports__report_id__tomar_post",
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Report Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReporteMaster"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: no actúa como master (o, al decidir, no es master estricto)"
+          },
+          "404": {
+            "description": "`not_found`: el reporte no existe o `FEEDBACK_ENABLED` está apagada"
+          },
+          "409": {
+            "description": "`reporte_ya_tomado` (`details.revisado_por`) o `reporte_ya_decidido`"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/platform/feedback/reports/{report_id}/aprobar": {
+      "post": {
+        "tags": [
+          "api",
+          "plataforma · reportes de clientes"
+        ],
+        "summary": "Aprobar",
+        "description": "Aprueba y acredita `creditos` de regalo al negocio, en una sola transacción. El mismo master con el\nmismo monto responde 200 sin volver a acreditar; cualquier otra repetición, 409 `reporte_ya_decidido`.",
+        "operationId": "aprobar_api_v1_platform_feedback_reports__report_id__aprobar_post",
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Report Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackAprobarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReporteMaster"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: no actúa como master (o, al decidir, no es master estricto)"
+          },
+          "404": {
+            "description": "`not_found`: el reporte no existe o `FEEDBACK_ENABLED` está apagada"
+          },
+          "409": {
+            "description": "`reporte_ya_decidido` (`details.estado`) o `sin_ciclo_de_creditos`"
+          },
+          "422": {
+            "description": "`monto_invalido`, `tope_reporte_excedido` (`details.maximo`) o `tope_mensual_excedido` (`details.maximo`, `regalado`, `disponible`); `validation_error` si `creditos` no es un entero"
+          },
+          "500": {
+            "description": "`abono_inconsistente`: no entró el abono y se deshizo la aprobación"
+          }
+        }
+      }
+    },
+    "/api/v1/platform/feedback/reports/{report_id}/rechazar": {
+      "post": {
+        "tags": [
+          "api",
+          "plataforma · reportes de clientes"
+        ],
+        "summary": "Rechazar",
+        "description": "Rechaza con un motivo visible al cliente. `duplicado_de` se valida contra cualquier negocio y el cliente\nnunca ve a qué reporte apunta.",
+        "operationId": "rechazar_api_v1_platform_feedback_reports__report_id__rechazar_post",
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Report Id"
+            }
+          },
+          {
+            "name": "X-Tenant-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "name": "X-Device-Id",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Device-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRechazarIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReporteMaster"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "`forbidden`: no actúa como master (o, al decidir, no es master estricto)"
+          },
+          "404": {
+            "description": "`not_found`: el reporte no existe o `FEEDBACK_ENABLED` está apagada"
+          },
+          "409": {
+            "description": "`reporte_ya_decidido` (`details.estado`)"
+          },
+          "422": {
+            "description": "`duplicado_sin_original`, `duplicado_invalido` o `duplicado_sin_motivo`"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -90913,6 +91429,484 @@
           "descripcion"
         ],
         "title": "Body_post_feedback_report"
+      },
+      "FeedbackAdjuntoMaster": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "orden": {
+            "type": "integer",
+            "title": "Orden"
+          },
+          "mimetype": {
+            "type": "string",
+            "title": "Mimetype"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes"
+          },
+          "nombre_original": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre Original"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url",
+            "description": "URL firmada de corta duración (`URL_TTL_UI`)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "orden",
+          "mimetype",
+          "bytes",
+          "nombre_original",
+          "url"
+        ],
+        "title": "FeedbackAdjuntoMaster"
+      },
+      "FeedbackAprobarIn": {
+        "properties": {
+          "creditos": {
+            "type": "integer",
+            "title": "Creditos",
+            "description": "Créditos de regalo para el negocio, entero > 0. Topes en ADR-0213 §4."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "creditos"
+        ],
+        "title": "FeedbackAprobarIn"
+      },
+      "FeedbackBandeja": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/FeedbackBandejaItem"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "title": "FeedbackBandeja"
+      },
+      "FeedbackBandejaItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id"
+          },
+          "tenant_name": {
+            "type": "string",
+            "title": "Tenant Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "recibido",
+              "en_revision",
+              "aprobado",
+              "rechazado"
+            ],
+            "title": "Estado"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "error",
+              "mejora",
+              "idea"
+            ],
+            "title": "Tipo"
+          },
+          "area": {
+            "type": "string",
+            "title": "Area"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "autor": {
+            "$ref": "#/components/schemas/FeedbackPersona"
+          },
+          "revisor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackPersona"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Quien lo tomó o lo decidió."
+          },
+          "tomado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tomado En"
+          },
+          "creditos_otorgados": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creditos Otorgados"
+          },
+          "adjuntos": {
+            "type": "integer",
+            "title": "Adjuntos",
+            "description": "Cuántos adjuntos trae el reporte."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "tenant_name",
+          "created_at",
+          "estado",
+          "tipo",
+          "area",
+          "titulo",
+          "autor",
+          "revisor",
+          "tomado_en",
+          "creditos_otorgados",
+          "adjuntos"
+        ],
+        "title": "FeedbackBandejaItem"
+      },
+      "FeedbackPersona": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "nombre": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nombre"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "nombre",
+          "email"
+        ],
+        "title": "FeedbackPersona"
+      },
+      "FeedbackRechazarIn": {
+        "properties": {
+          "motivo_codigo": {
+            "type": "string",
+            "enum": [
+              "duplicado",
+              "no_reproducible",
+              "fuera_de_alcance",
+              "informacion_insuficiente",
+              "otro"
+            ],
+            "title": "Motivo Codigo"
+          },
+          "motivo": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Motivo",
+            "description": "Visible al cliente."
+          },
+          "nota_interna": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota Interna",
+            "description": "Solo para el equipo."
+          },
+          "duplicado_de": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicado De",
+            "description": "Obligatorio con `motivo_codigo = duplicado`."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "motivo_codigo",
+          "motivo"
+        ],
+        "title": "FeedbackRechazarIn"
+      },
+      "FeedbackReporteMaster": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Tenant Id"
+          },
+          "tenant_name": {
+            "type": "string",
+            "title": "Tenant Name"
+          },
+          "autor": {
+            "$ref": "#/components/schemas/FeedbackPersona"
+          },
+          "tipo": {
+            "type": "string",
+            "enum": [
+              "error",
+              "mejora",
+              "idea"
+            ],
+            "title": "Tipo"
+          },
+          "area": {
+            "type": "string",
+            "title": "Area"
+          },
+          "titulo": {
+            "type": "string",
+            "title": "Titulo"
+          },
+          "descripcion": {
+            "type": "string",
+            "title": "Descripcion"
+          },
+          "estado": {
+            "type": "string",
+            "enum": [
+              "recibido",
+              "en_revision",
+              "aprobado",
+              "rechazado"
+            ],
+            "title": "Estado"
+          },
+          "revisor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackPersona"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Quien lo tomó o lo decidió."
+          },
+          "tomado_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tomado En"
+          },
+          "decidido_en": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decidido En"
+          },
+          "motivo_codigo": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "duplicado",
+                  "no_reproducible",
+                  "fuera_de_alcance",
+                  "informacion_insuficiente",
+                  "otro"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo Codigo"
+          },
+          "motivo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Motivo"
+          },
+          "nota_interna": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nota Interna"
+          },
+          "creditos_otorgados": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creditos Otorgados"
+          },
+          "duplicado_de": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicado De"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "adjuntos": {
+            "items": {
+              "$ref": "#/components/schemas/FeedbackAdjuntoMaster"
+            },
+            "type": "array",
+            "title": "Adjuntos"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "tenant_id",
+          "tenant_name",
+          "autor",
+          "tipo",
+          "area",
+          "titulo",
+          "descripcion",
+          "estado",
+          "revisor",
+          "tomado_en",
+          "decidido_en",
+          "motivo_codigo",
+          "motivo",
+          "nota_interna",
+          "creditos_otorgados",
+          "duplicado_de",
+          "created_at",
+          "adjuntos"
+        ],
+        "title": "FeedbackReporteMaster",
+        "description": "El reporte como lo ve el equipo: incluye `nota_interna`, el revisor y a qué reporte duplica."
       }
     }
   }

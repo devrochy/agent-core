@@ -408,6 +408,14 @@ class Settings(BaseSettings):
         default=0.003, ge=0, le=1, alias="BILLING_VISION_COSTO_REFERENCIA_USD"
     )
 
+    # --- Revisión de reportes de clientes (SPEC-54, HU-FB-04, ADR-0213 §4) ---
+    # Topes de los créditos de regalo que el master acredita al aprobar un reporte: por reporte y
+    # por negocio en la ventana mensual de su suscripción. Cambiarlos no pide otro ADR.
+    feedback_creditos_max_reporte: int = Field(default=5000, ge=1, alias="FEEDBACK_CREDITOS_MAX_REPORTE")
+    feedback_creditos_max_mes_negocio: int = Field(default=10000, ge=1, alias="FEEDBACK_CREDITOS_MAX_MES_NEGOCIO")
+    # Correo del equipo que recibe el aviso de un reporte nuevo. Vacío = sin aviso (solo log).
+    feedback_aviso_email: str = Field(default="", alias="FEEDBACK_AVISO_EMAIL")
+
     # --- Observabilidad ---
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
