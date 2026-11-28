@@ -26,6 +26,9 @@ _ESCRITURA = re.compile(
 ESCRITORES_REVISADOS = {
     "core/orchestrator/consumer.py": 4,  # alta del Customer (wa_id) y teléfono compartido en Telegram
     "core/leads/intake.py": 2,  # intake web, `channel == "web"`
+    # Alta manual/importación del panel: el cliente nace `channel == "manual"`, que el enlace perezoso de cobranza no
+    # acepta; el teléfono lo escribe una persona, no un canal.
+    "core/leads/alta.py": 2,
 }
 
 

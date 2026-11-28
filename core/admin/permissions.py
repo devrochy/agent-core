@@ -37,7 +37,7 @@ from core.shared.tenant import get_current_tenant_id
 # Secciones del core. Deben coincidir con los `section` de `views.py` y el menú.
 CORE_SECTIONS: dict[str, str] = {
     "dashboard": "Dashboard",
-    "leads": "Leads",
+    "leads": "Clientes",
     "conversations": "Conversaciones",
     "escalations": "Escalaciones",
     # Mi agente y su data (HU-AOS-47, ADR-0140): lectura por agente de lo que hizo.
