@@ -177,7 +177,12 @@ async def tomar(report_id: uuid.UUID, *, revisor_id: uuid.UUID, revisor_email: s
                 if fila["estado"] != "en_revision":
                     raise _ya_decidido(fila["estado"])
                 if fila["revisado_por"] != revisor_id:
-                    raise ErrorDeRevision(409, "reporte_ya_tomado", "Otra persona del equipo ya está revisando este reporte.")
+                    raise ErrorDeRevision(
+                        409,
+                        "reporte_ya_tomado",
+                        "Otra persona del equipo ya está revisando este reporte.",
+                        details={"revisado_por": str(fila["revisado_por"])},
+                    )
         if not repetido:
             log.info("feedback.tomado", report_id=str(report_id), tenant_id=str(tenant_id), revisor=str(revisor_id))
             await _auditar(revisor_email, "feedback.tomado", {"report_id": str(report_id)}, {"estado": "en_revision"})

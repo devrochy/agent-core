@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StringConstraints
 from sqlalchemy import select, text
 
 from core.admin.roles import actua_como_master, es_master
@@ -67,13 +67,13 @@ def _api_error(exc: revision.ErrorDeRevision) -> ApiError:
 
 
 # ------------------------------------------------------------------------------------- schemas
-class ReporteAutor(BaseModel):
+class FeedbackPersona(BaseModel):
     id: uuid.UUID
     nombre: str | None
     email: str | None
 
 
-class ReporteBandejaItem(BaseModel):
+class FeedbackBandejaItem(BaseModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     tenant_name: str
@@ -82,17 +82,19 @@ class ReporteBandejaItem(BaseModel):
     tipo: Tipo
     area: str
     titulo: str
-    autor: ReporteAutor
+    autor: FeedbackPersona
+    revisor: FeedbackPersona | None = Field(description="Quien lo tomó o lo decidió.")
+    tomado_en: datetime | None
     creditos_otorgados: int | None
     adjuntos: int = Field(description="Cuántos adjuntos trae el reporte.")
 
 
-class ReporteBandeja(BaseModel):
-    items: list[ReporteBandejaItem]
+class FeedbackBandeja(BaseModel):
+    items: list[FeedbackBandejaItem]
     next_cursor: str | None
 
 
-class ReporteAdjunto(BaseModel):
+class FeedbackAdjuntoMaster(BaseModel):
     id: uuid.UUID
     orden: int
     mimetype: str
@@ -101,19 +103,19 @@ class ReporteAdjunto(BaseModel):
     url: str = Field(description="URL firmada de corta duración (`URL_TTL_UI`).")
 
 
-class ReporteMaster(BaseModel):
+class FeedbackReporteMaster(BaseModel):
     """El reporte como lo ve el equipo: incluye `nota_interna`, el revisor y a qué reporte duplica."""
 
     id: uuid.UUID
     tenant_id: uuid.UUID
     tenant_name: str
-    autor: ReporteAutor
+    autor: FeedbackPersona
     tipo: Tipo
     area: str
     titulo: str
     descripcion: str
     estado: Estado
-    revisado_por: uuid.UUID | None
+    revisor: FeedbackPersona | None = Field(description="Quien lo tomó o lo decidió.")
     tomado_en: datetime | None
     decidido_en: datetime | None
     motivo_codigo: MotivoCodigo | None
@@ -122,20 +124,23 @@ class ReporteMaster(BaseModel):
     creditos_otorgados: int | None
     duplicado_de: uuid.UUID | None
     created_at: datetime
-    adjuntos: list[ReporteAdjunto]
+    adjuntos: list[FeedbackAdjuntoMaster]
 
 
-class AprobarIn(BaseModel):
+class FeedbackAprobarIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    creditos: StrictInt = Field(gt=0, description="Créditos de regalo para el negocio. Topes en ADR-0213 §4.")
+    # Sin `gt=0`: el 0 y los negativos responden 422 `monto_invalido` (código de dominio), no `validation_error`.
+    creditos: StrictInt = Field(description="Créditos de regalo para el negocio, entero > 0. Topes en ADR-0213 §4.")
 
 
-class RechazarIn(BaseModel):
+class FeedbackRechazarIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     motivo_codigo: MotivoCodigo
-    motivo: str = Field(min_length=3, max_length=500, description="Visible al cliente.")
+    motivo: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=500)] = Field(
+        description="Visible al cliente."
+    )
     nota_interna: str | None = Field(default=None, max_length=2000, description="Solo para el equipo.")
     duplicado_de: uuid.UUID | None = Field(default=None, description="Obligatorio con `motivo_codigo = duplicado`.")
 
@@ -163,21 +168,21 @@ async def _nombres_de_negocio(ids: set[uuid.UUID]) -> dict[uuid.UUID, str]:
     return {f.id: f.name for f in filas}
 
 
-async def _autores(ids: set[uuid.UUID]) -> dict[uuid.UUID, ReporteAutor]:
+async def _autores(ids: set[uuid.UUID]) -> dict[uuid.UUID, FeedbackPersona]:
     from core.db.models import Admin
 
     if not ids:
         return {}
     async with get_session() as session:
         filas = (await session.execute(select(Admin.id, Admin.nombre, Admin.email).where(Admin.id.in_(ids)))).all()
-    return {f.id: ReporteAutor(id=f.id, nombre=f.nombre, email=f.email) for f in filas}
+    return {f.id: FeedbackPersona(id=f.id, nombre=f.nombre, email=f.email) for f in filas}
 
 
-def _autor(autores: dict[uuid.UUID, ReporteAutor], admin_id: uuid.UUID) -> ReporteAutor:
-    return autores.get(admin_id) or ReporteAutor(id=admin_id, nombre=None, email=None)
+def _autor(autores: dict[uuid.UUID, FeedbackPersona], admin_id: uuid.UUID) -> FeedbackPersona:
+    return autores.get(admin_id) or FeedbackPersona(id=admin_id, nombre=None, email=None)
 
 
-async def _adjuntos(session, report_id: uuid.UUID) -> list[ReporteAdjunto]:  # type: ignore[no-untyped-def]
+async def _adjuntos(session, report_id: uuid.UUID) -> list[FeedbackAdjuntoMaster]:  # type: ignore[no-untyped-def]
     from core import almacenamiento
 
     filas = (
@@ -190,7 +195,7 @@ async def _adjuntos(session, report_id: uuid.UUID) -> list[ReporteAdjunto]:  # t
         )
     ).mappings().all()
     return [
-        ReporteAdjunto(
+        FeedbackAdjuntoMaster(
             id=f["id"],
             orden=f["orden"],
             mimetype=f["mimetype"],
@@ -202,7 +207,7 @@ async def _adjuntos(session, report_id: uuid.UUID) -> list[ReporteAdjunto]:  # t
     ]
 
 
-async def _detalle(report_id: uuid.UUID, reporte: dict[str, Any] | None = None) -> ReporteMaster:
+async def _detalle(report_id: uuid.UUID, reporte: dict[str, Any] | None = None) -> FeedbackReporteMaster:
     tenant_id = await revision.negocio_del_reporte(report_id)
     if tenant_id is None:
         raise ApiError.not_found("No existe ese reporte.")
@@ -214,8 +219,8 @@ async def _detalle(report_id: uuid.UUID, reporte: dict[str, Any] | None = None) 
                     raise ApiError.not_found("No existe ese reporte.")
             adjuntos = await _adjuntos(session, report_id)
     nombres = await _nombres_de_negocio({tenant_id})
-    autores = await _autores({reporte["autor_admin_id"]})
-    return ReporteMaster(
+    autores = await _autores({reporte["autor_admin_id"], *([reporte["revisado_por"]] if reporte["revisado_por"] else [])})
+    return FeedbackReporteMaster(
         id=reporte["id"],
         tenant_id=tenant_id,
         tenant_name=nombres.get(tenant_id, ""),
@@ -225,7 +230,7 @@ async def _detalle(report_id: uuid.UUID, reporte: dict[str, Any] | None = None) 
         titulo=reporte["titulo"],
         descripcion=reporte["descripcion"],
         estado=reporte["estado"],
-        revisado_por=reporte["revisado_por"],
+        revisor=_autor(autores, reporte["revisado_por"]) if reporte["revisado_por"] else None,
         tomado_en=reporte["tomado_en"],
         decidido_en=reporte["decidido_en"],
         motivo_codigo=reporte["motivo_codigo"],
@@ -239,15 +244,25 @@ async def _detalle(report_id: uuid.UUID, reporte: dict[str, Any] | None = None) 
 
 
 # ------------------------------------------------------------------------------------- rutas
-@router.get("/reports", response_model=ReporteBandeja)
+_COMUNES: dict[int | str, dict[str, Any]] = {
+    403: {"description": "`forbidden`: no actúa como master (o, al decidir, no es master estricto)"},
+    404: {"description": "`not_found`: el reporte no existe o `FEEDBACK_ENABLED` está apagada"},
+}
+
+
+@router.get(
+    "/reports",
+    response_model=FeedbackBandeja,
+    responses={**_COMUNES, 400: {"description": "`cursor_invalido`"}},
+)
 async def bandeja(
     principal: Annotated[Principal, Depends(get_principal)],
     estado: Annotated[Estado | None, Query()] = None,
     tipo: Annotated[Tipo | None, Query()] = None,
     tenant_id: Annotated[uuid.UUID | None, Query(description="Solo los reportes de este negocio.")] = None,
-    cursor: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=LIMITE_MAXIMO)] = LIMITE_POR_DEFECTO,
-) -> ReporteBandeja:
+) -> FeedbackBandeja:
     """Reportes de todos los negocios, del más reciente al más antiguo, paginados por `(created_at, id)`."""
     _require_lector(principal)
     antes = _parse_cursor(cursor) if cursor else (None, None)
@@ -276,7 +291,7 @@ async def bandeja(
                 filas = (
                     await session.execute(
                         text(
-                            "SELECT r.id, r.autor_admin_id, r.area, r.titulo, r.creditos_otorgados, "
+                            "SELECT r.id, r.autor_admin_id, r.revisado_por, r.tomado_en, r.area, r.titulo, r.creditos_otorgados, "
                             "(SELECT count(*) FROM feedback_attachments a WHERE a.report_id = r.id) AS adjuntos "
                             "FROM feedback_reports r WHERE r.id = ANY(:ids)"
                         ),
@@ -286,9 +301,11 @@ async def bandeja(
         contenido.update({f["id"]: dict(f) for f in filas})
 
     nombres = await _nombres_de_negocio(set(por_negocio))
-    autores = await _autores({c["autor_admin_id"] for c in contenido.values()})
+    autores = await _autores(
+        {c["autor_admin_id"] for c in contenido.values()} | {c["revisado_por"] for c in contenido.values() if c["revisado_por"]}
+    )
     items = [
-        ReporteBandejaItem(
+        FeedbackBandejaItem(
             id=f.id,
             tenant_id=f.tenant_id,
             tenant_name=nombres.get(f.tenant_id, ""),
@@ -298,29 +315,31 @@ async def bandeja(
             area=contenido[f.id]["area"],
             titulo=contenido[f.id]["titulo"],
             autor=_autor(autores, contenido[f.id]["autor_admin_id"]),
+            revisor=_autor(autores, contenido[f.id]["revisado_por"]) if contenido[f.id]["revisado_por"] else None,
+            tomado_en=contenido[f.id]["tomado_en"],
             creditos_otorgados=contenido[f.id]["creditos_otorgados"],
             adjuntos=int(contenido[f.id]["adjuntos"]),
         )
         for f in ids
         if f.id in contenido
     ]
-    return ReporteBandeja(
+    return FeedbackBandeja(
         items=items, next_cursor=_cursor(ids[-1].created_at, ids[-1].id) if hay_mas and ids else None
     )
 
 
-@router.get("/reports/{report_id}", response_model=ReporteMaster)
-async def detalle(report_id: uuid.UUID, principal: Annotated[Principal, Depends(get_principal)]) -> ReporteMaster:
+@router.get("/reports/{report_id}", response_model=FeedbackReporteMaster, responses=_COMUNES)
+async def detalle(report_id: uuid.UUID, principal: Annotated[Principal, Depends(get_principal)]) -> FeedbackReporteMaster:
     _require_lector(principal)
     return await _detalle(report_id)
 
 
 @router.post(
     "/reports/{report_id}/tomar",
-    response_model=ReporteMaster,
-    responses={409: {"description": "`reporte_ya_tomado` o `reporte_ya_decidido`"}},
+    response_model=FeedbackReporteMaster,
+    responses={**_COMUNES, 409: {"description": "`reporte_ya_tomado` (`details.revisado_por`) o `reporte_ya_decidido`"}},
 )
-async def tomar(report_id: uuid.UUID, principal: Annotated[Principal, Depends(get_principal)]) -> ReporteMaster:
+async def tomar(report_id: uuid.UUID, principal: Annotated[Principal, Depends(get_principal)]) -> FeedbackReporteMaster:
     """`recibido → en_revision`. Repetirlo el mismo master responde 200; si lo tomó otro, 409."""
     _require_master_estricto(principal)
     try:
@@ -332,15 +351,20 @@ async def tomar(report_id: uuid.UUID, principal: Annotated[Principal, Depends(ge
 
 @router.post(
     "/reports/{report_id}/aprobar",
-    response_model=ReporteMaster,
+    response_model=FeedbackReporteMaster,
     responses={
-        409: {"description": "`reporte_ya_decidido` o `sin_ciclo_de_creditos`"},
-        422: {"description": "`monto_invalido`, `tope_reporte_excedido` o `tope_mensual_excedido`"},
+        **_COMUNES,
+        409: {"description": "`reporte_ya_decidido` (`details.estado`) o `sin_ciclo_de_creditos`"},
+        422: {
+            "description": "`monto_invalido`, `tope_reporte_excedido` (`details.maximo`) o `tope_mensual_excedido` "
+            "(`details.maximo`, `regalado`, `disponible`); `validation_error` si `creditos` no es un entero"
+        },
+        500: {"description": "`abono_inconsistente`: no entró el abono y se deshizo la aprobación"},
     },
 )
 async def aprobar(
-    report_id: uuid.UUID, payload: AprobarIn, principal: Annotated[Principal, Depends(get_principal)]
-) -> ReporteMaster:
+    report_id: uuid.UUID, payload: FeedbackAprobarIn, principal: Annotated[Principal, Depends(get_principal)]
+) -> FeedbackReporteMaster:
     """Aprueba y acredita `creditos` de regalo al negocio, en una sola transacción. El mismo master con el
     mismo monto responde 200 sin volver a acreditar; cualquier otra repetición, 409 `reporte_ya_decidido`."""
     _require_master_estricto(principal)
@@ -355,15 +379,16 @@ async def aprobar(
 
 @router.post(
     "/reports/{report_id}/rechazar",
-    response_model=ReporteMaster,
+    response_model=FeedbackReporteMaster,
     responses={
-        409: {"description": "`reporte_ya_decidido`"},
+        **_COMUNES,
+        409: {"description": "`reporte_ya_decidido` (`details.estado`)"},
         422: {"description": "`duplicado_sin_original`, `duplicado_invalido` o `duplicado_sin_motivo`"},
     },
 )
 async def rechazar(
-    report_id: uuid.UUID, payload: RechazarIn, principal: Annotated[Principal, Depends(get_principal)]
-) -> ReporteMaster:
+    report_id: uuid.UUID, payload: FeedbackRechazarIn, principal: Annotated[Principal, Depends(get_principal)]
+) -> FeedbackReporteMaster:
     """Rechaza con un motivo visible al cliente. `duplicado_de` se valida contra cualquier negocio y el cliente
     nunca ve a qué reporte apunta."""
     _require_master_estricto(principal)
@@ -373,7 +398,7 @@ async def rechazar(
             revisor_id=principal.admin.id,
             revisor_email=principal.admin.email,
             motivo_codigo=payload.motivo_codigo,
-            motivo=payload.motivo.strip(),
+            motivo=payload.motivo,
             nota_interna=(payload.nota_interna or "").strip() or None,
             duplicado_de=payload.duplicado_de,
         )

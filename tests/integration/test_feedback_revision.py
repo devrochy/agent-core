@@ -245,9 +245,12 @@ async def test_topes_por_reporte_y_por_mes_dan_422_sin_acreditar(app_client, ten
     assert await _estado(tid, tercero) == "recibido"
     assert sum(c for _o, c in await _bonificaciones(tid)) == 9000
 
-    for malo in (0, -5, "100", 1.5):
+    for malo in (0, -5):
         r = await app_client.post(f"{BASE}/{tercero}/aprobar", json={"creditos": malo}, headers=master)
-        assert r.status_code == 422, malo
+        assert (r.status_code, r.json()["error"]["code"]) == (422, "monto_invalido"), malo
+    for malo in ("100", 1.5, True):
+        r = await app_client.post(f"{BASE}/{tercero}/aprobar", json={"creditos": malo}, headers=master)
+        assert (r.status_code, r.json()["error"]["code"]) == (422, "validation_error"), malo
 
 
 async def test_sin_ciclo_de_creditos_es_409_y_el_reporte_sigue_abierto(app_client, tenant_setup) -> None:
@@ -309,9 +312,11 @@ async def test_tomar_repetido_por_el_mismo_200_y_por_otro_409(app_client, tenant
     for _ in range(2):
         r = await app_client.post(f"{BASE}/{rid}/tomar", headers=master)
         assert r.status_code == 200 and r.json()["estado"] == "en_revision", r.text
+        assert r.json()["revisor"]["id"] == str(await _admin_id())
     with pytest.raises(revision.ErrorDeRevision) as exc:
         await revision.tomar(rid, revisor_id=uuid.uuid4(), revisor_email="otro@test")
     assert (exc.value.status, exc.value.code) == (409, "reporte_ya_tomado")
+    assert exc.value.details == {"revisado_por": str(await _admin_id())}
 
 
 async def test_rechazar_como_duplicado_de_otro_negocio(app_client, tenant_setup) -> None:

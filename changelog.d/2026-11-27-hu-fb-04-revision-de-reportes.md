@@ -1,4 +1,5 @@
-### Añadido
+## Reportes de clientes: revisión master y créditos de regalo (HU-FB-04, SPEC-54, ADR-0213) (2026-11-27)
+
 - Revisión de reportes de clientes por el equipo de SolversHub (SPEC-54, HU-FB-04, ADR-0213):
   `/api/v1/platform/feedback/reports` con bandeja entre negocios (cursor `(created_at, id)`), detalle con
   adjuntos firmados y `nota_interna`, y las decisiones `tomar`, `aprobar` con créditos de regalo y `rechazar`
