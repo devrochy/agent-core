@@ -558,3 +558,80 @@ async def test_la_migracion_0162_sube_y_baja() -> None:
     finally:
         _alembic("upgrade", "head")
     assert await _existen() == todo
+
+
+async def test_rls_bloquea_update_y_adjuntos_cruzados_y_la_clave_es_por_negocio(app_client) -> None:  # type: ignore[no-untyped-def]
+    a, _ = await _negocio()
+    b, _ = await _negocio()
+    autor_a, email_a = await _usuario(a)
+    autor_b, email_b = await _usuario(b)
+    ra = await _reporte_directo(a, autor_a)
+    rb = await _reporte_directo(b, autor_b)
+
+    # UPDATE desde el scope de B sobre un reporte de A: 0 filas.
+    await _sql(b, "update feedback_reports set motivo = 'Cambiado' where id = :r", r=ra)
+    assert await _sql(a, "select motivo from feedback_reports where id = :r", r=ra) == [(None,)]
+    # Un adjunto en A que cuelgue de un reporte de B lo frena la FK compuesta.
+    with pytest.raises(DBAPIError):
+        await _sql(
+            a,
+            "insert into feedback_attachments (tenant_id, report_id, orden, storage_key, mimetype, bytes, sha256)"
+            " values (:t, :r, 0, 'x/feedback/y/z.png', 'image/png', 10, :s)",
+            t=a, r=rb, s="c" * 64,
+        )
+    # La misma Idempotency-Key en otro negocio crea otro reporte.
+    clave = uuid.uuid4().hex
+    de_a = await _enviar(app_client, await _cabeceras(app_client, a, email_a), clave=clave)
+    de_b = await _enviar(app_client, await _cabeceras(app_client, b, email_b), clave=clave)
+    assert (de_a.status_code, de_b.status_code) == (201, 201)
+    assert de_a.json()["id"] != de_b.json()["id"]
+
+
+async def test_un_rechazado_no_muestra_revisor_nota_ni_duplicado(app_client) -> None:  # type: ignore[no-untyped-def]
+    tid, _ = await _negocio()
+    autor, email = await _usuario(tid)
+    _, email_owner = await _usuario(tid, "owner")
+    rid = await _reporte_directo(tid, autor)
+    # Un adjunto con una clave fuera de la carpeta del reporte no se firma.
+    await _sql(
+        tid,
+        "insert into feedback_attachments (tenant_id, report_id, orden, storage_key, mimetype, bytes, sha256)"
+        " values (:t, :r, 0, 'otro-negocio/feedback/x/z.png', 'image/png', 10, :s)",
+        t=tid, r=rid, s="d" * 64,
+    )
+    await _sql(
+        tid,
+        "update feedback_reports set estado = 'rechazado', revisado_por = :v, decidido_en = now(), "
+        "motivo_codigo = 'duplicado', motivo = 'Ya lo teníamos', nota_interna = 'secreto', duplicado_de = :d "
+        "where id = :r",
+        v=uuid.uuid4(), d=uuid.uuid4(), r=rid,
+    )
+    ocultos = ("revisado_por", "nota_interna", "duplicado_de", "tomado_en", "idempotency_key", "updated_at")
+    for h in (await _cabeceras(app_client, tid, email), await _cabeceras(app_client, tid, email_owner)):
+        detalle = (await app_client.get(f"{URL}/{rid}", headers=h)).json()
+        assert detalle["motivo_codigo"] == "duplicado" and detalle["motivo"] == "Ya lo teníamos"
+        assert detalle["adjuntos"] == []
+        assert not set(ocultos) & set(detalle)
+    lista = (await app_client.get(URL, params={"alcance": "negocio"},
+                                  headers=await _cabeceras(app_client, tid, email_owner))).json()
+    assert not set(ocultos) & set(lista["items"][0])
+    assert "secreto" not in str(lista) and "secreto" not in str(detalle)
+
+
+async def test_privilegios_de_app_runtime() -> None:
+    def _tabla(t: str, p: str) -> str:
+        return f"select has_table_privilege('app_runtime', '{t}', '{p}')"
+
+    for consulta, esperado in (
+        (_tabla("feedback_reports", "DELETE"), False),
+        (_tabla("feedback_reports", "TRUNCATE"), False),
+        (_tabla("feedback_attachments", "UPDATE"), False),
+        (_tabla("feedback_attachments", "DELETE"), False),
+        (_tabla("feedback_reports", "INSERT"), True),
+        ("select has_column_privilege('app_runtime', 'feedback_reports', 'estado', 'UPDATE')", True),
+        ("select has_column_privilege('app_runtime', 'feedback_reports', 'autor_admin_id', 'UPDATE')", False),
+        ("select has_column_privilege('app_runtime', 'feedback_reports', 'tenant_id', 'UPDATE')", False),
+        ("select bool_and(has_function_privilege('app_runtime', p.oid, 'execute')) from pg_proc p "
+         "where p.proname in ('feedback_bandeja', 'feedback_reporte_tenant')", True),
+    ):
+        assert await _sql(None, consulta) == [(esperado,)], consulta
