@@ -85,6 +85,7 @@ ESCRITORES_PERMITIDOS = {
     "core/api/routers/leads.py": "ediciones del operador desde el panel: nunca se bloquean",
     "core/orchestrator/consumer.py": "datos que el canal entrega (nombre del perfil), no los dicta el agente",
     "core/leads/intake.py": "formulario público de la landing: el titular lo envía",
+    "core/leads/alta.py": "alta manual/importación del operador desde el panel",
 }
 
 

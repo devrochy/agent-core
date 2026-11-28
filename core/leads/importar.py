@@ -17,8 +17,8 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from core.leads import alta
 from core.leads import seguimiento as _seg
-from core.leads import servicio
 from core.shared.telefono import normalizar_telefono
 
 MAX_FILAS = 1000
@@ -218,7 +218,7 @@ async def importar_csv(
         try:
             fecha = _fecha(fila.seguimiento_en or "", zona)
             async with session.begin_nested():
-                _, _, lead_creado, _ = await servicio.crear_desde_panel(
+                _, _, lead_creado, _ = await alta.crear_desde_panel(
                     session,
                     tenant_id,
                     nombre=fila.nombre,

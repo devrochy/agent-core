@@ -1004,8 +1004,8 @@ async def create_lead(
     Si el teléfono o el correo ya son de un cliente del negocio, se reutiliza; si ese cliente ya tiene un lead con
     datos, responde 409 con su id para abrirlo en la ficha en vez de duplicarlo.
     """
+    from core.leads import alta
     from core.leads import seguimiento as _seg
-    from core.leads import servicio
 
     email = (body.email or "").strip().lower() or None
     if email and not _EMAIL.match(email):
@@ -1031,7 +1031,7 @@ async def create_lead(
         async with get_session() as session:
             zona = await _seg.zona_del_negocio(session, tenant_id)
             fecha = _seg.parsear_fecha(body.seguimiento_en, zona) if body.seguimiento_en else None
-            cliente, lead, lead_creado, _ = await servicio.crear_desde_panel(
+            cliente, lead, lead_creado, _ = await alta.crear_desde_panel(
                 session,
                 tenant_id,
                 nombre=body.nombre,
@@ -1045,7 +1045,7 @@ async def create_lead(
                 motivo_perdida=body.motivo_perdida,
                 nota_perdida=body.nota_perdida,
             )
-    except servicio.LeadYaTieneDatos as exc:
+    except alta.LeadYaTieneDatos as exc:
         raise ApiError(
             409,
             "lead_existente",
