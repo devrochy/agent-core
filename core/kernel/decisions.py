@@ -87,6 +87,8 @@ class Turno:
     canal: str | None = None  # `conversations.channel`: solo para la métrica de duración (ADR-0188)
     inbound_message_ids: list[uuid.UUID] = field(default_factory=list)
     decidido: bool = False
+    # HU-AOS-72: la prueba de un borrador corre sin release y no deja cabecera (`omitir_decision`).
+    sin_decision: bool = False
     outcome: str | None = None
     blocked_by: str | None = None
     status: str | None = None
@@ -261,6 +263,9 @@ async def decidir(
     turno.canal = canal if isinstance(canal, str) else None
     if status is not None:
         turno.status = status
+    if turno.sin_decision:
+        # Sin cabecera no hay `turn_id` que propagar (igual que si la escritura fallara).
+        return
     # Las columnas del router solo valen en un turno enrutado (`ck_core_decisions_routed` y
     # `ck_core_decisions_shadow`): un turno bloqueado después de enrutar no las lleva.
     enrutado = outcome == "routed"
@@ -311,6 +316,14 @@ async def decidir(
             turn_id=turno.id, tenant_id=turno.tenant_id, trace_id=turno.trace_id
         )
     )
+
+
+def omitir_decision() -> None:
+    """El turno no escribe en `core_decisions` (la prueba de un borrador, HU-AOS-72: sin release, y
+    `ck_core_decisions_contract` exige release a un turno `routed`). El contrato del CHECK no se toca."""
+    turno = turno_actual()
+    if turno is not None:
+        turno.sin_decision = True
 
 
 async def enrutar(conversation: Any) -> None:

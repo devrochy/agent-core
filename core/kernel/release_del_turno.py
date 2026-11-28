@@ -650,12 +650,13 @@ async def fijar_release_del_turno(conversation: Any, texto: str = "", *, enrutar
         return None
     from core.db.session import get_session
     from core.kernel.banderas import banderas_del_negocio
-    from core.kernel.decisions import anotar_release, anotar_ruta
+    from core.kernel.decisions import anotar_release, anotar_ruta, omitir_decision
 
     borrador = _borrador_en_prueba(conversation)
     if borrador is not None and connection_id is not None:
         # HU-AOS-72 (adenda de ADR-0191): la prueba del panel de un borrador corre con una release
         # efímera, sin asignar release, sin router y sin anotarla en `core_decisions`.
+        omitir_decision()
         return await _fijar_borrador(tenant_id, borrador, connection_id)
     async with get_session() as session:
         banderas = await banderas_del_negocio(session, tenant_id)
