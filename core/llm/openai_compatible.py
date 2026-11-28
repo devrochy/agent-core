@@ -54,6 +54,25 @@ PRICING: dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
 }
 
+# Tarifa para un modelo que no está en `PRICING`: la misma por defecto de Anthropic
+# (`anthropic_provider.py`). Es CONSERVADORA a propósito: sobrestimar el costo protege el margen y
+# se nota en el ledger; el cero silencioso facturaba gratis un modelo mal escrito o recién agregado.
+TARIFA_POR_DEFECTO: tuple[float, float] = (3.00, 15.00)
+_MODELOS_SIN_TARIFA_AVISADOS: set[str] = set()
+
+
+def tarifa_del_modelo(model: str) -> tuple[float, float]:
+    """USD por millón de tokens (entrada, salida). Un modelo fuera de `PRICING` usa la tarifa por
+    defecto y deja un warning (una vez por modelo y proceso): agregarlo a la tabla."""
+    tarifa = PRICING.get(model)
+    if tarifa is not None:
+        return tarifa
+    if model not in _MODELOS_SIN_TARIFA_AVISADOS:
+        _MODELOS_SIN_TARIFA_AVISADOS.add(model)
+        log.warning("llm_modelo_sin_tarifa", model=model, tarifa_usd_por_mtok=TARIFA_POR_DEFECTO)
+    return TARIFA_POR_DEFECTO
+
+
 # USD por millón de tokens (lectura, escritura) de la caché (ADR-0208 §13). En OpenAI-compatible
 # `input_tokens` ya incluye lo cacheado y la escritura no se cobra aparte (= precio de entrada).
 # Fuentes (2026-11-22): DeepSeek https://api-docs.deepseek.com/quick_start/pricing (cache hit en
@@ -118,7 +137,7 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.provider_name = provider_name
-        self.pricing_per_mtok = PRICING.get(model, (0.0, 0.0))
+        self.pricing_per_mtok = tarifa_del_modelo(model)
         self.cache_pricing_per_mtok = PRECIOS_CACHE.get(model)
         self.input_includes_cache = True
         # `None` = no enviar el campo (proveedores que no lo conocen, como OpenAI).

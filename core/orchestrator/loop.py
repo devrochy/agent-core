@@ -169,6 +169,7 @@ class _TurnUsage:
     # Llave del turno para el crédito (ADR-0144): `byok` solo cobra el fee. Default seguro.
     key_mode: str = "platform"
     llamadas: int = 0  # llamadas al LLM del turno: sin ninguna no hay fee de turno de IA
+    ledger_escrito: bool = False  # la fila del turno se escribe una sola vez (ruta normal o de excepción)
 
     def add(self, provider, response) -> None:  # type: ignore[no-untyped-def]
         uso = response.usage
@@ -234,7 +235,13 @@ async def _write_usage_ledger(
     usage: _TurnUsage,
     span=None,  # type: ignore[no-untyped-def]
 ) -> None:
-    """Una fila append-only por turno. Best-effort: nunca interrumpe la respuesta."""
+    """Una fila append-only por turno. Best-effort: nunca interrumpe la respuesta.
+
+    Idempotente por turno (`usage.ledger_escrito`): la ruta de excepción de `process_conversation` la
+    vuelve a invocar sin duplicar la fila."""
+    if usage.ledger_escrito:
+        return
+    usage.ledger_escrito = True
     try:
         anotar_uso(usage.input_tokens, usage.output_tokens, usage.cost_usd)  # turn_outcomes (HU-AOS-10)
         # Release y agente del turno (HU-AOS-15): NULL si el turno corrió sin release.
@@ -292,9 +299,36 @@ async def _write_usage_ledger(
             span.end()
 
 
+@dataclass
+class _CostoDelTurno:
+    """Lo que hace falta para escribir el ledger si el turno revienta: lo registra el turno en cuanto
+    tiene `usage` y el span."""
+
+    conversation_id: uuid.UUID | None = None
+    spec: Any = None
+    usage: _TurnUsage | None = None
+    span: Any = None
+
+    async def asegurar_ledger(self) -> None:
+        """Escribe el costo ya gastado si el turno aún no lo escribió. Sin llamadas al LLM no hay costo."""
+        if self.usage is None or self.usage.ledger_escrito or self.usage.llamadas == 0:
+            return
+        await _write_usage_ledger(self.conversation_id, self.spec, self.usage, self.span)  # type: ignore[arg-type]
+
+
 @con_release  # ranura de la release del turno (HU-AOS-14)
 @en_turno(anota_resultado=True)  # decisión y resultado del turno (HU-AOS-10)
 async def process_conversation(conversation_id: uuid.UUID, latest_message: str) -> TurnResult | None:
+    """Un turno. Si revienta entre llamadas al LLM, el costo ya gastado igual llega al usage_ledger."""
+    costo = _CostoDelTurno()
+    try:
+        return await _procesar_turno(conversation_id, latest_message, costo)
+    except BaseException:  # incluye CancelledError: el gasto ya ocurrió
+        await costo.asegurar_ledger()
+        raise
+
+
+async def _procesar_turno(conversation_id: uuid.UUID, latest_message: str, costo: _CostoDelTurno) -> TurnResult | None:
     reset_simulado()
     settings = get_settings()
 
@@ -351,7 +385,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
         return TurnResult(text=bloqueo.texto, escalated=bloqueo.escalado)
 
     # ---------------- 1. Memoria y contexto
-    history = await _load_history(conversation_id)
+    history = await _load_history(conversation_id, short_term_turns=spec.memory.shortTermTurns)
     recent_context = " ".join(m.content for m in history[-6:] if m.content)
     history_tool_results = await _historical_tool_results(conversation_id)
 
@@ -619,6 +653,7 @@ async def process_conversation(conversation_id: uuid.UUID, latest_message: str) 
     # Span del turno (OTel): atributos para el panel/trazas.
     tracer = get_tracer()
     turn_span = tracer.start_span("turn")
+    costo.conversation_id, costo.spec, costo.usage, costo.span = conversation_id, spec, usage, turn_span
     span_attributes(
         turn_span,
         tenant_id=str(get_current_tenant_id()),
@@ -1628,8 +1663,15 @@ async def _historical_tool_results(conversation_id: uuid.UUID) -> list[dict[str,
         ]
 
 
-async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
-    """Working memory (Redis) con fallback a Postgres."""
+HISTORIAL_RESPALDO_MAX = 40
+
+
+async def _load_history(conversation_id: uuid.UUID, short_term_turns: int | None = None) -> list[LLMMessage]:
+    """Working memory (Redis) con fallback a Postgres.
+
+    El respaldo trae los mensajes MÁS RECIENTES (no los más antiguos), en orden cronológico, y
+    respeta `shortTermTurns` del spec igual que la memoria de trabajo; el tope de siempre
+    (`HISTORIAL_RESPALDO_MAX`) sigue siendo el máximo, para no subir el costo del prompt."""
     turns = await working_memory.get_recent_turns(conversation_id)
     if turns:
         return [
@@ -1638,6 +1680,9 @@ async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
             if t["role"] in ("user", "assistant") and t.get("content")
         ]
 
+    limite = HISTORIAL_RESPALDO_MAX
+    if short_term_turns and short_term_turns > 0:
+        limite = min(limite, short_term_turns)
     async with get_session() as session:
         result = await session.execute(
             select(Message)
@@ -1646,10 +1691,10 @@ async def _load_history(conversation_id: uuid.UUID) -> list[LLMMessage]:
                 # tenant_id explícito -- defensa en profundidad además de RLS.
                 Message.tenant_id == get_current_tenant_id(),
             )
-            .order_by(Message.created_at)
-            .limit(40)
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(limite)
         )
-        rows = result.scalars().all()
+        rows = list(reversed(result.scalars().all()))
     history: list[LLMMessage] = []
     for row in rows:
         role = "user" if row.direction == "inbound" else "assistant"
