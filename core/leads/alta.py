@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 
 from core.db.models import Customer, Lead
 from core.leads.etapas import ETAPAS, cambiar_etapa, motivo_valido, nota_de_perdida
@@ -24,10 +24,6 @@ class LeadYaTieneDatos(LookupError):
     def __init__(self, customer_id: uuid.UUID) -> None:
         self.customer_id = customer_id
         super().__init__("Este cliente ya tiene un lead con datos.")
-
-
-def _con_texto(columna: Any) -> Any:
-    return func.length(func.trim(func.coalesce(columna, ""))) > 0
 
 
 async def _cliente_por_contacto(
@@ -143,7 +139,7 @@ async def crear_desde_panel(
             session, tenant_id, cliente.id, origen="manual", idempotency_key=f"panel:{cliente.id}"
         )
     elif source == "human" and any(
-        _con_texto(columna) for columna in (lead.name, lead.phone, lead.email, lead.interest)
+        str(valor or "").strip() for valor in (lead.name, lead.phone, lead.email, lead.interest)
     ):
         raise LeadYaTieneDatos(cliente.id)
 
