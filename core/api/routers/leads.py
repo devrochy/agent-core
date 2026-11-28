@@ -20,6 +20,7 @@ import io
 import re
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
@@ -58,6 +59,7 @@ from core.memory import facts
 from core.memory import perfil as perfil_cliente
 from core.shared.csv_seguro import celda as _celda
 from core.shared.logger import get_logger
+from core.shared.telefono import normalizar_telefono
 from core.shared.tenant import tenant_slug
 from core.shared.test_mode import TEST_CHANNEL
 
@@ -67,6 +69,7 @@ router = APIRouter(prefix="/admin/leads", tags=["admin · leads"])
 
 MAX_CSV = 5000
 MAX_BYTES_AVATAR = 2 * 1024 * 1024
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # Lo que una persona puede escribir desde la ficha (los mismos límites que al agente).
 _MAX_VALOR = 500
 _MAX_CLAVES = 20
@@ -302,6 +305,39 @@ class LeadPackUpdate(BaseModel):
 
 class BotState(BaseModel):
     bot_paused: bool
+
+
+class LeadManualIn(BaseModel):
+    """Alta manual de un lead desde Clientes: el cliente y su lead en un solo paso."""
+
+    nombre: str = Field(min_length=1, max_length=200)
+    telefono: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=254)
+    interes: str | None = Field(default=None, max_length=500)
+    estado: Literal["nuevo", "calificado", "contactado", "convertido", "perdido"] | None = None
+    valor: Decimal | None = Field(default=None, ge=0, le=Decimal("9999999999.99"))
+    seguimiento_en: str | None = Field(default=None, max_length=40)
+    seguimiento_nota: str | None = Field(default=None, max_length=200)
+    motivo_perdida: str | None = None
+    nota_perdida: str | None = Field(default=None, max_length=300)
+
+
+class LeadCreado(BaseModel):
+    id: uuid.UUID
+    creado: bool
+
+
+class ErrorDeImportacion(BaseModel):
+    fila: int
+    mensaje: str
+
+
+class ImportacionLeadsOut(BaseModel):
+    total: int
+    creados: int
+    actualizados: int
+    omitidos: int
+    errores: list[ErrorDeImportacion]
 
 
 # ------------------------------------------------------------------ helpers
@@ -955,6 +991,108 @@ async def export_leads_csv(
         content="﻿" + buf.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="clientes.csv"'},
+    )
+
+
+@router.post("", response_model=LeadCreado)
+async def create_lead(
+    body: LeadManualIn,
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> LeadCreado:
+    """Alta manual de un cliente con su lead (panel › Clientes › Nuevo lead).
+
+    Si el teléfono o el correo ya son de un cliente del negocio, se reutiliza; si ese cliente ya tiene un lead con
+    datos, responde 409 con su id para abrirlo en la ficha en vez de duplicarlo.
+    """
+    from core.leads import seguimiento as _seg
+    from core.leads import servicio
+
+    email = (body.email or "").strip().lower() or None
+    if email and not _EMAIL.match(email):
+        raise ApiError.bad_request("El correo no es válido.", code="datos_invalidos", fields={"email": "Revisa el correo."})
+    telefono = normalizar_telefono(body.telefono) if body.telefono else None
+    if body.telefono and not telefono:
+        raise ApiError.bad_request(
+            "El teléfono no tiene dígitos.", code="datos_invalidos", fields={"telefono": "Revisa el teléfono."}
+        )
+    if not telefono and not email:
+        raise ApiError.bad_request(
+            "Indica un teléfono o un correo.", code="datos_invalidos", fields={"telefono": "Falta un medio de contacto."}
+        )
+    if body.estado == "perdido" and not body.motivo_perdida:
+        raise ApiError.bad_request(
+            "Para marcar un lead como «perdido» hay que indicar el motivo.",
+            code="datos_invalidos",
+            fields={"motivo_perdida": "Elige el motivo."},
+        )
+
+    tenant_id = principal.tenant_id
+    try:
+        async with get_session() as session:
+            zona = await _seg.zona_del_negocio(session, tenant_id)
+            fecha = _seg.parsear_fecha(body.seguimiento_en, zona) if body.seguimiento_en else None
+            cliente, lead, lead_creado, _ = await servicio.crear_desde_panel(
+                session,
+                tenant_id,
+                nombre=body.nombre,
+                telefono=telefono,
+                email=email,
+                interes=body.interes,
+                estado=body.estado,
+                valor=body.valor,
+                seguimiento_en=fecha,
+                seguimiento_nota=body.seguimiento_nota,
+                motivo_perdida=body.motivo_perdida,
+                nota_perdida=body.nota_perdida,
+            )
+    except servicio.LeadYaTieneDatos as exc:
+        raise ApiError(
+            409,
+            "lead_existente",
+            "Este cliente ya tiene un lead con datos. Ábrelo para editarlo.",
+            details={"customer_id": str(exc.customer_id)},
+        ) from exc
+    except ValueError as exc:
+        raise ApiError.bad_request(str(exc), code="datos_invalidos") from exc
+
+    log.info(
+        "lead_manual_creado",
+        customer_id=str(cliente.id),
+        lead_id=str(lead.id),
+        creado=lead_creado,
+        admin_id=str(principal.admin.id),
+    )
+    return LeadCreado(id=cliente.id, creado=lead_creado)
+
+
+@router.post("/import", response_model=ImportacionLeadsOut)
+async def import_leads(
+    archivo: Annotated[UploadFile, File(description="CSV con columnas nombre, teléfono/correo e interés.")],
+    principal: Annotated[Principal, Depends(require("leads", write=True))],
+) -> ImportacionLeadsOut:
+    """Importa leads desde un CSV (panel › Clientes › Importar). Cada fila va en su propio savepoint."""
+    from core.leads import importar
+
+    contenido = await archivo.read()
+    try:
+        async with get_session() as session:
+            resumen = await importar.importar_csv(session, principal.tenant_id, contenido)
+    except importar.CsvInvalido as exc:
+        raise ApiError.bad_request(str(exc), code="csv_invalido") from exc
+    log.info(
+        "leads_importados",
+        total=resumen.total,
+        creados=resumen.creados,
+        actualizados=resumen.actualizados,
+        errores=resumen.omitidos,
+        admin_id=str(principal.admin.id),
+    )
+    return ImportacionLeadsOut(
+        total=resumen.total,
+        creados=resumen.creados,
+        actualizados=resumen.actualizados,
+        omitidos=resumen.omitidos,
+        errores=[ErrorDeImportacion(fila=e.fila, mensaje=e.mensaje) for e in resumen.errores],
     )
 
 

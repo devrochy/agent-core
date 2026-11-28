@@ -29,7 +29,7 @@ from core.admin.lead_registry import (
     antes_del_cursor,
     lead_registry,
 )
-from core.db.models import Lead, LeadFollowup, LeadStageChange
+from core.db.models import Customer, Lead, LeadFollowup, LeadStageChange
 from core.db.session import get_session
 from core.leads import seguimiento as _seg
 from core.leads import valor as _valor
@@ -112,6 +112,16 @@ async def _filter_query(key: str, value: str) -> Select[Any] | None:
         return select(vivo.c.customer_id).where(vivo.c.status == ETAPA_DE_PERDIDA, motivo)
     if key == "valor":
         return select(vivo.c.customer_id).where(_valor.condicion(value, vivo.c.estimated_value))
+    if key == "lead_datos":
+        con_datos = await _con_datos(None)
+        if value == "con":
+            return con_datos
+        if value == "sin":
+            return select(Customer.id).where(
+                Customer.tenant_id == tid,
+                Customer.deleted_at.is_(None),
+                Customer.id.not_in(con_datos),
+            )
     return None
 
 
@@ -144,6 +154,18 @@ async def _facet_query(key: str) -> Select[Any] | None:
         )
     if key == "valor":
         return select(vivo.c.customer_id.label("customer_id"), _valor.tramo_sql(vivo.c.estimated_value).label("valor"))
+    if key == "lead_datos":
+        con_datos = await _con_datos(None)
+        return (
+            select(
+                Customer.id.label("customer_id"),
+                case(
+                    (Customer.id.in_(con_datos), literal("con")),
+                    else_=literal("sin"),
+                ).label("valor"),
+            )
+            .where(Customer.tenant_id == tid, Customer.deleted_at.is_(None))
+        )
     return None
 
 
@@ -430,6 +452,7 @@ lead_registry.register(
         LeadFilter(key="motivo_perdida", label="Motivo de pérdida", options=MOTIVOS_FILTRO),
         LeadFilter(key="valor", label="Valor estimado", options=_valor.OPCIONES),
         LeadFilter(key="origen", label="Origen", options=ORIGENES),
+        LeadFilter(key="lead_datos", label="Datos del lead", options=(("con", "Con datos"), ("sin", "Sin datos"))),
     ],
     filter_query=_filter_query,
     facet_query=_facet_query,
