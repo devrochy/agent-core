@@ -61,6 +61,7 @@ from core.api.routers import (
     plantillas_opciones,
     platform,
     platform_altas,
+    platform_feedback,
     platform_meta_es,
     playground,
     plugins,
@@ -145,6 +146,7 @@ api_router.include_router(plan.router)
 api_router.include_router(platform.router)
 api_router.include_router(platform_altas.router)
 api_router.include_router(platform_meta_es.router)
+api_router.include_router(platform_feedback.router)
 api_router.include_router(crons.router)
 api_router.include_router(kill_switch.router)
 api_router.include_router(automatizaciones.router)

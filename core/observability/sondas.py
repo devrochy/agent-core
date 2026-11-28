@@ -11,6 +11,7 @@ que corre en el hilo del lector, nunca toca la base ni Redis, y Grafana no se co
 | `agentcore_worker_heartbeat_age_seconds` | — | edad de `worker:heartbeat`; ausente = `9999` |
 | `agentcore_dependency_up` | `component` (db, redis) | `SELECT 1` y `PING` (las sondas de `/healthz/deep`) |
 | `agentcore_cron_failures_24h` | `job` (nombre de la tarea) | ejecuciones fallidas de las últimas 24 h, del servicio de crons (`crons_service.fallos_24h`) |
+| `agentcore_feedback_bandeja_pendientes` | `estado` (recibido, en_revision) | reportes de clientes sin decidir, entre negocios (`feedback_pendientes()`, SECURITY DEFINER, HU-FB-04) |
 
 Solo con `AGENT_CORE_ROLE=api` y `OTEL_METRICS_ENABLED=true`: un solo proceso mide (worker, beat y
 conector no repiten las series) y, apagadas las métricas, no hay consultas extra. Si una medición
@@ -38,7 +39,8 @@ TOPE_S = 5.0
 LATIDO_AUSENTE_S = 9999.0
 GRUPO_INBOUND = "orchestrator-group"
 
-_valores: dict[str, Any] = {"dlq": None, "inbound": None, "latido": None, "deps": {}, "crons": {}}
+_valores: dict[str, Any] = {"dlq": None, "inbound": None, "latido": None, "deps": {}, "crons": {}, "feedback": {}}
+_ESTADOS_PENDIENTES = ("recibido", "en_revision")
 
 
 # ---------------------------------------------------------------------------- mediciones
@@ -68,6 +70,17 @@ async def _crons_fallidos() -> dict[str, int]:
     return await fallos_24h()
 
 
+async def _feedback_pendientes() -> dict[str, int]:
+    from sqlalchemy import text
+
+    from core.db.session import get_session
+
+    async with get_session() as session:
+        filas = (await session.execute(text("SELECT estado, n FROM feedback_pendientes()"))).all()
+    # Los dos estados siempre: una bandeja vacía es 0, no una serie que desaparece.
+    return {**dict.fromkeys(_ESTADOS_PENDIENTES, 0), **{f.estado: int(f.n) for f in filas}}
+
+
 async def _con_tope(nombre: str, medicion: Any) -> Any:
     try:
         return await asyncio.wait_for(medicion(), timeout=TOPE_S)
@@ -77,11 +90,12 @@ async def _con_tope(nombre: str, medicion: Any) -> Any:
 
 
 async def medir() -> None:
-    dlq, inbound, latido, crons, db, redis = await asyncio.gather(
+    dlq, inbound, latido, crons, feedback, db, redis = await asyncio.gather(
         _con_tope("dlq", _dlq),
         _con_tope("inbound", _inbound_pendiente),
         _con_tope("latido", _latido),
         _con_tope("crons", _crons_fallidos),
+        _con_tope("feedback", _feedback_pendientes),
         salud._medir("db", salud.sonda_db),
         salud._medir("redis", salud.sonda_redis),
     )
@@ -91,6 +105,7 @@ async def medir() -> None:
     if crons is not None:
         # Un cron que ya no corrió en 24 h queda en 0 (no desaparece) para que la alerta se resuelva.
         _valores["crons"] = {**dict.fromkeys(_valores["crons"], 0), **crons}
+    _valores["feedback"] = feedback or {}
     _valores["deps"] = {"db": 1 if db == salud.OK else 0, "redis": 1 if redis == salud.OK else 0}
 
 
@@ -120,6 +135,10 @@ def _observar_crons(_opciones: CallbackOptions) -> Iterable[Observation]:
     return [Observation(v, {"job": _etiqueta(k)}) for k, v in dict(_valores["crons"]).items()]
 
 
+def _observar_feedback(_opciones: CallbackOptions) -> Iterable[Observation]:
+    return [Observation(v, {"estado": _etiqueta(k)}) for k, v in dict(_valores.get("feedback") or {}).items()]
+
+
 _meter = metrics.get_meter("agent-core")
 _meter.create_observable_gauge("agentcore_dlq_length", [_observar_dlq], description="Entradas en la DLQ del inbound")
 _meter.create_observable_gauge(
@@ -136,6 +155,11 @@ _meter.create_observable_gauge(
 )
 _meter.create_observable_gauge(
     "agentcore_cron_failures_24h", [_observar_crons], description="Ejecuciones fallidas de cada cron en 24 h"
+)
+_meter.create_observable_gauge(
+    "agentcore_feedback_bandeja_pendientes",
+    [_observar_feedback],
+    description="Reportes de clientes sin decidir, por estado",
 )
 
 

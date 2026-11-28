@@ -209,7 +209,7 @@ def test_middleware_http_por_grupo_y_clase(registros):
 # --------------------------------------------------------------------------------- sondas
 @pytest.fixture
 def valores(monkeypatch):
-    v: dict[str, Any] = {"dlq": None, "inbound": None, "latido": None, "deps": {}, "crons": {}}
+    v: dict[str, Any] = {"dlq": None, "inbound": None, "latido": None, "deps": {}, "crons": {}, "feedback": {}}
     monkeypatch.setattr(sondas, "_valores", v)
     return v
 
@@ -227,6 +227,9 @@ def test_medir_llena_los_valores_y_los_gauges_solo_leen(monkeypatch, valores):
     async def _crons():
         return {"core.billing_lifecycle": 2}
 
+    async def _feedback():
+        return {"recibido": 4, "en_revision": 0}
+
     async def _ok():
         return None
 
@@ -237,6 +240,7 @@ def test_medir_llena_los_valores_y_los_gauges_solo_leen(monkeypatch, valores):
     monkeypatch.setattr(sondas, "_inbound_pendiente", _inbound)
     monkeypatch.setattr(sondas, "_latido", _latido)
     monkeypatch.setattr(sondas, "_crons_fallidos", _crons)
+    monkeypatch.setattr(sondas, "_feedback_pendientes", _feedback)
     monkeypatch.setattr(sondas.salud, "sonda_db", _ok)
     monkeypatch.setattr(sondas.salud, "sonda_redis", _cae)
     valores["crons"] = {"core.viejo": 1}
@@ -249,18 +253,20 @@ def test_medir_llena_los_valores_y_los_gauges_solo_leen(monkeypatch, valores):
     assert {o.attributes["component"]: o.value for o in sondas._observar_deps(None)} == {"db": 1, "redis": 0}
     # el cron que ya no aparece queda en 0, no desaparece
     assert {o.attributes["job"]: o.value for o in sondas._observar_crons(None)} == {"core.viejo": 0, "core.billing_lifecycle": 2}
+    assert {o.attributes["estado"]: o.value for o in sondas._observar_feedback(None)} == {"recibido": 4, "en_revision": 0}
 
 
 def test_una_sonda_que_falla_queda_sin_dato(monkeypatch, valores):
     async def _cae():
         raise TimeoutError
 
-    for nombre in ("_dlq", "_inbound_pendiente", "_latido", "_crons_fallidos"):
+    for nombre in ("_dlq", "_inbound_pendiente", "_latido", "_crons_fallidos", "_feedback_pendientes"):
         monkeypatch.setattr(sondas, nombre, _cae)
     monkeypatch.setattr(sondas.salud, "sonda_db", _cae)
     monkeypatch.setattr(sondas.salud, "sonda_redis", _cae)
     asyncio.run(sondas.medir())
     assert list(sondas._observar_dlq(None)) == [] and list(sondas._observar_latido(None)) == []
+    assert list(sondas._observar_feedback(None)) == []
     assert {o.attributes["component"]: o.value for o in sondas._observar_deps(None)} == {"db": 0, "redis": 0}
 
 
@@ -314,7 +320,12 @@ def test_con_el_sdk_real_salen_los_nombres_y_etiquetas():
         mn.turno("whatsapp", "replied", 3.2)
         mn.tarea_empezo(task_id="a")
         mn.tarea_termino(task_id="a", task=SimpleNamespace(name="core.outbound_send"), state="SUCCESS")
-        sondas._valores.update(dlq=0, inbound=1, latido=12.0, deps={"db": 1, "redis": 1}, crons={"core.x": 0})
+        mn.feedback_aprobado("mejora", 3000, 7200.0)
+        mn.feedback_rechazado(60.0)
+        sondas._valores.update(
+            dlq=0, inbound=1, latido=12.0, deps={"db": 1, "redis": 1}, crons={"core.x": 0},
+            feedback={"recibido": 2, "en_revision": 1},
+        )
         salida = {}
         for rm in lector.get_metrics_data().resource_metrics:
             for sm in rm.scope_metrics:
@@ -337,6 +348,10 @@ def test_con_el_sdk_real_salen_los_nombres_y_etiquetas():
     assert datos["agentcore_dependency_up"] == [{"component": "db"}, {"component": "redis"}]
     for nombre in ("agentcore_dlq_length", "agentcore_inbound_pending", "agentcore_worker_heartbeat_age_seconds", "agentcore_cron_failures_24h"):
         assert nombre in datos
+    assert datos["agentcore_feedback_creditos_otorgados_total"] == [{"tipo": "mejora"}]
+    assert {"decision": "aprobado"} in datos["agentcore_feedback_decision_seconds"]
+    assert datos["agentcore_feedback_decision_seconds:bounds"] == [3600, 21600, 86400, 259200, 604800, 1209600, 2592000]
+    assert datos["agentcore_feedback_bandeja_pendientes"] == [{"estado": "recibido"}, {"estado": "en_revision"}]
     prohibidas = {"tenant_id", "agent_id", "conversation_id", "phone", "telefono", "http.route", "path"}
     for nombre, puntos in datos.items():
         if not nombre.endswith(":bounds"):

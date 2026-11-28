@@ -40,6 +40,7 @@ celery = Celery(
         "core.tasks.gate_tasks",  # HU-AOS-21 parte 4: medición del gate de pass^k
         "core.tasks.pruebas_tasks",  # HU-AOS-103: corredor de las pruebas del agente (SPEC-53)
         "core.tasks.twilio_costos",  # ADR-0186: costo por mensaje de WhatsApp vía Twilio
+        "core.tasks.feedback",  # HU-FB-04: aviso al equipo de un reporte de cliente nuevo
     ],
 )
 celery.conf.update(
