@@ -175,9 +175,12 @@ def sin_tope_de_agentes(monkeypatch):  # type: ignore[no-untyped-def]
     monkeypatch.setattr("core.billing.enforcement.enforce_growth", tope)
 
 
-async def test_el_borrador_responde_sin_publicar_ni_consumir_cupo(app_client, negocios, guion, sin_tope_de_agentes) -> None:  # type: ignore[no-untyped-def]
+async def test_el_borrador_responde_sin_publicar_ni_consumir_cupo(app_client, negocios, guion, sin_tope_de_agentes, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    from core.kernel import decisions
     from core.shared.test_mode import is_panel_test
 
+    avisos: list[str] = []
+    monkeypatch.setattr(decisions.log, "warning", lambda evento, **_k: avisos.append(evento))
     tid, _ = negocios
     agente = await _borrador(tid)
     antes = await _conteos(tid)
@@ -208,7 +211,8 @@ async def test_el_borrador_responde_sin_publicar_ni_consumir_cupo(app_client, ne
         tid, "select release_id, active_instance_id from core_decisions where tenant_id = :t and conversation_id = :c",
         c=conv,
     )
-    assert all(d == (None, None) for d in decisiones)
+    assert "core_decision_write_failed" not in avisos
+    assert decisiones == [], "el turno de borrador no escribe en core_decisions (#951)"
 
 
 async def test_la_prueba_del_borrador_esta_aislada_y_se_cierra_por_agente(app_client, negocios, guion) -> None:  # type: ignore[no-untyped-def]
@@ -266,3 +270,29 @@ async def test_sin_escritura_en_agentes_no_prueba_el_borrador(app_client, negoci
     r = await app_client.post(f"{PG}/message", json={"text": "hola", "agent_id": str(agente)}, headers=h)
 
     assert r.status_code == 403
+
+
+async def test_el_chat_de_prueba_normal_si_escribe_su_decision_con_release(app_client, negocios, guion, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Regresión de #951: el chat de prueba de siempre (sin `agent_id`) corre con la release del negocio, así
+    que su cabecera en `core_decisions` sigue escribiéndose, con release, y no falla el CHECK."""
+    from core.kernel import decisions
+
+    avisos: list[str] = []
+    monkeypatch.setattr(decisions.log, "warning", lambda evento, **_k: avisos.append(evento))
+    tid, _ = negocios
+    h = await api_headers(app_client, tid)
+    guion(["Hola, ¿en qué te ayudo?"])
+
+    r = await app_client.post(f"{PG}/message", json={"text": "hola"}, headers=h)
+
+    assert r.status_code == 200, r.text
+    assert "core_decision_write_failed" not in avisos
+    [(conv,)] = await _sql(
+        tid,
+        "select id from conversations where tenant_id = :t and channel = 'test' "
+        "and coalesce(state->>'draft_agent_id', '') = '' order by started_at desc limit 1",
+    )
+    decisiones = await _sql(
+        tid, "select outcome, release_id from core_decisions where tenant_id = :t and conversation_id = :c", c=conv
+    )
+    assert decisiones and all(o == "routed" and rel is not None for o, rel in decisiones)

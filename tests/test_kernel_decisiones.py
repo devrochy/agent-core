@@ -225,3 +225,47 @@ async def test_la_excepcion_no_queda_en_el_span_del_turno(monkeypatch) -> None:
     [span] = exportador.get_finished_spans()
     assert span.events == () or all("3001234567" not in str(e.attributes) for e in span.events)
     assert span.attributes is not None and span.attributes["error.type"] == "RuntimeError"
+
+
+class _SesionFalsa:
+    """`get_session` sin base: cuenta los INSERT de la cabecera."""
+
+    def __init__(self) -> None:
+        self.inserts: list[str] = []
+
+    def __call__(self) -> _SesionFalsa:
+        return self
+
+    async def __aenter__(self) -> _SesionFalsa:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def execute(self, stmt: object, params: object = None) -> None:
+        self.inserts.append(str(stmt))
+
+
+@pytest.mark.parametrize(("borrador", "inserts"), [(False, 1), (True, 0)])
+async def test_el_turno_de_prueba_de_borrador_no_escribe_en_core_decisions(monkeypatch, borrador, inserts) -> None:
+    """HU-AOS-72 (#951): sin release, `ck_core_decisions_contract` rechazaría la fila `routed`; el turno
+    de borrador no la intenta (ni deja `core_decision_write_failed`) y el normal sigue escribiéndola."""
+    sesion = _SesionFalsa()
+    monkeypatch.setattr(decisions, "get_session", sesion)
+    avisos: list[str] = []
+    monkeypatch.setattr(decisions.log, "warning", lambda evento, **_k: avisos.append(evento))
+    conv = SimpleNamespace(id=uuid.uuid4(), tenant_id=T1, channel="test", connection_id=uuid.uuid4())
+
+    @decisions.en_turno
+    async def f() -> object:
+        if borrador:
+            decisions.omitir_decision()
+        await decisions.enrutar(conv)
+        return decisions.turno_actual()
+
+    async with tenant_scope(T1):
+        turno = await f()
+    assert sum("inbound_message_ids" in i for i in sesion.inserts) == inserts, "cabecera del turno"
+    assert "core_decision_write_failed" not in avisos
+    assert turno is not None and turno.decidido
+    assert (turno._token_vigente is None) is borrador
