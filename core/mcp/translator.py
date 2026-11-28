@@ -17,10 +17,3 @@ def to_llm_schemas(tools: list[MCPTool]) -> list[LLMToolSchema]:
         for t in tools
     ]
 
-
-def skills_summary(tools: list[MCPTool]) -> str:
-    """Resumen legible de las tools activas (para el bloque dinámico del system prompt)."""
-    if not tools:
-        return ""
-    lines = [f"- {t.name}: {t.description}" for t in tools]
-    return "Puedes usar estas herramientas:\n" + "\n".join(lines)

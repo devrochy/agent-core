@@ -66,7 +66,12 @@ class AnthropicProvider(BaseLLMProvider):
         """Una sola marca de caché, al final de lo fijo (adenda HU-AOS-35 de ADR-0117): por
         convención del loop el último bloque es el dinámico, así que la marca va en el
         penúltimo; con un solo bloque no hay prefijo fijo que marcar. La API acepta hasta 4
-        marcas: marcar cada bloque la rompía con 4 playbooks o más."""
+        marcas: marcar cada bloque la rompía con 4 playbooks o más.
+
+        El bloque del turno (`BloqueDelTurno`) se queda aquí, en `system`, y no detrás del historial
+        como en OpenAI-compatible: la API no acepta `system` entre los mensajes, y como texto del
+        usuario quedaría unido al mensaje del cliente, que podría imitar sus rótulos (auditoría de
+        la adenda 2026-11-27 de ADR-0117)."""
         textos = [t for t in system_blocks if t]
         blocks: list[dict[str, Any]] = [{"type": "text", "text": t} for t in textos]
         if len(blocks) >= 2:

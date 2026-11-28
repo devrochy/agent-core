@@ -31,6 +31,7 @@ from core.llm.types import (
     LLMToolSchema,
     LLMUsageInfo,
     StopReason,
+    separar_bloque_del_turno,
 )
 from core.shared.exceptions import LLMProviderError
 from core.shared.logger import get_logger
@@ -165,9 +166,15 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         out: list[dict[str, Any]] = []
         # Los bloques de system se concatenan (DeepSeek no tiene prompt caching por bloque;
         # su context caching es automático por prefijo — mantener los bloques estables lo aprovecha).
-        if system_blocks:
-            out.append({"role": "system", "content": "\n\n".join(b for b in system_blocks if b)})
-        for msg in messages:
+        # El bloque del turno va aparte, como `system` justo antes del mensaje del cliente: así el
+        # historial anterior queda dentro del prefijo cacheado (adenda 2026-11-27 de ADR-0117).
+        fijos, del_turno = separar_bloque_del_turno(system_blocks)
+        ancla = min(max(del_turno.ancla, 0), len(messages)) if del_turno else -1
+        if fijos:
+            out.append({"role": "system", "content": "\n\n".join(b for b in fijos if b)})
+        for i, msg in enumerate(messages):
+            if i == ancla and del_turno:
+                out.append({"role": "system", "content": str(del_turno)})
             if msg.role == "tool":
                 out.append({"role": "tool", "tool_call_id": msg.tool_call_id, "content": msg.content})
             elif msg.role == "assistant" and msg.tool_calls:
@@ -188,6 +195,8 @@ class OpenAICompatibleProvider(BaseLLMProvider):
                 )
             else:
                 out.append({"role": msg.role, "content": msg.content, **self._razonamiento(msg)})
+        if del_turno and ancla == len(messages):
+            out.append({"role": "system", "content": str(del_turno)})
         return out
 
     @staticmethod

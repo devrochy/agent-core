@@ -39,7 +39,14 @@ from typing import Any, Literal
 
 from core.llm.base import BaseLLMProvider
 from core.llm.prompt_builder import CURRENT_DATETIME_HEADER
-from core.llm.types import LLMMessage, LLMResponse, LLMToolCall, LLMToolSchema, LLMUsageInfo
+from core.llm.types import (
+    BloqueDelTurno,
+    LLMMessage,
+    LLMResponse,
+    LLMToolCall,
+    LLMToolSchema,
+    LLMUsageInfo,
+)
 
 Modo = Literal["off", "record", "replay"]
 MODOS: tuple[str, ...] = ("off", "record", "replay")
@@ -225,9 +232,13 @@ class Pedido:
     herramientas: list[dict[str, Any]] | None
     mensajes: list[dict[str, Any]]
     normalizador: _Normalizador
+    # Posición del bloque del turno entre los mensajes (`BloqueDelTurno`, adenda 2026-11-27 de
+    # ADR-0117). None = el último bloque de sistema va delante de los mensajes, como siempre; así no
+    # cambian las claves de los llamadores que no lo usan (golden, simulador).
+    ancla: int | None = None
 
     def completo(self) -> dict[str, Any]:
-        return {
+        return self._con_ancla({
             "proveedor": self.proveedor,
             "modelo": self.modelo,
             "thinking": self.thinking,
@@ -237,7 +248,12 @@ class Pedido:
             "sistema": self.sistema,
             "herramientas": self.herramientas,
             "mensajes": self.mensajes,
-        }
+        })
+
+    def _con_ancla(self, dato: dict[str, Any]) -> dict[str, Any]:
+        if self.ancla is not None:
+            dato["ancla"] = self.ancla
+        return dato
 
     @property
     def clave(self) -> str:
@@ -276,6 +292,7 @@ def normalizar(
         if m.reasoning_content:  # solo con la política de riesgo alto (HU-AOS-09)
             item["reasoning_content"] = norm.texto(m.reasoning_content)
         mensajes.append(item)
+    del_turno = system_blocks[-1] if system_blocks and isinstance(system_blocks[-1], BloqueDelTurno) else None
     return Pedido(
         proveedor=proveedor,
         modelo=modelo,
@@ -287,6 +304,7 @@ def normalizar(
         herramientas=herramientas,
         mensajes=mensajes,
         normalizador=norm,
+        ancla=del_turno.ancla if del_turno is not None else None,
     )
 
 
@@ -473,7 +491,7 @@ class _Escena:
         if pedido.herramientas is not None:
             tools = _hash(pedido.herramientas)[:16]
             self.herramientas[tools] = pedido.herramientas
-        return {
+        return pedido._con_ancla({
             "proveedor": pedido.proveedor,
             "modelo": pedido.modelo,
             "thinking": pedido.thinking,
@@ -482,7 +500,7 @@ class _Escena:
             "sistema": sistema,
             "herramientas": tools,
             "mensajes": pedido.mensajes,
-        }
+        })
 
     def grabar(self, pedido: Pedido, respuesta: LLMResponse, crudo: str) -> None:
         # Sobre el texto CRUDO (antes de normalizar): un secreto con un UUID adentro no se
@@ -572,7 +590,7 @@ class _Escena:
         return f"{cabeza}{semilla}. Lo más parecido es la llamada #{numero}; qué cambió:\n{detalle}{self._pie(self.regrabar)}"
 
     def _guardar_pedido_sin_registrar(self, pedido: Pedido) -> dict[str, Any]:
-        return {
+        return pedido._con_ancla({
             "proveedor": pedido.proveedor,
             "modelo": pedido.modelo,
             "thinking": pedido.thinking,
@@ -581,11 +599,11 @@ class _Escena:
             "sistema": [_hash(b)[:16] for b in pedido.sistema],
             "herramientas": _hash(pedido.herramientas)[:16] if pedido.herramientas is not None else None,
             "mensajes": pedido.mensajes,
-        }
+        })
 
     def _cambios(self, grabado: dict[str, Any], pedido: Pedido) -> list[str]:
         cambios: list[str] = []
-        for campo in ("proveedor", "modelo", "thinking", "max_tokens", "temperature"):
+        for campo in ("proveedor", "modelo", "thinking", "max_tokens", "temperature", "ancla"):
             antes, ahora = grabado.get(campo), getattr(pedido, campo)
             if antes != ahora:
                 cambios.append(f"{campo}: grabado {antes!r}, ahora {ahora!r}")

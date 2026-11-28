@@ -735,3 +735,35 @@ La prueba del panel de un borrador corre con una release armada en memoria que n
 la caché de §7, y cuyo turno no se atribuye a ninguna release (`release_id` NULL en el ledger y en
 `core_decisions`). Es la única excepción a «cada turno atribuido a su release»; el detalle está en la
 adenda HU-AOS-72 de ADR-0191.
+
+## Adenda (2026-11-27): el bloque del turno detrás del historial y sin resumen de tools
+
+**Contexto.** En las 147 llamadas de `evals/cassettes/` (develop 715bced6) la entrada promedio es de 9.891 tokens y la salida de 73. El 80 % de la entrada ya sale de la caché, pero lo que no sale de ella es casi todo el costo de entrada: con DeepSeek la lectura de caché cuesta ~0,1× la entrada. Lo que queda sin caché (295.509 tokens, 2.010 por llamada) coincide con «bloque dinámico + historial» (~298 mil). Es así por dos razones:
+- El bloque dinámico va al final del `system`, **antes** del historial, y cambia en cada turno (fecha y hora al minuto, tarjeta, memorias). El prefijo común entre turnos termina donde empieza ese bloque, así que el historial nunca entra a la caché entre turnos.
+- El bloque dinámico empieza con «Capacidades activas en este turno», que repite el nombre y la descripción de cada tool ya presente en el esquema de funciones: 934 tokens por llamada, todos sin caché. Con `routing.allow_tools = False` decía «puedes usar estas herramientas» sin mandar ningún esquema.
+
+**Decisión.**
+1. **Sin resumen de tools.** Se quitan `skills_summary` (`core/mcp/translator.py`), `PromptContext.active_skills_summary` y la sección «Capacidades activas». El modelo ve las tools del turno, con su descripción, en el esquema de funciones. El refresco del bloque a mitad del lote (adenda 2026-10-13 de ADR-0113) solo cambia la tarjeta.
+2. **El bloque del turno viaja detrás del historial.** El loop marca el último bloque de `system_blocks` como `BloqueDelTurno` (`core/llm/types.py`): un `str` con un `ancla`, que es la posición en `messages` del mensaje del cliente de este turno. El ancla no se mueve dentro del turno, porque las vueltas con tools y los reintentos de guardrail se agregan al final. Por ser un `str`, `system_blocks` sigue con la misma forma para los llamadores y los dobles de prueba, y la convención «el último bloque es el dinámico» (adenda HU-AOS-35) sigue valiendo.
+   - **OpenAI-compatible (DeepSeek):** un `system` con los bloques fijos al principio y un segundo `system` con el bloque del turno justo antes del mensaje del cliente.
+   - **Anthropic (BYOK): sin cambio de posición.** La API no acepta `system` entre los mensajes. Como texto del usuario, el bloque quedaría unido al mensaje del cliente, que podría imitar sus rótulos (hallazgo de `auditor-multitenant`). El bloque sigue siendo el último de `system` y la marca de caché sigue en el penúltimo, así que con Anthropic solo aplica el punto 1. Si se quiere el ahorro también ahí, hace falta un delimitador propio del core, definido en un playbook del kernel (invariante 3), y queda como seguimiento.
+   - **Sin `BloqueDelTurno`** (simulador del cliente, golden de `evals/runner.py`, IA estructurada) la serialización no cambia.
+   - **Rol y aislamiento:** con DeepSeek el bloque sigue con rol `system`, separado del texto del cliente (invariante 7). El verificador sigue tomando como evidencia los bloques fijos y los mensajes del cliente (`contexto_sistema`), nunca el bloque del turno.
+3. **La fecha sigue al minuto.** Detrás del historial, la hora deja de cortar el prefijo. Bajarla a resolución de día cambiaría la agenda (HU-CAL-06) y el eco de horarios (HU-AOS-20) sin ahorrar nada más.
+4. **Grabaciones.** El ancla entra en la clave (`Pedido.ancla`, solo cuando hay `BloqueDelTurno`: las claves del golden no cambian) y en el diagnóstico de «Grabación desactualizada». Los journeys del gate se regraban con LLM real, con el OK del dueño.
+
+**Estimación** (sobre las cintas; el supuesto, verificado en ellas, es que la caché cubre tools + fijo y corta al empezar el bloque dinámico; el prefijo común dentro de cada escena se usa como proxy de la caché de DeepSeek, que en las cintas siempre cachea múltiplos de 64 tokens):
+
+| | Sin caché | Por llamada | Frente a hoy |
+|---|---|---|---|
+| Hoy | 295.509 | 2.010 | 100 % |
+| Solo 1 (sin resumen) | 149.169 | 1.015 | 50 % |
+| Solo 2 (bloque detrás) | 225.775 | 1.536 | 76 % |
+| 1 + 2 | 102.846 | 700 | 35 % |
+
+Con 1 + 2 la entrada total baja de ~9,9 mil a ~9,0 mil tokens por llamada. La parte sin caché se cobra a precio pleno y baja ~65 %. DeepSeek no cobra escrituras de caché (`cache_write_tokens` = 0 en todas las cintas). Todas las cintas son de DeepSeek; con Anthropic solo aplica la fila «Solo 1».
+
+**Riesgos y límites.**
+- La documentación de DeepSeek no dice nada sobre un `system` fuera de la primera posición, ni para permitirlo ni para prohibirlo. La regrabación con el LLM real es la que lo comprueba. Si el proveedor lo rechazara (400), el turno caería al modelo de respaldo y escalaría. Por eso no se mergea sin regrabar.
+- El historial se carga con una ventana (`shortTermTurns` del agente, tope de 40 mensajes en `_load_history`). Cuando la ventana se llena, se corre en cada turno y el prefijo común vuelve a ser solo lo fijo.
+- La caché de DeepSeek es *best-effort* y tarda segundos en construirse. La medición real se hace en test con `usage_ledger.cached_tokens` (Costos › por agente).
